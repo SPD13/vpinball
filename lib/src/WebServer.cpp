@@ -10,11 +10,16 @@
 #include "ui/live/LiveUI.h"
 #include "ui/win/WinEditor.h"
 
+#ifdef __LIBVPINBALL__
 #include "VPinballLib.h"
+#else
+#include "TableLibrary.h"
+#endif
 #include "ZipUtils.h"
 
 #include <nlohmann/json.hpp>
 #include <chrono>
+#include <fstream>
 #include <sstream>
 #include <iomanip>
 #include <ifaddrs.h>
@@ -29,6 +34,7 @@ namespace {
 
    constexpr const char* RESPONSE_OK = "OK";
    constexpr const char* RESPONSE_BAD_REQUEST = "Bad request";
+   constexpr const char* RESPONSE_UNAUTHORIZED = "Pairing required";
    constexpr const char* RESPONSE_NOT_FOUND = "File not found";
    constexpr const char* RESPONSE_METHOD_NOT_ALLOWED = "Method Not Allowed";
    constexpr const char* RESPONSE_CONFLICT = "Conflict";
@@ -36,12 +42,39 @@ namespace {
 
    constexpr int STATUS_OK = 200;
    constexpr int STATUS_BAD_REQUEST = 400;
+   constexpr int STATUS_UNAUTHORIZED = 401;
    constexpr int STATUS_NOT_FOUND = 404;
    constexpr int STATUS_METHOD_NOT_ALLOWED = 405;
    constexpr int STATUS_CONFLICT = 409;
    constexpr int STATUS_INTERNAL_SERVER_ERROR = 500;
 
    constexpr size_t MAX_UPLOAD_SIZE = size_t(2) * 1024 * 1024 * 1024; // 2GB
+
+   constexpr const char* PAIRING_COOKIE = "vpx_pairing";
+   constexpr int MAX_FAILED_PAIRINGS = 5;
+}
+
+// The mobile launchers are notified through the library events, while the desktop application owns its table library
+static void NotifyWebServerUrl(const string& url)
+{
+#ifdef __LIBVPINBALL__
+   if (url.empty())
+      VPinballLib::VPinballLib::SendEvent(VPINBALL_EVENT_WEB_SERVER, nullptr);
+   else {
+      VPinballLib::WebServerData webServerData = { url };
+      VPinballLib::VPinballLib::SendEvent(VPINBALL_EVENT_WEB_SERVER, &webServerData);
+   }
+#endif
+}
+
+static void NotifyTablesChanged()
+{
+#ifdef __LIBVPINBALL__
+   VPinballLib::CommandData commandData = { "reloadTables", "" };
+   VPinballLib::VPinballLib::SendEvent(VPINBALL_EVENT_COMMAND, &commandData);
+#else
+   g_app->GetTableLibrary().RescanAsync();
+#endif
 }
 
 std::mutex WebServer::s_logMutex;
@@ -58,7 +91,14 @@ void WebServer::EventHandler(struct mg_connection *c, int ev, void *ev_data)
    if (ev == MG_EV_HTTP_MSG) {
       struct mg_http_message *hm = (struct mg_http_message *) ev_data;
 
-      if (mg_match(hm->uri, mg_str("/info"), NULL))
+      // Everything but the static web page needs a paired browser
+      static constexpr const char* apiRoutes[] = { "/info", "/status", "/files", "/download", "/upload", "/delete", "/folder", "/extract", "/command", "/log-stream", "/rename", "/move" };
+      const bool isApi = std::any_of(std::begin(apiRoutes), std::end(apiRoutes), [hm](const char* route) { return mg_match(hm->uri, mg_str(route), NULL); });
+      if (mg_match(hm->uri, mg_str("/pair"), NULL))
+         webServer->Pair(c, hm);
+      else if (isApi && !webServer->IsPaired(hm))
+         mg_http_reply(c, STATUS_UNAUTHORIZED, "", "%s", RESPONSE_UNAUTHORIZED);
+      else if (mg_match(hm->uri, mg_str("/info"), NULL))
          webServer->Info(c, hm);
       else if (mg_match(hm->uri, mg_str("/status"), NULL))
          webServer->Status(c, hm);
@@ -155,6 +195,12 @@ void WebServer::SetLastUpdate()
    ).count();
    PLOGD.printf("Web interface last update timestamp set to: %lld", (long long)s_lastUpdateTimestamp);
 
+#ifndef __LIBVPINBALL__
+   // The desktop table picker follows the changes made from the browser
+   if (m_run)
+      NotifyTablesChanged();
+#endif
+
    BroadcastStatus();
 }
 
@@ -207,6 +253,11 @@ void WebServer::Start()
 
    if (mg_http_listen(&m_mgr, bindUrl.c_str(), &WebServer::EventHandler, this)) {
       m_run = true;
+      {
+         std::lock_guard<std::mutex> lock(m_pairingMutex);
+         m_pairedTokens.clear();
+         GeneratePairingCode();
+      }
 
       PLOGI.printf("Web server started");
 
@@ -220,8 +271,7 @@ void WebServer::Start()
       else
          m_url.clear();
 
-      VPinballLib::WebServerData webServerData = { m_url };
-      VPinballLib::VPinballLib::SendEvent(VPINBALL_EVENT_WEB_SERVER, &webServerData);
+      NotifyWebServerUrl(m_url);
 
       m_pThread = std::make_unique<std::thread>([this]() {
          while (m_run)
@@ -235,7 +285,7 @@ void WebServer::Start()
    else {
       PLOGE.printf("Unable to start web server");
 
-      VPinballLib::VPinballLib::SendEvent(VPINBALL_EVENT_WEB_SERVER, nullptr);
+      NotifyWebServerUrl(string());
    }
 }
 
@@ -252,7 +302,13 @@ void WebServer::Stop()
    if (m_pThread && m_pThread->joinable())
       m_pThread->join();
 
-   VPinballLib::VPinballLib::SendEvent(VPINBALL_EVENT_WEB_SERVER, nullptr);
+   {
+      std::lock_guard<std::mutex> lock(m_pairingMutex);
+      m_pairingCode.clear();
+      m_pairedTokens.clear();
+   }
+
+   NotifyWebServerUrl(string());
 }
 
 void WebServer::Update()
@@ -269,6 +325,66 @@ void WebServer::Update()
 string WebServer::GetUrl()
 {
    return m_run ? m_url : string();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Pairing: the user copies a short code displayed by the application in the browser, which receives a session token (cookie)
+
+string WebServer::GetPairingCode()
+{
+   std::lock_guard<std::mutex> lock(m_pairingMutex);
+   return m_run && m_pairingRequired ? m_pairingCode : string();
+}
+
+void WebServer::GeneratePairingCode()
+{
+   uint32_t value = 0;
+   mg_random(&value, sizeof(value));
+   m_pairingCode = std::format("{:06}", value % 1000000);
+   m_failedPairings = 0;
+}
+
+bool WebServer::IsPaired(struct mg_http_message* hm)
+{
+   if (!m_pairingRequired)
+      return true;
+   const struct mg_str* cookies = mg_http_get_header(hm, "Cookie");
+   if (cookies == nullptr)
+      return false;
+   const struct mg_str value = mg_http_get_header_var(*cookies, mg_str(PAIRING_COOKIE));
+   if (value.len == 0)
+      return false;
+   const string token(value.buf, value.len);
+   std::lock_guard<std::mutex> lock(m_pairingMutex);
+   return std::find(m_pairedTokens.begin(), m_pairedTokens.end(), token) != m_pairedTokens.end();
+}
+
+void WebServer::Pair(struct mg_connection *c, struct mg_http_message* hm)
+{
+   char code[16];
+   mg_http_get_var(&hm->query, "code", code, sizeof(code));
+
+   std::lock_guard<std::mutex> lock(m_pairingMutex);
+   if (!m_pairingRequired) {
+      mg_http_reply(c, STATUS_OK, "", RESPONSE_OK);
+      return;
+   }
+   if (m_pairingCode.empty() || m_pairingCode != code) {
+      // A code is only good for a few attempts, to keep it short while defeating enumeration
+      if (++m_failedPairings >= MAX_FAILED_PAIRINGS) {
+         PLOGW.printf("Too many failed pairing attempts, a new pairing code was generated");
+         GeneratePairingCode();
+      }
+      mg_http_reply(c, STATUS_UNAUTHORIZED, "", "%s", RESPONSE_UNAUTHORIZED);
+      return;
+   }
+
+   char token[33];
+   mg_random_str(token, sizeof(token));
+   m_pairedTokens.emplace_back(token);
+   m_failedPairings = 0;
+   PLOGI.printf("Web server paired with a new browser");
+   mg_http_reply(c, STATUS_OK, std::format("Set-Cookie: {}={}; Path=/; HttpOnly; SameSite=Strict\r\n", PAIRING_COOKIE, token).c_str(), RESPONSE_OK);
 }
 
 void WebServer::Info(struct mg_connection *c, struct mg_http_message* hm)
@@ -415,12 +531,34 @@ void WebServer::Upload(struct mg_connection *c, struct mg_http_message* hm)
 
    string path = BuildTablePath(q);
 
-   if (mg_http_upload(c, hm, &mg_fs_posix, path.c_str(), MAX_UPLOAD_SIZE) == length) {
+   // Chunks are appended in a hidden staging folder, and the file is moved in place when complete: an interrupted transfer never leaves a truncated table that would be listed (and played)
+   std::error_code ec;
+   const std::filesystem::path stagingPath = std::filesystem::path(path) / ".upload";
+   if (hm->body.len == 0) {
+      // The web page ends each transfer with an empty request, which is also all it sends for an empty file
+      if (length == 0 && offset == 0) {
+         std::filesystem::create_directories(path, ec);
+         std::ofstream(std::filesystem::path(path) / file, std::ios::trunc);
+         SetLastUpdate();
+      }
+      mg_http_upload(c, hm, &mg_fs_posix, stagingPath.string().c_str(), MAX_UPLOAD_SIZE); // Only replies, as there is nothing to write
+      return;
+   }
+   std::filesystem::create_directories(stagingPath, ec);
+   if (mg_http_upload(c, hm, &mg_fs_posix, stagingPath.string().c_str(), MAX_UPLOAD_SIZE) == length) {
+      std::filesystem::rename(stagingPath / file, std::filesystem::path(path) / file, ec);
+      if (ec) {
+         PLOGE.printf("Failed to finalize upload: file=%s, error=%s", file.c_str(), ec.message().c_str());
+         return;
+      }
+      std::filesystem::remove(stagingPath, ec); // Only succeeds when no other transfer is pending
+#ifdef __LIBVPINBALL__
       if (*q == '\0' && file == "VPinballX.ini") {
          g_app->m_settings.SetIniPath(path);
          g_app->m_settings.Load(true);
          g_app->m_settings.Save();
       }
+#endif
       SetLastUpdate();
    }
 }
@@ -633,8 +771,7 @@ void WebServer::Command(struct mg_connection *c, struct mg_http_message* hm)
       mg_http_reply(c, STATUS_OK, HEADER_JSON, "%s", response.c_str());
    }
    else if (!strncmp(cmd, "refresh_tables", sizeof(cmd))) {
-      VPinballLib::CommandData commandData = { "reloadTables", "" };
-      VPinballLib::VPinballLib::SendEvent(VPINBALL_EVENT_COMMAND, &commandData);
+      NotifyTablesChanged();
       mg_http_reply(c, STATUS_OK, "", RESPONSE_OK);
    }
    else
@@ -758,6 +895,11 @@ bool WebServer::ValidatePathParameter(struct mg_connection *c, struct mg_http_me
 
 std::filesystem::path WebServer::BuildTablePath(const char* relativePath)
 {
+#ifdef __LIBVPINBALL__
    return g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Tables) / relativePath;
+#else
+   // On desktop, the default tables location is the user's documents folder: only expose the folder owned by the table library
+   return g_app->GetTableLibrary().GetTablesPath() / relativePath;
+#endif
 }
 

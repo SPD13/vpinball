@@ -1875,12 +1875,51 @@ void Player::GameLoop()
    #endif
 }
 
+#if defined(__STANDALONE__) && !defined(__LIBVPINBALL__)
+#include "lib/src/TableLibrary.h"
+
+// Tables of the table library which have no image get a screenshot of the playfield when closed (the mobile launchers do the same)
+void Player::CaptureTableImageBeforeClosing()
+{
+   if (m_tableImageCaptureStarted)
+      return;
+   m_tableImageCaptureStarted = true;
+
+   const std::filesystem::path relativePath = m_ptable->m_filename.lexically_normal().lexically_relative(g_app->GetTableLibrary().GetTablesPath().lexically_normal());
+   std::filesystem::path imagePath = m_ptable->m_filename;
+   imagePath.replace_extension(".jpg");
+   std::filesystem::path pngPath = m_ptable->m_filename;
+   pngPath.replace_extension(".png");
+   if (relativePath.empty() || *relativePath.begin() == ".." || FileExists(imagePath) || FileExists(pngPath))
+   {
+      SetCloseState(CS_CLOSE_APP);
+      return;
+   }
+
+   m_liveUI->HideUI();
+   m_renderer->m_renderDevice->CaptureScreenshot({ m_playfieldWnd }, { imagePath },
+      [this, imagePath](bool success)
+      {
+         if (success)
+            PLOGI << "Table image saved: " << imagePath;
+         else
+            PLOGE << "Failed to save table image: " << imagePath;
+         SetCloseState(CS_CLOSE_APP);
+      });
+}
+#endif
+
 #ifdef ENABLE_BGFX
 bool Player::CallbackSteppedGameLoop()
 {
    // Discard step if the player is not in one of the running states
    if (GetCloseState() != CS_PLAYING && GetCloseState() != CS_USER_INPUT && GetCloseState() != CS_CLOSE_CAPTURE_SCREENSHOT)
       return false;
+
+   #if defined(__STANDALONE__) && !defined(__LIBVPINBALL__)
+   if (GetCloseState() == CS_CLOSE_CAPTURE_SCREENSHOT)
+      CaptureTableImageBeforeClosing();
+   #endif
 
    // Continuously process input, synchronize with emulation and step physics to keep latency low
    UpdateGameLogic();

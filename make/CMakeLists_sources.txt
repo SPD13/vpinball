@@ -374,6 +374,8 @@ set(VPX_SOURCES
    src/ui/live/ingameui/TableMiscPage.cpp
    src/ui/live/ingameui/TableOptionsPage.h
    src/ui/live/ingameui/TableOptionsPage.cpp
+   src/ui/live/ingameui/TablePickerPage.h
+   src/ui/live/ingameui/TablePickerPage.cpp
    src/ui/live/ingameui/TableRulesPage.h
    src/ui/live/ingameui/TableRulesPage.cpp
    src/ui/live/ingameui/VRSettingsPage.h
@@ -773,24 +775,32 @@ set(VPX_STANDALONE_SOURCES
    standalone/vpinball_standalone_i_proxy.cpp
    standalone/PoleStream.cpp
    standalone/PoleStorage.cpp
+
+   lib/src/TableLibrary.h
+   lib/src/TableLibrary.cpp
 )
 
-set(VPX_LIB_SOURCES
-   ${VPX_STANDALONE_SOURCES}
-
-   lib/src/VPinballLib.h
-   lib/src/VPinballLib.cpp
+# Web server used to manage tables from a browser
+set(VPX_WEBSERVER_SOURCES
    lib/src/WebServer.h
    lib/src/WebServer.cpp
    lib/src/ZipUtils.h
    lib/src/ZipUtils.cpp
+
+   third-party/include/mongoose/mongoose.c
+   third-party/include/mongoose/mongoose.h
+)
+
+set(VPX_LIB_SOURCES
+   ${VPX_STANDALONE_SOURCES}
+   ${VPX_WEBSERVER_SOURCES}
+
+   lib/src/VPinballLib.h
+   lib/src/VPinballLib.cpp
    lib/include/vpinball/VPinballLib_C.h
    lib/src/VPinballLib_C.cpp
    lib/src/VPXProgress.h
    lib/src/VPXProgress.cpp
-
-   third-party/include/mongoose/mongoose.c
-   third-party/include/mongoose/mongoose.h
 )
 
 set(VPX_GL_SHADERS

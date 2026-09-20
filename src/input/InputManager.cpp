@@ -800,7 +800,7 @@ void InputManager::CreateInputActions()
                DISPPARAMS dispparams = { rgvar, nullptr, 1, 0 };
                m_player->m_ptable->FireDispID(isPressed ? DISPID_GameEvents_KeyDown : DISPID_GameEvents_KeyUp, &dispparams);
 #ifdef __STANDALONE__
-               m_player->SetCloseState(g_isMobile ? Player::CS_CLOSE_CAPTURE_SCREENSHOT : Player::CS_CLOSE_APP);
+               m_player->SetCloseState((g_isMobile || g_app->m_launcherMode) ? Player::CS_CLOSE_CAPTURE_SCREENSHOT : Player::CS_CLOSE_APP);
 #else
                m_player->SetCloseState(Player::CS_STOP_PLAY);
 #endif

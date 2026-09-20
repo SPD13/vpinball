@@ -1381,6 +1381,9 @@ PropBoolDyn(PluginVNI, Enable, "Enable"s, "Enable VNI plugin"s, g_isStandalone);
 
 // Standalone
 PropEnumWithMin(Standalone, RenderingModeOverride, "Override rendering mode"s, ""s, int, -1, -1, "Default"s, "2D"s, "Stereo 3D"s, "VR"s);
+PropString(Standalone, TablesPath, "Tables folder"s, "Folder of the table library used by the in-game table picker. When empty, 'VPinballX/Tables' in the user's documents folder is used."s, ""s);
+PropBool(Standalone, TablePickerGridView, "Table picker grid view"s, "Display the tables of the in-game table picker as a grid of images instead of a list of names"s, true);
+PropBool(Standalone, TablePickerSortAscending, "Table picker sort order"s, "Sort the tables of the in-game table picker from A to Z instead of Z to A"s, true);
 
 // Editor settings
 PropIntUnbounded(Editor, WindowLeft, "WindowLeft"s, "Main window left"s, -1);

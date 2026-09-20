@@ -23,6 +23,7 @@ public:
       return lib;
    }
 
+   PFN_vkEnumerateInstanceExtensionProperties _vkEnumerateInstanceExtensionProperties = nullptr;
    PFN_vkCreateInstance _vkCreateInstance;
    PFN_vkDestroyInstance _vkDestroyInstance;
    PFN_vkGetPhysicalDeviceFeatures _vkGetPhysicalDeviceFeatures;
@@ -42,7 +43,7 @@ private:
    }
    LibVulkan()
    {
-#if BX_PLATFORM_WINDOWS
+#if BX_PLATFORM_WINDOWS || BX_PLATFORM_LINUX
       m_vulkan1Dll = bx::dlopen(
 #if BX_PLATFORM_WINDOWS
          "vulkan-1.dll"
@@ -56,6 +57,7 @@ private:
       );
       if (m_vulkan1Dll == nullptr)
          return;
+      _vkEnumerateInstanceExtensionProperties = (PFN_vkEnumerateInstanceExtensionProperties)bx::dlsym(m_vulkan1Dll, "vkEnumerateInstanceExtensionProperties");
       _vkCreateInstance = (PFN_vkCreateInstance)bx::dlsym(m_vulkan1Dll, "vkCreateInstance");
       _vkDestroyInstance = (PFN_vkDestroyInstance)bx::dlsym(m_vulkan1Dll, "vkDestroyInstance");
       _vkGetPhysicalDeviceFeatures = (PFN_vkGetPhysicalDeviceFeatures)bx::dlsym(m_vulkan1Dll, "vkGetPhysicalDeviceFeatures");
@@ -66,6 +68,7 @@ private:
       _vkGetDeviceQueue = (PFN_vkGetDeviceQueue)bx::dlsym(m_vulkan1Dll, "vkGetDeviceQueue");
       _vkDeviceWaitIdle = (PFN_vkDeviceWaitIdle)bx::dlsym(m_vulkan1Dll, "vkDeviceWaitIdle");
 #else
+      _vkEnumerateInstanceExtensionProperties = &vkEnumerateInstanceExtensionProperties;
       _vkCreateInstance = &vkCreateInstance;
       _vkDestroyInstance = &vkDestroyInstance;
       _vkGetPhysicalDeviceFeatures = &vkGetPhysicalDeviceFeatures;
@@ -105,9 +108,10 @@ public:
 #if BX_PLATFORM_ANDROID
          instanceExtensions.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
 #elif BX_PLATFORM_LINUX
-         instanceExtensions.push_back(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
-         instanceExtensions.push_back(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
-         instanceExtensions.push_back(VK_KHR_XCB_SURFACE_EXTENSION_NAME);
+         // Names instead of the header macros, which need the window system headers
+         instanceExtensions.push_back("VK_KHR_wayland_surface");
+         instanceExtensions.push_back("VK_KHR_xlib_surface");
+         instanceExtensions.push_back("VK_KHR_xcb_surface");
 #elif BX_PLATFORM_WINDOWS
          instanceExtensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
 #elif BX_PLATFORM_OSX
@@ -115,6 +119,16 @@ public:
 #elif BX_PLATFORM_NX
          instanceExtensions.push_back(VK_NN_VI_SURFACE_EXTENSION_NAME);
 #endif
+      }
+      // Requesting an extension that the driver does not expose fails the instance creation (the debug extensions are missing from some mobile drivers)
+      if (m_vulkan._vkEnumerateInstanceExtensionProperties)
+      {
+         uint32_t availableCount = 0;
+         m_vulkan._vkEnumerateInstanceExtensionProperties(nullptr, &availableCount, nullptr);
+         std::vector<VkExtensionProperties> available(availableCount);
+         m_vulkan._vkEnumerateInstanceExtensionProperties(nullptr, &availableCount, available.data());
+         std::erase_if(instanceExtensions, [&](const char* ext)
+            { return std::none_of(available.begin(), available.end(), [ext](const VkExtensionProperties& props) { return strcmp(props.extensionName, ext) == 0; }); });
       }
       PLOGI << "Requested Vulkan instance extensions: ";
       for (auto ext : instanceExtensions)

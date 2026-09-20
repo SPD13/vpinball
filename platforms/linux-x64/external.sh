@@ -17,6 +17,7 @@ echo "  LIBALTSOUND_SHA: ${LIBALTSOUND_SHA}"
 echo "  LIBDOF_SHA: ${LIBDOF_SHA}"
 echo "  FFMPEG_SHA: ${FFMPEG_SHA}"
 echo "  LIBZIP_SHA: ${LIBZIP_SHA}"
+echo "  OPENXR_SHA: ${OPENXR_SHA}"
 echo "  LIBWINEVBS_SHA: ${LIBWINEVBS_SHA}"
 echo ""
 
@@ -394,6 +395,39 @@ if [ "${LIBWINEVBS_EXPECTED_SHA}" != "${LIBWINEVBS_FOUND_SHA}" ]; then
 fi
 
 #
+# build openxr (loader only)
+#
+
+OPENXR_EXPECTED_SHA="${OPENXR_SHA}_001"
+OPENXR_FOUND_SHA="$([ -f openxr/cache.txt ] && cat openxr/cache.txt || echo "")"
+
+if [ "${OPENXR_EXPECTED_SHA}" != "${OPENXR_FOUND_SHA}" ]; then
+   echo "Building OpenXR. Expected: ${OPENXR_EXPECTED_SHA}, Found: ${OPENXR_FOUND_SHA}"
+
+   rm -rf openxr
+   mkdir openxr
+   cd openxr
+
+   curl -sL https://github.com/KhronosGroup/OpenXR-SDK-Source/archive/${OPENXR_SHA}.tar.gz -o OpenXR-SDK-Source-${OPENXR_SHA}.tar.gz
+   tar xzf OpenXR-SDK-Source-${OPENXR_SHA}.tar.gz
+   mv OpenXR-SDK-Source-${OPENXR_SHA} openxr
+   cd openxr
+   cmake \
+      -DDYNAMIC_LOADER=ON \
+      -DBUILD_TESTS=OFF \
+      -DBUILD_API_LAYERS=OFF \
+      -DBUILD_CONFORMANCE_TESTS=OFF \
+      -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+      -B build
+   cmake --build build --target openxr_loader -- -j${NUM_PROCS}
+   cd ..
+
+   echo "$OPENXR_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
+#
 # copy libraries
 #
 
@@ -452,6 +486,10 @@ done
 cp -a libzip/libzip/build/lib/libzip.{so,so.*} ../../../third-party/runtime-libs/linux-x64
 cp libzip/libzip/build/zipconf.h ../../../third-party/include
 cp libzip/libzip/lib/zip.h ../../../third-party/include
+
+cp -a openxr/openxr/build/src/loader/libopenxr_loader.so* ../../../third-party/runtime-libs/linux-x64
+mkdir -p ../../../third-party/include/openxr
+cp openxr/openxr/build/include/openxr/*.h ../../../third-party/include/openxr
 
 cp -a libwinevbs/libwinevbs/build/libwinevbs.so* ../../../third-party/runtime-libs/linux-x64
 mkdir -p ../../../third-party/include/libwinevbs/wine/include

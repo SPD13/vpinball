@@ -395,6 +395,7 @@ elseif(PLATFORM STREQUAL "macos")
 
    add_executable(vpinball
       ${VPX_STANDALONE_SOURCES}
+      ${VPX_WEBSERVER_SOURCES}
 
       standalone/macos/main.mm
    )
@@ -411,6 +412,7 @@ elseif(PLATFORM STREQUAL "macos")
 
    target_compile_definitions(vpinball PRIVATE
       __STANDALONE__
+      VPX_TABLE_WEBSERVER
 
       __LIBWINEVBS__
       __WINESRC__
@@ -458,6 +460,7 @@ elseif(PLATFORM STREQUAL "macos")
       freeimage
       hidapi
       winevbs
+      zip
       "-framework AppKit"
    )
 
@@ -514,6 +517,7 @@ elseif(PLATFORM STREQUAL "linux")
 
    add_executable(vpinball
       ${VPX_STANDALONE_SOURCES}
+      ${VPX_WEBSERVER_SOURCES}
    )
 
    target_include_directories(vpinball PUBLIC
@@ -528,6 +532,7 @@ elseif(PLATFORM STREQUAL "linux")
 
    target_compile_definitions(vpinball PRIVATE
       __STANDALONE__
+      VPX_TABLE_WEBSERVER
 
       __LIBWINEVBS__
       __WINESRC__
@@ -539,10 +544,14 @@ elseif(PLATFORM STREQUAL "linux")
    if(RENDERER STREQUAL "BGFX")
       target_compile_definitions(vpinball PRIVATE
          ENABLE_BGFX
+         $<$<BOOL:${ENABLE_XR}>:ENABLE_XR>
 
          $<IF:$<CONFIG:Debug>,BX_CONFIG_DEBUG=1,BX_CONFIG_DEBUG=0>
       )
    else()
+      if(ENABLE_XR)
+         message(FATAL_ERROR "ENABLE_XR requires the BGFX renderer")
+      endif()
       target_compile_definitions(vpinball PRIVATE
          ENABLE_OPENGL
          $<$<NOT:$<STREQUAL:${ARCH},x64>>:__OPENGLES__>
@@ -589,6 +598,8 @@ elseif(PLATFORM STREQUAL "linux")
       freeimage
       hidapi-hidraw
       winevbs
+      zip
+      $<$<BOOL:${ENABLE_XR}>:openxr_loader>
    )
 
    target_link_libraries(vpinball PUBLIC $<IF:$<STREQUAL:${RENDERER},BGFX>,bgfx,glad>)
@@ -633,7 +644,14 @@ elseif(PLATFORM STREQUAL "linux")
          COMMAND cp -a "${RUNTIME_LIBS_DIR}/libhidapi-hidraw.so.*" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND cp -a "${RUNTIME_LIBS_DIR}/libwinevbs.so" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND cp -a "${RUNTIME_LIBS_DIR}/libwinevbs.so.*" "$<TARGET_FILE_DIR:vpinball>"
+         COMMAND cp -a "${RUNTIME_LIBS_DIR}/libzip.so" "$<TARGET_FILE_DIR:vpinball>"
+         COMMAND cp -a "${RUNTIME_LIBS_DIR}/libzip.so.*" "$<TARGET_FILE_DIR:vpinball>"
       )
+      if(ENABLE_XR)
+         add_custom_command(TARGET vpinball POST_BUILD
+            COMMAND cp -a "${RUNTIME_LIBS_DIR}/libopenxr_loader.so*" "$<TARGET_FILE_DIR:vpinball>"
+         )
+      endif()
       if(RENDERER STREQUAL "BGFX")
          add_custom_command(TARGET vpinball POST_BUILD
             COMMAND cp -a "${RUNTIME_LIBS_DIR}/libbgfx.so" "$<TARGET_FILE_DIR:vpinball>"

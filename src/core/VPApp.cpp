@@ -33,6 +33,11 @@
 #include <SDL3_ttf/SDL_ttf.h>
 #include <filesystem>
 #include <libwinevbs/libwinevbs.h>
+#include "lib/src/TableLibrary.h"
+#ifdef VPX_TABLE_WEBSERVER
+#include "lib/src/WebServer.h"
+#include "lib/src/ZipUtils.h"
+#endif
 #endif
 
 #include "parts/ball.h"
@@ -236,6 +241,91 @@ VPApp::VPApp()
    EditableRegistry::RegisterEditable<PartGroup>();
 }
 
+#ifdef __STANDALONE__
+VPinballLib::TableLibrary& VPApp::GetTableLibrary()
+{
+   if (m_tableLibrary == nullptr)
+   {
+      // The default tables folder is the user's documents folder, which must neither be scanned as a whole nor have
+      // its archives imported, so the library owns a dedicated sub folder
+      VPinballLib::TableLibrary::Config config;
+      const string tablesPath = m_settings.GetStandalone_TablesPath();
+      config.tablesPath = tablesPath.empty() ? m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Tables, std::filesystem::path("VPinballX") / "Tables") : std::filesystem::path(tablesPath);
+      config.jsonPath = m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences, "tables.json");
+#ifdef VPX_TABLE_WEBSERVER
+      config.zip = [](const std::filesystem::path& source, const std::filesystem::path& dest, VPinballLib::TableLibrary::ZipProgressCallback callback) { return ZipUtils::Zip(source, dest, callback); };
+      config.unzip = [](const std::filesystem::path& source, const std::filesystem::path& dest, VPinballLib::TableLibrary::ZipProgressCallback callback) { return ZipUtils::Unzip(source, dest, callback); };
+#endif
+      config.log = [](VPinballLib::TableLibrary::LogLevel level, const string& message)
+      {
+         switch (level)
+         {
+         case VPinballLib::TableLibrary::LogLevel::Info: PLOGI << "TableLibrary: " << message; break;
+         case VPinballLib::TableLibrary::LogLevel::Warn: PLOGW << "TableLibrary: " << message; break;
+         case VPinballLib::TableLibrary::LogLevel::Error: PLOGE << "TableLibrary: " << message; break;
+         }
+      };
+      m_tableLibrary = std::make_unique<VPinballLib::TableLibrary>(std::move(config));
+   }
+   return *m_tableLibrary;
+}
+
+// Same definition as the one of the PinMAME plugin, which reads its value when it is loaded
+static VPX::Properties::PropertyRegistry::PropId GetPinMAMEPathPropId()
+{
+   return Settings::GetRegistry().Register(std::make_unique<VPX::Properties::StringPropertyDef>(
+      "Plugin.PinMAME"s, "PinMAMEPath"s, "PinMAME Path"s, "Folder that contains PinMAME subfolders (roms, nvram, ...)"s, false, ""s));
+}
+
+void VPApp::SetupSharedPinMAMEFolder()
+{
+#ifndef __LIBVPINBALL__
+   // The plugin looks for a 'pinmame' folder along the table, then for the folder of this setting, then for '~/.pinmame': leave existing setups alone
+   const auto propId = GetPinMAMEPathPropId();
+   const std::filesystem::path pinmamePath = GetTableLibrary().GetTablesPath() / "pinmame";
+   // The default may have been written to the settings file, as settings pages save all the settings: it still is the default
+   const string definedPath = m_settings.GetString(propId);
+   const bool isDefault = definedPath.empty() || std::filesystem::path(definedPath).lexically_normal() == pinmamePath.lexically_normal();
+   if (!m_isSharedPinMAMEFolderApplied && !isDefault)
+      return;
+   if (const char* home = getenv("HOME"); definedPath.empty() && home != nullptr && DirExists(std::filesystem::path(home) / ".pinmame" / "roms"))
+      return;
+
+   std::error_code ec;
+   std::filesystem::create_directories(pinmamePath / "roms", ec);
+   if (ec)
+   {
+      PLOGE << "Failed to create the shared PinMAME folder " << pinmamePath << ": " << ec.message();
+      return;
+   }
+   // This is a default, not a user choice: it is reset when closing (see destructor) to follow the tables folder if it is changed. It may still
+   // end up in the settings file if a settings page saves while it is applied, in which case it has to be edited along the tables folder.
+   m_settings.Set(propId, pinmamePath.string(), false);
+   if (!m_isSharedPinMAMEFolderApplied)
+   {
+      PLOGI << "PinMAME folder is not defined, using the one shared by the tables of the table library: " << pinmamePath;
+   }
+   m_isSharedPinMAMEFolderApplied = true;
+#endif
+}
+
+std::filesystem::path VPApp::GetLobbyTablePath() const
+{
+   // Base of the lobby, which is then emptied and given a floor (see BuildLobby in AppCommands.cpp)
+   // FIXME replace by a dedicated lobby table (a room with nothing to play, designed for VR)
+   return m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "blankTable.vpx");
+}
+
+#ifdef VPX_TABLE_WEBSERVER
+WebServer& VPApp::GetWebServer()
+{
+   if (m_webServer == nullptr)
+      m_webServer = std::make_unique<WebServer>();
+   return *m_webServer;
+}
+#endif
+#endif
+
 VPApp::~VPApp()
 {
    #ifndef __STANDALONE__
@@ -245,6 +335,13 @@ VPApp::~VPApp()
    #else
       libwinevbs_shutdown();
    #endif
+#ifdef VPX_TABLE_WEBSERVER
+   m_webServer = nullptr; // Uses the table library and g_app
+#endif
+#ifdef __STANDALONE__
+   if (m_isSharedPinMAMEFolderApplied)
+      m_settings.Reset(GetPinMAMEPathPropId());
+#endif
    g_pvp = nullptr;
    g_app = nullptr;
 

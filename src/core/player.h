@@ -124,6 +124,12 @@ private:
 
 #ifdef ENABLE_BGFX
    bool CallbackSteppedGameLoop();
+#if defined(__STANDALONE__) && !defined(__LIBVPINBALL__)
+private:
+   void CaptureTableImageBeforeClosing();
+   bool m_tableImageCaptureStarted = false;
+public:
+#endif
    void MultithreadedGameLoop();
 #endif
    void FramePacingGameLoop();

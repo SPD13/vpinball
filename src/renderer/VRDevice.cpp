@@ -204,7 +204,7 @@ VRDevice::VRDevice(const Settings& settings)
             m_rendererType = bgfx::RendererType::Enum::Direct3D12;
          else
             m_rendererType = bgfx::RendererType::Enum::Direct3D11; // Default to Direct3D 11
-      #elif BX_PLATFORM_ANDROID
+      #elif BX_PLATFORM_ANDROID || BX_PLATFORM_LINUX
          m_rendererType = bgfx::RendererType::Enum::Vulkan;
       #else
          #error "Unsupported platform for OpenXR"
@@ -234,11 +234,13 @@ VRDevice::VRDevice(const Settings& settings)
       m_visibilityMaskExtensionSupported = EnableExtensionIfSupported(XR_KHR_VISIBILITY_MASK_EXTENSION_NAME);
       #if BX_PLATFORM_WINDOWS
          m_win32PerfCounterExtensionSupported = EnableExtensionIfSupported(XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME);
-      #elif BX_PLATFORM_ANDROID
+      #elif BX_PLATFORM_ANDROID || BX_PLATFORM_LINUX
          m_convertTimespecTimeExtensionSupported = EnableExtensionIfSupported(XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME);
       #endif
       m_passthroughExtensionSupported = EnableExtensionIfSupported(XR_FB_PASSTHROUGH_EXTENSION_NAME);
       m_displayRefreshRateExtensionSupported = EnableExtensionIfSupported(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+      // Needed to bind the Valve Frame controller interaction profile (without it, the runtime emulates an Oculus Touch controller which lacks the d-pad, view and bumper inputs)
+      EnableExtensionIfSupported("XR_VALVE_frame_controller_interaction");
       m_displayRefreshRateMode = settings.GetPlayerVR_DisplayRefreshRate();
       #ifdef DEBUG
          m_debugUtilsExtensionSupported = EnableExtensionIfSupported(XR_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -265,7 +267,7 @@ VRDevice::VRDevice(const Settings& settings)
          OPENXR_CHECK(xrGetInstanceProcAddr(m_xrInstance, "xrConvertTimeToWin32PerformanceCounterKHR", (PFN_xrVoidFunction*)&m_xrConvertTimeToWin32PerformanceCounterKHR),
             "Failed to get xrConvertTimeToWin32PerformanceCounterKHR.");
       }
-      #elif BX_PLATFORM_ANDROID
+      #elif BX_PLATFORM_ANDROID || BX_PLATFORM_LINUX
       if (m_convertTimespecTimeExtensionSupported)
       {
          OPENXR_CHECK(
@@ -317,6 +319,10 @@ VRDevice::~VRDevice()
          OPENXR_CHECK(xrDestroySpace(m_leftControllerSpace), "Failed to destroy Left Controller Space.")
       if (m_rightControllerSpace != XR_NULL_HANDLE)
          OPENXR_CHECK(xrDestroySpace(m_rightControllerSpace), "Failed to destroy Right Controller Space.")
+      if (m_leftAimSpace != XR_NULL_HANDLE)
+         OPENXR_CHECK(xrDestroySpace(m_leftAimSpace), "Failed to destroy Left Aim Space.")
+      if (m_rightAimSpace != XR_NULL_HANDLE)
+         OPENXR_CHECK(xrDestroySpace(m_rightAimSpace), "Failed to destroy Right Aim Space.")
       // Destroy the reference XrSpace.
       OPENXR_CHECK(xrDestroySpace(m_referenceSpace), "Failed to destroy Space.")
 
@@ -579,7 +585,7 @@ void VRDevice::SetupHMD()
    PLOGI << "Selected resolution: " << m_eyeWidth << 'x' << m_eyeHeight;
 
    // Create graphics backend early so GetGraphicContext() can provide Vulkan handles to BGFX
-   #if BX_PLATFORM_WINDOWS || BX_PLATFORM_ANDROID
+   #if BX_PLATFORM_WINDOWS || BX_PLATFORM_ANDROID || BX_PLATFORM_LINUX
    if (m_rendererType == bgfx::RendererType::Vulkan)
    {
       PLOGI << "Creating Vulkan backend for OpenXR (before BGFX initialization)";
@@ -769,8 +775,76 @@ void VRDevice::CreateSession()
       actionSpaceInfo.poseInActionSpace = { { 0.0f, 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 0.0f } };
       OPENXR_CHECK(xrCreateActionSpace(m_session, &actionSpaceInfo, &m_rightControllerSpace), "Failed to create Right Controller Action Space.");
    }
+   for (const auto& [path, space] : { std::pair<const char*, XrSpace*> { "/user/hand/left/input/aim/pose", &m_leftAimSpace }, { "/user/hand/right/input/aim/pose", &m_rightAimSpace } })
+   {
+      if (XrAction aimAction = inputHandler->GetAction(path); aimAction != XR_NULL_HANDLE)
+      {
+         XrActionSpaceCreateInfo actionSpaceInfo { XR_TYPE_ACTION_SPACE_CREATE_INFO };
+         actionSpaceInfo.action = aimAction;
+         actionSpaceInfo.poseInActionSpace = { { 0.0f, 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 0.0f } };
+         OPENXR_CHECK(xrCreateActionSpace(m_session, &actionSpaceInfo, space), "Failed to create Controller Aim Action Space.");
+      }
+   }
    m_xrInputHandler = inputHandler.get();
    g_pplayer->m_pininput.AddInputHandler(std::move(inputHandler));
+}
+
+// The UI is locked to the head (drawn in screen space for each eye), so pointing at it means finding where the point aimed by the
+// controller, a little further than the UI's apparent distance, lands in the eye viewports. Both eyes are averaged, as the UI is
+// shifted symmetrically between the eyes to give it some depth.
+void VRDevice::UpdateUIPointer(const std::vector<XrView>& views, XrTime time)
+{
+   m_uiPointerValid = false;
+   if (views.size() < 2 || m_xrInputHandler == nullptr)
+      return;
+
+   constexpr float pointedDistance = 2.f; // meters
+   const auto rotate = [](const XrQuaternionf& q, const vec3& v)
+   {
+      const vec3 u(q.x, q.y, q.z);
+      const vec3 t = CrossProduct(u, v) * 2.f;
+      return v + t * q.w + CrossProduct(u, t);
+   };
+
+   // Right hand first, left hand if the right one is not tracked or does not point at the UI
+   for (const auto& [space, trigger] : { std::pair<XrSpace, const char*> { m_rightAimSpace, "/user/hand/right/input/trigger/value" }, { m_leftAimSpace, "/user/hand/left/input/trigger/value" } })
+   {
+      XrSpaceLocation location { XR_TYPE_SPACE_LOCATION };
+      if (space == XR_NULL_HANDLE || xrLocateSpace(space, m_referenceSpace, time, &location) != XR_SUCCESS)
+         continue;
+      if ((location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) == 0 || (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) == 0)
+         continue;
+      const vec3 origin(location.pose.position.x, location.pose.position.y, location.pose.position.z);
+      const vec3 pointed = origin + rotate(location.pose.orientation, vec3(0.f, 0.f, -1.f)) * pointedDistance;
+
+      float x = 0.f, y = 0.f;
+      bool inFront = true;
+      for (int eye = 0; eye < 2; eye++)
+      {
+         const XrView& view = views[eye];
+         const XrQuaternionf invOrientation { -view.pose.orientation.x, -view.pose.orientation.y, -view.pose.orientation.z, view.pose.orientation.w };
+         const vec3 inView = rotate(invOrientation, pointed - vec3(view.pose.position.x, view.pose.position.y, view.pose.position.z));
+         if (inView.z > -0.1f)
+         {
+            inFront = false;
+            break;
+         }
+         const float tanLeft = tanf(view.fov.angleLeft), tanRight = tanf(view.fov.angleRight), tanUp = tanf(view.fov.angleUp), tanDown = tanf(view.fov.angleDown);
+         x += 0.5f * (inView.x / -inView.z - tanLeft) / (tanRight - tanLeft);
+         y += 0.5f * (tanUp - inView.y / -inView.z) / (tanUp - tanDown);
+      }
+      if (!inFront || x < 0.f || x > 1.f || y < 0.f || y > 1.f)
+         continue;
+
+      m_uiPointerValid = true;
+      m_uiPointerX = x;
+      m_uiPointerY = y;
+      // Hysteresis, as this is an analog trigger
+      const float triggerValue = m_xrInputHandler->GetFloatState(trigger);
+      m_uiPointerPressed = m_uiPointerPressed ? (triggerValue > 0.4f) : (triggerValue > 0.7f);
+      return;
+   }
+   m_uiPointerPressed = false;
 }
 
 void VRDevice::ReleaseSession()
@@ -1037,7 +1111,7 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
       QueryPerformanceFrequency(&TimerFreq);
       m_predictedDisplayTimestamp += static_cast<float>(displayTime.QuadPart - now.QuadPart) / static_cast<float>(TimerFreq.QuadPart);
    }
-   #elif BX_PLATFORM_ANDROID
+   #elif BX_PLATFORM_ANDROID || BX_PLATFORM_LINUX
    if (m_xrConvertTimeToTimespecTimeKHR)
    {
       timespec displayTime;
@@ -1073,6 +1147,8 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
          PLOGE << "Failed to locate Views.";
          rendered = false;
       }
+      if (rendered)
+         UpdateUIPointer(views, renderLayerInfo.predictedDisplayTime);
       if (rendered)
       {
          // The steps that leads to the matrix stack implemented below are the followings, with first matrix being view, 

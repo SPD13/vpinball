@@ -71,7 +71,18 @@ public:
          // Poses
          { "/user/hand/left/input/grip/pose"s, XR_ACTION_TYPE_POSE_INPUT }, { "/user/hand/right/input/grip/pose"s, XR_ACTION_TYPE_POSE_INPUT },
 
-         { "/user/hand/left/output/haptic"s, XR_ACTION_TYPE_VIBRATION_OUTPUT }, { "/user/hand/right/output/haptic"s, XR_ACTION_TYPE_VIBRATION_OUTPUT }
+         { "/user/hand/left/output/haptic"s, XR_ACTION_TYPE_VIBRATION_OUTPUT }, { "/user/hand/right/output/haptic"s, XR_ACTION_TYPE_VIBRATION_OUTPUT },
+
+         // Valve Frame controller: all face buttons are on the right hand, the left hand has a d-pad and a view button, both have a bumper
+         // Always add new paths at the end: the default and user mappings reference the inputs by their index in this list
+         { "/user/hand/right/input/x/click"s, XR_ACTION_TYPE_BOOLEAN_INPUT }, { "/user/hand/right/input/y/click"s, XR_ACTION_TYPE_BOOLEAN_INPUT }, // 32, 33
+         { "/user/hand/left/input/dpad_up/click"s, XR_ACTION_TYPE_BOOLEAN_INPUT }, { "/user/hand/left/input/dpad_down/click"s, XR_ACTION_TYPE_BOOLEAN_INPUT }, // 34, 35
+         { "/user/hand/left/input/dpad_left/click"s, XR_ACTION_TYPE_BOOLEAN_INPUT }, { "/user/hand/left/input/dpad_right/click"s, XR_ACTION_TYPE_BOOLEAN_INPUT }, // 36, 37
+         { "/user/hand/left/input/view/click"s, XR_ACTION_TYPE_BOOLEAN_INPUT }, // 38
+         { "/user/hand/left/input/bumper/click"s, XR_ACTION_TYPE_BOOLEAN_INPUT }, { "/user/hand/right/input/bumper/click"s, XR_ACTION_TYPE_BOOLEAN_INPUT }, // 39, 40
+
+         // Pointing poses (in-headset UI)
+         { "/user/hand/left/input/aim/pose"s, XR_ACTION_TYPE_POSE_INPUT }, { "/user/hand/right/input/aim/pose"s, XR_ACTION_TYPE_POSE_INPUT } // 41, 42
       };
 
       // Bind them
@@ -110,7 +121,8 @@ public:
       }
 
       // Register these bindings for major profiles
-      static const std::array<const char*, 6> profiles { //
+      static const std::array<const char*, 7> profiles { //
+         "/interaction_profiles/valve/frame_controller_valve", // Needs XR_VALVE_frame_controller_interaction (enabled by VRDevice when available), otherwise the runtime emulates a Touch controller
          "/interaction_profiles/khr/simple_controller", //
          "/interaction_profiles/oculus/touch_controller", //
          "/interaction_profiles/valve/index_controller", //
@@ -145,6 +157,15 @@ public:
          map.MapAction(ButtonMapping::Create(m_joyId, 21, 0.9f), m_pininput.GetUIUpActionId());
          map.MapAction(ButtonMapping::Create(m_joyId, 22, -0.9f, true), m_pininput.GetUILeftActionId()); // Right horizontal stick
          map.MapAction(ButtonMapping::Create(m_joyId, 22, 0.9f), m_pininput.GetUIRightActionId());
+         // Valve Frame controller, which has no left hand face buttons
+         map.MapAction(ButtonMapping::Create(m_joyId, 38), m_pininput.GetOpenInGameUIActionId()); // Left view button
+         map.MapAction(ButtonMapping::Create(m_joyId, 3), m_pininput.GetExitGameActionId()); // Right menu button
+         map.MapAction(ButtonMapping::Create(m_joyId, 34), m_pininput.GetUIUpActionId()); // D-pad
+         map.MapAction(ButtonMapping::Create(m_joyId, 35), m_pininput.GetUIDownActionId());
+         map.MapAction(ButtonMapping::Create(m_joyId, 36), m_pininput.GetUILeftActionId());
+         map.MapAction(ButtonMapping::Create(m_joyId, 37), m_pininput.GetUIRightActionId());
+         map.MapAction(ButtonMapping::Create(m_joyId, 39), m_pininput.GetLeftNudgeActionId()); // Bumpers
+         map.MapAction(ButtonMapping::Create(m_joyId, 40), m_pininput.GetRightNudgeActionId());
          std::unique_ptr<PlungerSensor> plunger = std::make_unique<PlungerSensor>(&m_pininput);
          plunger->GetPositionSensor()->SetMapping(SensorMapping::Create(m_joyId, 23, SensorMapping::Type::Position)); // Right stick Y
          plunger->GetPositionSensor()->GetMapping().SetScale(-1.f);
@@ -262,6 +283,16 @@ private:
    }
 
 public:
+   float GetFloatState(const std::string& path) const
+   {
+      const XrAction action = GetAction(path);
+      if (action == XR_NULL_HANDLE)
+         return 0.f;
+      XrActionStateGetInfo getInfo { XR_TYPE_ACTION_STATE_GET_INFO, nullptr, action };
+      XrActionStateFloat state { XR_TYPE_ACTION_STATE_FLOAT };
+      return (xrGetActionStateFloat(m_session, &getInfo, &state) == XR_SUCCESS && state.isActive) ? state.currentState : 0.f;
+   }
+
    XrAction GetAction(const std::string& path) const
    {
       for (const auto& t : m_trackers)

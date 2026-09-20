@@ -22,6 +22,11 @@ void HomePage::BuildPage()
    constexpr bool hasKeyboard = !(g_isAndroid || g_isIOS);
    constexpr bool isTouch = g_isAndroid || g_isIOS;
 
+#if defined(__STANDALONE__) && !defined(__LIBVPINBALL__)
+   // Mobile builds select tables in their native launcher
+   AddItem(std::make_unique<InGameUIItem>("Tables"s, "Play another table"s, "tables/picker"s));
+#endif
+
    ////////////////////////////////////////////////////////////////////////////////////////////////
    AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Header, "Table options"s));
 
