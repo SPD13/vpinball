@@ -787,6 +787,61 @@ function uploadFile() {
   fileInput.click();
 }
 
+// Upload a whole folder chosen with the browser's folder picker, for example a table with its backglass, ROMs and music.
+// Dropping a folder on the page does the same, but drag and drop is not available on every device.
+function uploadFolder() {
+  const folderInput = document.createElement("input");
+  folderInput.type = "file";
+  folderInput.webkitdirectory = true;
+  folderInput.multiple = true;
+
+  folderInput.addEventListener("change", async () => {
+    // Skip hidden files like .DS_Store
+    const files = Array.from(folderInput.files).filter(file => !(file.webkitRelativePath || file.name).split('/').some(part => part.startsWith('.')));
+    if (files.length === 0) {
+      return;
+    }
+
+    const targetDir = _directory;
+    UIState.isUploadingFolder = true;
+    UploadProgress.reset();
+    UploadProgress.totalFiles = files.length;
+    UploadProgress.totalBytes = files.reduce((total, file) => total + file.size, 0);
+    showStatusMessage("main-status", `Found ${files.length} files. Starting upload...`, "info", true);
+
+    try {
+      const createdDirs = new Set();
+      for (const file of files) {
+        const relativePath = file.webkitRelativePath || file.name;
+        const parts = relativePath.split('/');
+        parts.pop();
+        let dirPath = targetDir || '';
+        for (const part of parts) {
+          dirPath = dirPath ? `${dirPath}/${part}` : part;
+          if (!createdDirs.has(dirPath)) {
+            createdDirs.add(dirPath);
+            await createDirectory(dirPath);
+          }
+        }
+
+        UploadProgress.currentFileName = file.name;
+        UploadProgress.currentFileProgress = 0;
+        const data = new Uint8Array(await file.arrayBuffer());
+        await sendChunkSequential(targetDir ? `${targetDir}/${relativePath}` : relativePath, data, 0, 1024 * 512, "main-status", file.size);
+        UploadProgress.completedFiles++;
+        UploadProgress.updateOverallProgress();
+      }
+      showStatusMessage("main-status", `✓ Successfully uploaded ${files.length} files!`, "success", true);
+    } catch (error) {
+      showStatusMessage("main-status", `✗ Upload failed: ${error.message}`, "error", true);
+    }
+    UIState.isUploadingFolder = false;
+    navigateToPath(_directory);
+  });
+
+  folderInput.click();
+}
+
 function openFile(fileName, editing = false) {
   const filePath = _directory ? `${_directory}/${fileName}` : fileName;
   _currentFilePath = filePath;
@@ -2665,4 +2720,26 @@ function refreshTables() {
     });
 }
 
-document.addEventListener("DOMContentLoaded", startup);
+// Servers that require pairing answer 401 until the code displayed by the application has been entered
+async function ensurePaired() {
+  for (;;) {
+    const response = await fetch('/info');
+    if (response.status !== 401) {
+      return true;
+    }
+    const code = window.prompt('Enter the pairing code displayed by Visual Pinball');
+    if (code === null) {
+      document.body.textContent = 'Pairing is required to manage this device. Reload the page to try again.';
+      return false;
+    }
+    await fetch(`/pair?code=${encodeURIComponent(code.trim())}`, { method: 'POST' });
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  ensurePaired().then(paired => {
+    if (paired) {
+      startup();
+    }
+  });
+});

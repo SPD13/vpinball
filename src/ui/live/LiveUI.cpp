@@ -308,6 +308,32 @@ void LiveUI::NewFrame()
       }
    }
 
+   // In VR, a controller is used as a pointer when the in-game UI is opened: move the mouse where it points to, its trigger being the left button.
+   // Navigation only switches from buttons to pointer on a trigger press, as a hand is never still enough to tell it from mouse moves.
+   #if defined(ENABLE_XR)
+   if (m_player->m_vrDevice && m_inGameUI.IsOpened())
+   {
+      float x, y;
+      bool pressed;
+      const bool pointing = m_player->m_vrDevice->GetUIPointer(x, y, pressed);
+      if (pointing)
+      {
+         io.AddMousePosEvent(x * io.DisplaySize.x, y * io.DisplaySize.y);
+         if (pressed && !m_vrPointerPressed)
+            m_inGameUI.UsePointerNav();
+      }
+      if (pressed != m_vrPointerPressed && (pointing || !pressed))
+      {
+         io.AddMouseButtonEvent(ImGuiMouseButton_Left, pressed);
+         m_vrPointerPressed = pressed;
+      }
+      m_vrPointerVisible = pointing;
+      m_vrPointerPos = ImVec2(x * io.DisplaySize.x, y * io.DisplaySize.y);
+   }
+   else
+      m_vrPointerVisible = false;
+   #endif
+
    // Enable mouse capture when dragging (needed when dragging main windows)
    {
       bool want_capture = false;
@@ -354,6 +380,13 @@ void LiveUI::RenderUI()
 
    // Tweak UI (aligned to playfield view, using custom flipper controls)
    m_inGameUI.Update();
+
+   // VR controller pointer
+   if (m_vrPointerVisible)
+   {
+      ImGui::GetForegroundDrawList()->AddCircleFilled(m_vrPointerPos, 7.f * m_uiScale, m_vrPointerPressed ? IM_COL32(0, 255, 0, 255) : IM_COL32(255, 255, 255, 255));
+      ImGui::GetForegroundDrawList()->AddCircle(m_vrPointerPos, 7.f * m_uiScale, IM_COL32(0, 0, 0, 255), 0, 2.f * m_uiScale);
+   }
 
    if (!m_player->IsPlaying() && !m_editorUI.IsOpened())
    {

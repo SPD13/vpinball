@@ -6,9 +6,14 @@
 #include "extern.h"
 #include "core/TournamentFile.h"
 #include "core/VPApp.h"
+#include "core/editablereg.h"
+#include "lib/src/TableLibrary.h"
 #include "parts/Material.h"
 #include "parts/pintable.h"
+#include "parts/PartGroup.h"
+#include "parts/primitive.h"
 #include "ui/VPXFileFeedback.h"
+#include "ui/live/LiveUI.h"
 #include "ui/win/WinEditor.h"
 #include "utils/BiffReader.h"
 
@@ -134,14 +139,179 @@ PlayTableCommand::PlayTableCommand(const std::filesystem::path& tableFilename)
 {
 }
 
-void PlayTableCommand::Execute()
+#ifdef __STANDALONE__
+// A primitive made of a single horizontal quad (the same way the player builds its implicit playfield)
+static Primitive* CreateQuad(PinTable* table, const wstring& name, float left, float top, float right, float bottom)
 {
+   Primitive* quad = static_cast<Primitive*>(EditableRegistry::CreateAndInit(ItemTypeEnum::eItemPrimitive, table, 0, 0));
+   quad->SetName(name);
+   quad->m_desktopBackdrop = false;
+   quad->m_d.m_collidable = false;
+   quad->m_d.m_toy = true;
+   quad->m_d.m_use3DMesh = true;
+   quad->m_d.m_vSize.Set(1.0f, 1.0f, 1.0f);
+   quad->m_mesh.m_vertices.resize(4);
+   for (unsigned int i = 0; i < 4; i++)
+   {
+      quad->m_mesh.m_vertices[i].x = (i & 1) ? right : left;
+      quad->m_mesh.m_vertices[i].y = (i & 2) ? bottom : top;
+      quad->m_mesh.m_vertices[i].z = 0.f;
+      quad->m_mesh.m_vertices[i].tu = (i & 1) ? 1.f : 0.f;
+      quad->m_mesh.m_vertices[i].tv = (i & 2) ? 1.f : 0.f;
+      quad->m_mesh.m_vertices[i].nx = 0.f;
+      quad->m_mesh.m_vertices[i].ny = 0.f;
+      quad->m_mesh.m_vertices[i].nz = 1.f;
+   }
+   quad->m_mesh.m_indices = { 0, 1, 2, 2, 1, 3 };
+   quad->m_mesh.m_validBounds = false;
+   return quad;
+}
+
+// The lobby is what is displayed behind the table picker of the launcher mode: an empty room with a floor. A table file can only be
+// authored with the Windows editor, so for the time being the lobby is made from the blank table shipped with the application, by
+// removing everything it contains (parts, script, playfield) and adding a floor.
+static void BuildLobby(PinTable* table)
+{
+   // Displayed by the home page of the in-game menu
+   table->m_tableName = "Visual Pinball"s;
+   table->m_blurb.clear();
+   table->m_description = "Select 'Tables' to play a table."s;
+   table->m_rules.clear();
+   table->m_author.clear();
+   table->m_version.clear();
+
+   table->m_original_table_script = "Option Explicit\n"s;
+   table->m_script_text = table->m_original_table_script;
+   for (int i = 0; i < table->m_vcollection.size(); i++)
+      table->m_vcollection[i].ClearParts();
+   // Parts hold a reference on their group, so groups go last
+   for (const bool removeGroups : { false, true })
+   {
+      const vector<IEditable*> parts = table->GetParts();
+      for (IEditable* part : parts)
+         if ((part->GetItemType() == ItemTypeEnum::eItemPartGroup) == removeGroups)
+            table->RemovePart(part);
+   }
+
+   // Outside of VR, look at the room like someone standing in front of a table. The legacy layout of the base table can not be used,
+   // as it places the camera by fitting it to the parts that were just removed.
+   for (ViewSetup& viewSetup : table->mViewSetups)
+   {
+      viewSetup = ViewSetup();
+      viewSetup.mMode = VLM_CAMERA;
+      viewSetup.mLookAt = 300.f; // In percent of the table length: look a few meters ahead instead of down at a playfield, to see the floor up to its far edge
+   }
+
+   // An invisible explicit playfield, otherwise the player adds the default one
+   Primitive* playfield = CreateQuad(table, L"playfield_mesh"s, table->m_left, table->m_top, table->m_right, table->m_bottom);
+   playfield->m_d.m_visible = false;
+   table->AddPart(playfield);
+   playfield->Release();
+
+   // The floor lies in the room space, which in VR is the real world: z = 0 is the ground, without the playfield inclination
+   PartGroup* room = static_cast<PartGroup*>(EditableRegistry::CreateAndInit(ItemTypeEnum::eItemPartGroup, table, 0, 0));
+   room->SetName(L"LobbyRoom"s);
+   room->m_d.m_spaceReference = PartGroupData::SpaceReference::SR_ROOM;
+   table->AddPart(room);
+
+   // Two shades, as a uniform floor gives no sense of distance
+   Material* floorMaterials[2];
+   for (int i = 0; i < 2; i++)
+   {
+      floorMaterials[i] = new Material();
+      floorMaterials[i]->m_name = i == 0 ? "LobbyFloorDark"s : "LobbyFloorLight"s;
+      floorMaterials[i]->m_cBase = i == 0 ? RGB(58, 62, 70) : RGB(78, 83, 92);
+      floorMaterials[i]->m_fRoughness = 0.8f;
+      table->AddMaterial(floorMaterials[i]);
+   }
+
+   // 12 x 12 meters centered on the place where the player stands, made of tiles: outside of VR, the near clipping plane is derived
+   // from the corners of the bounding box of each part, so a single large quad would be clipped away as its corners are all far away
+   constexpr int nTiles = 6;
+   const float tileSize = CMTOVPU(200.f);
+   const float left = 0.5f * (table->m_left + table->m_right) - 0.5f * static_cast<float>(nTiles) * tileSize;
+   const float top = table->m_bottom - 0.5f * static_cast<float>(nTiles) * tileSize;
+   for (int y = 0; y < nTiles; y++)
+   {
+      for (int x = 0; x < nTiles; x++)
+      {
+         const float tileLeft = left + static_cast<float>(x) * tileSize, tileTop = top + static_cast<float>(y) * tileSize;
+         Primitive* tile = CreateQuad(table, L"LobbyFloor_"s + std::to_wstring(x) + L'_' + std::to_wstring(y), tileLeft, tileTop, tileLeft + tileSize, tileTop + tileSize);
+         tile->m_d.m_szMaterial = floorMaterials[(x + y) & 1]->m_name;
+         tile->m_d.m_staticRendering = true;
+         tile->m_d.m_disableLightingBelow = 1.f;
+         tile->SetPartGroup(room);
+         table->AddPart(tile);
+         tile->Release();
+      }
+   }
+   room->Release();
+   table->Undo(true);
+}
+#endif
+
+void PlayTableCommand::Play(bool openTablePicker)
+{
+#ifdef __STANDALONE__
+   g_app->SetupSharedPinMAMEFolder();
+#endif
    CComObject<PinTable>* table = LoadTable();
+#ifdef __STANDALONE__
+   if (openTablePicker)
+      BuildLobby(table);
+   else
+      g_app->GetTableLibrary().RecordPlay(m_tableFilename); // For the 'Recent' and 'Most played' lists of the table picker
+#endif
    auto player = std::make_unique<Player>(table, Player::PlayMode::Play);
+#ifdef __STANDALONE__
+   if (openTablePicker)
+      player->m_liveUI->OpenInGameUI("tables/picker"s);
+#endif
    player->GameLoop();
    player = nullptr;
    table->Release();
 }
+
+#ifdef __STANDALONE__
+// The in-game table picker selects the next table to play, then closes the player
+static void PlaySelectedTables()
+{
+   while (!g_app->m_nextTableFilename.empty())
+   {
+      PlayTableCommand nextTable(std::exchange(g_app->m_nextTableFilename, std::filesystem::path()));
+      nextTable.Play();
+   }
+}
+#endif
+
+void PlayTableCommand::Execute()
+{
+   Play();
+#ifdef __STANDALONE__
+   PlaySelectedTables();
+#endif
+}
+
+
+#ifdef __STANDALONE__
+LauncherCommand::LauncherCommand()
+{
+}
+
+void LauncherCommand::Execute()
+{
+   // Closing a table gets back to the lobby, closing the lobby without selecting a table quits
+   g_app->m_launcherMode = true;
+   while (g_app->m_launcherMode)
+   {
+      PlayTableCommand lobby(g_app->GetLobbyTablePath());
+      lobby.Play(true);
+      if (g_app->m_nextTableFilename.empty())
+         break;
+      PlaySelectedTables();
+   }
+}
+#endif
 
 
 AuditTableCommand::AuditTableCommand(const std::filesystem::path& tableFilename)
@@ -286,6 +456,9 @@ enum option_names
 #endif
    OPTION_LIVE_EDIT,
    OPTION_PLAY,
+#ifdef __STANDALONE__
+   OPTION_LAUNCHER,
+#endif
    OPTION_POVEDIT,
    OPTION_POV,
    OPTION_EXTRACTVBS,
@@ -332,6 +505,9 @@ static const CommandLineOption options[] = {
 #endif
    { OPTION_LIVE_EDIT, "LiveEdit"s, "[opt filename]  Start in live editor mode. if a filename is provided, loads it as the table to edit. WARNING Unstable feature only provided for early testing"s },
    { OPTION_PLAY, "Play"s, "[filename]  Load and play file"s },
+#ifdef __STANDALONE__
+   { OPTION_LAUNCHER, "Launcher"s, "Start with the table picker, to select and play tables without leaving the application"s },
+#endif
    { OPTION_POVEDIT, "PovEdit"s, "[filename]  Load and run file in live editing mode, then export new pov on exit"s },
    { OPTION_POV, "Pov"s, "[filename]  Load, export pov and close"s },
    { OPTION_EXTRACTVBS, "ExtractVBS"s, "[filename]  Load, export table script and close"s },
@@ -593,6 +769,12 @@ void CommandLineProcessor::ProcessCommandLine(int nArgs, const char* szArglist[]
       case OPTION_VERSION:
          commands.push_back(std::make_unique<ShowInfoAndExitCommand>("", "Visual Pinball "s + VP_VERSION_STRING_FULL_LITERAL, 0));
          break;
+
+#ifdef __STANDALONE__
+      case OPTION_LAUNCHER:
+         commands.push_back(std::make_unique<LauncherCommand>());
+         break;
+#endif
 
       case OPTION_LIVE_EDIT:
          if (i + 1 < nArgs)

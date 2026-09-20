@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core/PropertyDef.h"
+#include "imgui/imgui.h"
 
 namespace VPX::InGameUI
 {
@@ -114,6 +115,17 @@ public:
 
    // Custom render callback for CustomRender items
    const std::function<void(int, const InGameUIItem*)> m_customRender;
+
+   // Navigation and runnable items which define this are displayed as tiles (image with the label below) laid out as a grid.
+   // The callback is only called for visible tiles, and may return a null image (not available, or not yet loaded).
+   std::function<ImTextureID()> m_tileImage;
+
+   // Optional toggle of a tile, displayed as an icon in the top right corner of its image and clicked independently of the tile (for example a
+   // favorite star). Pointer only: pages must offer another way to toggle it for button navigation.
+   std::function<bool()> m_tileToggleState;
+   std::function<void()> m_tileToggleAction;
+   string m_tileToggleIconOn;
+   string m_tileToggleIconOff;
 
    // UI behavior
    bool m_excludeFromDefault = false; // If set this item is not reseted to its default value when user request a reset

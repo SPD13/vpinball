@@ -44,6 +44,7 @@ public:
    virtual bool IsFlipperNavNeeded() const { return false; }
 
    InGameUIItem* GetItem(const string& label) const;
+   const InGameUIItem* GetSelectedItem() const { return (m_selectedItem >= 0 && m_selectedItem < (int)m_items.size()) ? m_items[m_selectedItem].get() : nullptr; }
 
    virtual bool IsPlayerPauseAllowed() const { return true; }
 
@@ -90,6 +91,7 @@ private:
    bool m_resettingToDefaults = false;
    bool m_resettingToInitialValues = false;
 
+   void RenderTile(int index, const ImVec2& pos, const ImVec2& size, const InGameUIItem*& hoveredItem);
    void RenderInputActionPopup();
    bool m_defineActionPopup = false;
    InGameUIItem* m_defineActionItem = nullptr;

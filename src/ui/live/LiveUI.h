@@ -99,6 +99,11 @@ private:
    RenderDevice* const m_rd;
    int m_rotate = 0;
    float m_uiScale = 0.f;
+
+   // VR controller used as a pointer
+   bool m_vrPointerVisible = false;
+   bool m_vrPointerPressed = false;
+   ImVec2 m_vrPointerPos;
    ImFont *m_baseFont = nullptr;
    ImFont *m_overlayBoldFont = nullptr;
    ImFont *m_overlayFont = nullptr;

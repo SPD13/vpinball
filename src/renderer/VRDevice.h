@@ -11,6 +11,12 @@
       #define BX_PLATFORM_WINDOWS 0
       #undef BX_PLATFORM_ANDROID
       #define BX_PLATFORM_ANDROID 1
+   #elif defined(__linux__) && BX_PLATFORM_WINDOWS
+      // Same on Linux
+      #undef BX_PLATFORM_WINDOWS
+      #define BX_PLATFORM_WINDOWS 0
+      #undef BX_PLATFORM_LINUX
+      #define BX_PLATFORM_LINUX 1
    #endif
 
    #if BX_PLATFORM_WINDOWS
@@ -26,6 +32,10 @@
       #define XR_USE_PLATFORM_ANDROID
       #define XR_USE_GRAPHICS_API_VULKAN
       //#define XR_USE_GRAPHICS_API_OPENGL_ES
+   #elif BX_PLATFORM_LINUX
+      // Headless Vulkan session (no window system binding needed), for example for the SteamVR runtime of SteamOS devices
+      #define XR_USE_TIMESPEC
+      #define XR_USE_GRAPHICS_API_VULKAN
    #endif
 
 
@@ -139,6 +149,17 @@ public:
 
    unsigned int GetEyeWidth() const { return m_eyeWidth; }
    unsigned int GetEyeHeight() const { return m_eyeHeight; }
+
+   #if defined(ENABLE_XR)
+   // Position pointed by a controller in the head locked UI, normalized to 0..1 from the top left of the eye viewport. Returns false if no controller points at it
+   bool GetUIPointer(float& x, float& y, bool& pressed) const
+   {
+      x = m_uiPointerX;
+      y = m_uiPointerY;
+      pressed = m_uiPointerPressed;
+      return m_uiPointerValid;
+   }
+   #endif
    
    float GetLockbarWidth() const { return m_lockbarWidth; }
    void SetLockbarWidth(float width) { m_lockbarWidth = width; m_worldDirty = true; }
@@ -263,6 +284,15 @@ private:
    XrSpace m_leftControllerSpace = XR_NULL_HANDLE;
    XrSpace m_rightControllerSpace = XR_NULL_HANDLE;
 
+   // UI pointer: the aim ray of a controller, projected in the head locked UI
+   XrSpace m_leftAimSpace = XR_NULL_HANDLE;
+   XrSpace m_rightAimSpace = XR_NULL_HANDLE;
+   bool m_uiPointerValid = false;
+   bool m_uiPointerPressed = false;
+   float m_uiPointerX = 0.f;
+   float m_uiPointerY = 0.f;
+   void UpdateUIPointer(const std::vector<XrView>& views, XrTime time);
+
    struct RenderLayerInfo
    {
       XrTime predictedDisplayTime = 0;
@@ -278,7 +308,7 @@ private:
    #if BX_PLATFORM_WINDOWS
    bool m_win32PerfCounterExtensionSupported = false;
    PFN_xrConvertTimeToWin32PerformanceCounterKHR m_xrConvertTimeToWin32PerformanceCounterKHR = nullptr;
-   #elif BX_PLATFORM_ANDROID
+   #elif BX_PLATFORM_ANDROID || BX_PLATFORM_LINUX
    bool m_convertTimespecTimeExtensionSupported = false;
    PFN_xrConvertTimeToTimespecTimeKHR m_xrConvertTimeToTimespecTimeKHR = nullptr;
    #endif
