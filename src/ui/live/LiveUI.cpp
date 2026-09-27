@@ -440,8 +440,13 @@ void LiveUI::RenderUI()
    // Display plumb state overlay
    m_plumbOverlay.Update();
 
-   // Display notification overlays except when script has an unaligned rotation
-   m_notificationOverlay.Update(true, m_overlayFont);
+   // Display notification overlays except when script has an unaligned rotation. In VR, the UI display area is a large panel of which the player
+   // looks at the in-game menu window: notifications (like the confirmation of a menu action) are stacked just above that window, not to be missed
+   float notificationsAboveY = -1.f;
+   if (m_player->m_vrDevice && m_inGameUI.IsOpened())
+      if (const float menuTop = m_inGameUI.GetActivePage()->GetWindowPos().y; menuTop > 0.1f * io.DisplaySize.y)
+         notificationsAboveY = menuTop - 10.f * m_uiScale;
+   m_notificationOverlay.Update(true, m_overlayFont, notificationsAboveY);
 
    // Display performance overlays
    m_perfUI.Update();

@@ -41,6 +41,8 @@ private:
    void SetSearch(const string& search);
    void RenderTabs();
    void RenderSearch();
+   void RenderVirtualKeyboard();
+   bool m_virtualKeyboard = false; // Shown under the search field in VR, where there is no keyboard, from its activation until 'Done'
    void RenderPager(const char* item);
    int m_pageCount = 1;
    string m_reselectItem;

@@ -84,7 +84,7 @@ public:
    std::optional<LobbyRoom> GetLobbyRoom();
    int UseTableRoomInLobby(PinTable* table); // Returns the number of room parts kept, 0 if the table has no VR room (then nothing changes)
    void ResetLobbyRoom();
-   static bool IsRoomPart(const IEditable* part);
+   static vector<IEditable*> GetRoomParts(PinTable* table); // All the parts of its VR room, visible or not
    // The 'Visible' property that scripts use, for the parts which have one
    static std::optional<bool> GetPartVisible(IEditable* part);
    static void SetPartVisible(IEditable* part, bool visible);

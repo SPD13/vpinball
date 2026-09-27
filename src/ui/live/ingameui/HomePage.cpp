@@ -49,7 +49,7 @@ void HomePage::BuildPage()
          [this]() { m_player->ReplaceTableImage(); }));
 
    // The room of this table as the room of the lobby, from the table picker
-   if (g_app->m_launcherMode && !m_player->m_isLobby && std::ranges::any_of(m_player->m_ptable->GetParts(), VPApp::IsRoomPart))
+   if (g_app->m_launcherMode && !m_player->m_isLobby && !VPApp::GetRoomParts(m_player->m_ptable).empty())
       AddItem(std::make_unique<InGameUIItem>("Use this VR room in the lobby"s, "The table picker will be shown in the room of this table, as it is now"s,
          [this]()
          {
