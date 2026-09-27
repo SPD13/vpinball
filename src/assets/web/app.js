@@ -436,8 +436,11 @@ function renderMissingRoms(missingRoms) {
 }
 
 function updateMissingRoms(directory) {
+  const panel = DOMCache.get('missing-roms');
+  if (!panel) // A page cached from before the panel existed
+    return;
   if (!isRomsFolder(directory)) {
-    DOMCache.get('missing-roms').hidden = true;
+    panel.hidden = true;
     return;
   }
   fetch('missing-roms')
@@ -463,11 +466,11 @@ function fetchFiles(directory) {
     .then((data) => {
       _directory = directory;
       _data = data;
-      updateMissingRoms(directory);
 
       sortFiles(_lastSort);
       updateSortIndicators();
       updateFilesList();
+      updateMissingRoms(directory);
 
       return data;
     })

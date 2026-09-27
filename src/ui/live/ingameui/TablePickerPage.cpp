@@ -250,6 +250,9 @@ void TablePickerPage::RenderSearch()
    string search = s_search;
    if (ImGui::InputTextWithHint("##text", "Search: a few letters of the name", &search) && search != s_search)
       SetSearch(search);
+   // In VR there is no keyboard: activating the field opens a virtual one under it
+   if (ImGui::IsItemActivated() && m_player->m_vrDevice)
+      m_virtualKeyboard = true;
    if (!s_search.empty())
    {
       ImGui::SameLine();
@@ -257,6 +260,55 @@ void TablePickerPage::RenderSearch()
          SetSearch(string());
    }
    ImGui::PopStyleVar();
+   if (m_virtualKeyboard)
+      RenderVirtualKeyboard();
+   ImGui::PopID();
+}
+
+void TablePickerPage::RenderVirtualKeyboard()
+{
+   // Keys add to the search (not to the text field, which loses the focus when a key is clicked), which filters the list at once
+   static constexpr const char* rows[] = { "1234567890", "QWERTYUIOP", "ASDFGHJKL'", "ZXCVBNM-&." };
+   const ImGuiStyle& style = ImGui::GetStyle();
+   const float spacing = style.ItemSpacing.x;
+   const float keyWidth = (ImGui::GetContentRegionAvail().x - 9.f * spacing) / 10.f;
+   const float keyHeight = 1.5f * ImGui::GetFrameHeight();
+   ImGui::PushID("VirtualKeyboard");
+   ImGui::Dummy(ImVec2(0.f, 0.5f * keyHeight));
+   for (const char* row : rows)
+   {
+      for (const char* key = row; *key; key++)
+      {
+         if (key != row)
+            ImGui::SameLine(0.f, spacing);
+         const char label[2] = { *key, '\0' };
+         ImGui::PushID(*key);
+         if (ImGui::Button(label, ImVec2(keyWidth, keyHeight)) && s_search.size() < 64)
+            SetSearch(s_search + static_cast<char>(std::tolower(static_cast<unsigned char>(*key))));
+         ImGui::PopID();
+      }
+   }
+   // Last row: space over 4 keys, then delete, clear and done over 2 keys each
+   const float wideKey = 2.f * keyWidth + spacing;
+   if (ImGui::Button("Space", ImVec2(2.f * wideKey + spacing, keyHeight)) && s_search.size() < 64)
+      SetSearch(s_search + ' ');
+   ImGui::SameLine(0.f, spacing);
+   if (ImGui::Button(ICON_FK_ARROW_LEFT " Delete", ImVec2(wideKey, keyHeight)) && !s_search.empty())
+   {
+      // A whole UTF-8 character
+      string search = s_search;
+      while (!search.empty() && (static_cast<unsigned char>(search.back()) & 0xC0) == 0x80)
+         search.pop_back();
+      if (!search.empty())
+         search.pop_back();
+      SetSearch(search);
+   }
+   ImGui::SameLine(0.f, spacing);
+   if (ImGui::Button("Clear", ImVec2(wideKey, keyHeight)))
+      SetSearch(string());
+   ImGui::SameLine(0.f, spacing);
+   if (ImGui::Button(ICON_FK_CHECK " Done", ImVec2(wideKey, keyHeight)))
+      m_virtualKeyboard = false;
    ImGui::PopID();
 }
 

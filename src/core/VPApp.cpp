@@ -321,16 +321,37 @@ std::filesystem::path VPApp::GetLobbyTablePath() const
    return m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "blankTable.vpx");
 }
 
-// Parts placed in the room: in a part group using the room space reference, or, for tables made before part groups existed, in a layer named
-// after the room (like 'VR Room' or 'VR_Room', layers being loaded as part groups)
-bool VPApp::IsRoomPart(const IEditable* part)
+// The parts of the VR room of a table:
+// - in a part group using the room space reference,
+// - for tables made before part groups existed, in a layer named after the room (like 'VR Room' or 'VR_Room', layers being loaded as part groups),
+// - or in a collection named 'VR...' which is not the cabinet: tables often define their rooms as collections that their script shows according
+//   to their options (for example VR_MinimalRoom, VR_PoolBar and VR_Sphere, beside VR_Table for the cabinet)
+vector<IEditable*> VPApp::GetRoomParts(PinTable* table)
 {
-   if (part->GetItemType() == ItemTypeEnum::eItemPartGroup)
+   const auto isRoomGroup = [](const IEditable* part)
+   {
+      for (const PartGroup* group = part->GetPartGroup(); group != nullptr; group = group->GetPartGroup())
+         if (group->m_d.m_spaceReference == PartGroupData::SpaceReference::SR_ROOM || lowerCase(group->GetName()).find("room") != string::npos)
+            return true;
       return false;
-   for (const PartGroup* group = part->GetPartGroup(); group != nullptr; group = group->GetPartGroup())
-      if (group->m_d.m_spaceReference == PartGroupData::SpaceReference::SR_ROOM || lowerCase(group->GetName()).find("room") != string::npos)
-         return true;
-   return false;
+   };
+   const auto isRoomCollection = [](const wstring& collectionName)
+   {
+      const wstring name = lowerCase(collectionName);
+      return name.starts_with(L"vr") && !std::ranges::any_of(std::initializer_list<const wchar_t*> { L"cab", L"table", L"backglass", L"bg" },
+         [&name](const wchar_t* cabinetWord) { return name.find(cabinetWord) != wstring::npos; });
+   };
+
+   vector<IEditable*> parts;
+   for (IEditable* part : table->GetParts())
+      if (part->GetItemType() != ItemTypeEnum::eItemPartGroup && isRoomGroup(part))
+         parts.push_back(part);
+   for (int i = 0; i < table->m_vcollection.size(); i++)
+      if (isRoomCollection(table->m_vcollection[i].m_wzName))
+         for (IEditable* part : table->m_vcollection[i].GetParts())
+            if (part->GetItemType() != ItemTypeEnum::eItemPartGroup && std::ranges::find(parts, part) == parts.end())
+               parts.push_back(part);
+   return parts;
 }
 
 std::optional<bool> VPApp::GetPartVisible(IEditable* part)
@@ -393,8 +414,8 @@ int VPApp::UseTableRoomInLobby(PinTable* table)
 {
    // The parts visible now, as the table options (or its script) select which parts of the room are shown
    vector<string> parts;
-   for (IEditable* part : table->GetParts())
-      if (IsRoomPart(part) && GetPartVisible(part).value_or(true))
+   for (IEditable* part : GetRoomParts(table))
+      if (GetPartVisible(part).value_or(true))
          parts.push_back(part->GetName());
    if (parts.empty())
       return 0;

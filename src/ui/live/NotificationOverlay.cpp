@@ -23,30 +23,37 @@ unsigned int NotificationOverlay::PushNotification(const string &message, const 
    }
 }
 
-void NotificationOverlay::Update(bool showNotification, ImFont * font)
+void NotificationOverlay::Update(bool showNotification, ImFont * font, float aboveY)
 {
    const uint32_t tick = msec();
    const auto& io = ImGui::GetIO();
-   float notifY = io.DisplaySize.y * 0.25f;
+   float notifY = aboveY > 0.f ? aboveY : io.DisplaySize.y * 0.25f;
    ImGui::PushFont(font, font->LegacySize);
    for (int i = static_cast<int>(m_notifications.size()) - 1; i >= 0; i--)
    {
       if (tick > m_notifications[i].disappearTick)
          m_notifications.erase(m_notifications.begin() + i);
+      else if (showNotification && aboveY > 0.f)
+      {
+         // Newest closest to the anchor, like the newest is first when stacked downwards
+         vector<string> lines;
+         notifY -= 10.f + LayoutNotification(i, lines).y;
+         RenderNotification(i, notifY);
+      }
       else if (showNotification)
          notifY += 10.f + RenderNotification(i, notifY);
    }
    ImGui::PopFont();
 }
 
-float NotificationOverlay::RenderNotification(int index, float posY) const {
+ImVec2 NotificationOverlay::LayoutNotification(int index, vector<string>& lines) const
+{
    ImFont *const font = ImGui::GetFont();
    const ImFontBaked *const fontBaked = ImGui::GetFontBaked();
 
    constexpr float padding = 50.f;
    const float maxWidth = ImGui::GetIO().DisplaySize.x - padding;
 
-   vector<string> lines;
    ImVec2 text_size(0, 0);
 
    string line;
@@ -85,6 +92,15 @@ float NotificationOverlay::RenderNotification(int index, float posY) const {
    }
    text_size.x += padding / 2.f;
    text_size.y = ((float)lines.size() * ImGui::GetTextLineHeightWithSpacing()) + padding / 2.f;
+   return text_size;
+}
+
+float NotificationOverlay::RenderNotification(int index, float posY) const
+{
+   ImFont *const font = ImGui::GetFont();
+   const ImFontBaked *const fontBaked = ImGui::GetFontBaked();
+   vector<string> lines;
+   const ImVec2 text_size = LayoutNotification(index, lines);
 
    constexpr ImGuiWindowFlags window_flags
       = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
