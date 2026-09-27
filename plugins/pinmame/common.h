@@ -38,6 +38,10 @@ PSC_USE_ERROR();
 
 std::filesystem::path find_case_insensitive_directory_path(const std::filesystem::path& searchedFile);
 
+// Files reported by PinMAME as missing or invalid when it last loaded a ROM (one per line), kept to explain a failed start to the player
+void SetRomLoadErrors(const string& errors);
+string TakeRomLoadErrors();
+
 inline string string_to_lower(string str)
 {
    std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });

@@ -110,7 +110,7 @@ void WebServer::EventHandler(struct mg_connection *c, int ev, void *ev_data)
       struct mg_http_message *hm = (struct mg_http_message *) ev_data;
 
       // Everything but the static web page needs a paired browser
-      static constexpr const char* apiRoutes[] = { "/info", "/status", "/files", "/download", "/upload", "/delete", "/folder", "/extract", "/command", "/log-stream", "/rename", "/move" };
+      static constexpr const char* apiRoutes[] = { "/info", "/status", "/files", "/download", "/upload", "/delete", "/folder", "/extract", "/command", "/log-stream", "/rename", "/move", "/missing-roms" };
       const bool isApi = std::any_of(std::begin(apiRoutes), std::end(apiRoutes), [hm](const char* route) { return mg_match(hm->uri, mg_str(route), NULL); });
       if (mg_match(hm->uri, mg_str("/pair"), NULL))
          webServer->Pair(c, hm);
@@ -142,6 +142,8 @@ void WebServer::EventHandler(struct mg_connection *c, int ev, void *ev_data)
          webServer->Rename(c, hm);
       else if (mg_match(hm->uri, mg_str("/move"), NULL))
          webServer->Move(c, hm);
+      else if (mg_match(hm->uri, mg_str("/missing-roms"), NULL))
+         webServer->MissingRoms(c, hm);
       else {
          struct mg_http_serve_opts opts = {};
 
@@ -407,7 +409,8 @@ void WebServer::Pair(struct mg_connection *c, struct mg_http_message* hm)
 
 void WebServer::Info(struct mg_connection *c, struct mg_http_message* hm)
 {
-   json j = {{"version", VP_VERSION_STRING_FULL_LITERAL}};
+   // Archives that can be extracted (and imported as tables when uploaded at the root), which depends on the build
+   json j = {{"version", VP_VERSION_STRING_FULL_LITERAL}, {"extractableExtensions", ZipUtils::GetExtractableExtensions()}};
    string response = j.dump();
    mg_http_reply(c, STATUS_OK, HEADER_JSON, "%s", response.c_str());
 }
@@ -572,6 +575,9 @@ void WebServer::Upload(struct mg_connection *c, struct mg_http_message* hm)
          return;
       }
       std::filesystem::remove(stagingPath, ec); // Only succeeds when no other transfer is pending
+#ifndef __LIBVPINBALL__
+      g_app->GetTableLibrary().OnFileAdded(file); // It may be a missing ROM
+#endif
 #ifdef __LIBVPINBALL__
       if (*q == '\0' && file == "VPinballX.ini") {
          g_app->m_settings.SetIniPath(path);
@@ -581,6 +587,29 @@ void WebServer::Upload(struct mg_connection *c, struct mg_http_message* hm)
 #endif
       SetLastUpdate();
    }
+}
+
+// GET: the ROMs that tables need and could not find (see TableLibrary::AddMissingRom), POST with 'clear': empty the list
+void WebServer::MissingRoms(struct mg_connection *c, struct mg_http_message* hm)
+{
+   json list = json::array();
+#ifndef __LIBVPINBALL__
+   VPinballLib::TableLibrary& library = g_app->GetTableLibrary();
+   if (mg_strcmp(hm->method, mg_str("POST")) == 0) {
+      char clear[8];
+      mg_http_get_var(&hm->query, "clear", clear, sizeof(clear));
+      if (*clear == '\0') {
+         mg_http_reply(c, STATUS_BAD_REQUEST, "", "%s", RESPONSE_BAD_REQUEST);
+         return;
+      }
+      library.ClearMissingRoms();
+      PLOGI.printf("Missing ROM list cleared");
+   }
+   for (const VPinballLib::TableLibrary::MissingRom& missing : library.GetMissingRoms())
+      list.push_back({ { "rom", missing.rom }, { "folder", missing.folder }, { "files", missing.files }, { "table", missing.table }, { "reportedAt", missing.reportedAt } });
+#endif
+   const string response = json { { "missingRoms", list } }.dump();
+   mg_http_reply(c, STATUS_OK, HEADER_JSON, "%s", response.c_str());
 }
 
 void WebServer::Delete(struct mg_connection *c, struct mg_http_message* hm)
@@ -738,10 +767,9 @@ void WebServer::Extract(struct mg_connection *c, struct mg_http_message* hm)
    const std::filesystem::path filePath(path);
    std::error_code ec;
    if (std::filesystem::is_regular_file(filePath, ec)) {
-      const string ext = extension_from_path(q);
-      if (ext == "zip" || ext == "vpxz") {
-         if (ZipUtils::Unzip(filePath, filePath.parent_path(), nullptr)) {
-            PLOGI.printf("File unzipped: q=%s", q);
+      if (ZipUtils::IsExtractable(filePath)) {
+         if (ZipUtils::Extract(filePath, filePath.parent_path(), nullptr)) {
+            PLOGI.printf("File extracted: q=%s", q);
             SetLastUpdate();
             mg_http_reply(c, STATUS_OK, "", RESPONSE_OK);
          }

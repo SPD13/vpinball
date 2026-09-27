@@ -30,8 +30,6 @@ string ToLower(string value)
 
 bool HasExtension(const fs::path& path, const char* ext) { return ToLower(path.extension().string()) == ext; }
 
-bool IsArchive(const fs::path& path) { return HasExtension(path, ".vpxz") || HasExtension(path, ".zip"); }
-
 // Dot files cover our scratch folder, partial downloads and the '._xxx.vpx' resource forks found in zips made on macOS
 bool IsHidden(const fs::path& path)
 {
@@ -117,6 +115,11 @@ bool TableLibrary::IsExcluded(const fs::path& fullPath) const
 {
    const fs::path normalized = fullPath.lexically_normal();
    return std::any_of(m_config.excludedPaths.begin(), m_config.excludedPaths.end(), [&](const fs::path& excluded) { return excluded.lexically_normal() == normalized; });
+}
+
+bool TableLibrary::IsArchive(const fs::path& path) const
+{
+   return std::any_of(m_config.archiveExtensions.begin(), m_config.archiveExtensions.end(), [&path](const string& ext) { return HasExtension(path, ext.c_str()); });
 }
 
 std::vector<fs::path> TableLibrary::ListTableFiles(const fs::path& folder, int settleSeconds) const
@@ -389,7 +392,7 @@ void TableLibrary::Rescan(const ProgressCallback& onProgress, int settleSeconds)
          table.modifiedAt = std::max(table.modifiedAt, FileModifiedAt(BuildPath(table.image)).value_or(0));
    }
 
-   // Only bundles at the root of the tables folder are imported: deeper .zip files belong to the tables (PinMAME ROMs must stay zipped)
+   // Only bundles at the root of the tables folder are imported: deeper archives belong to the tables (PinMAME ROMs must stay zipped)
    progress(50, "Importing bundles...");
    std::vector<fs::path> archives;
    for (auto it = fs::directory_iterator(m_config.tablesPath, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
@@ -792,6 +795,101 @@ std::optional<fs::path> TableLibrary::Export(const string& uuid, const fs::path&
    if (onProgress)
       onProgress(100, "Complete");
    return destPath;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// missing-roms.json: {"missingRoms":[{rom,folder,files:[...],table,reportedAt}]}
+
+fs::path TableLibrary::GetMissingRomsPath() const { return m_config.jsonPath.parent_path() / "missing-roms.json"; }
+
+std::vector<TableLibrary::MissingRom> TableLibrary::LoadMissingRoms() const
+{
+   std::vector<MissingRom> missingRoms;
+   std::ifstream file(GetMissingRomsPath());
+   if (!file.is_open())
+      return missingRoms;
+   try {
+      const nlohmann::json json = nlohmann::json::parse(file);
+      for (const auto& entry : json.at("missingRoms")) {
+         MissingRom missing;
+         missing.rom = entry.value("rom", ""s);
+         missing.folder = entry.value("folder", ""s);
+         missing.files = entry.value("files", std::vector<string>());
+         missing.table = entry.value("table", ""s);
+         missing.reportedAt = entry.value("reportedAt", int64_t(0));
+         if (!missing.rom.empty())
+            missingRoms.push_back(missing);
+      }
+   }
+   catch (const std::exception& e) {
+      Log(LogLevel::Error, "Failed to parse missing-roms.json: "s + e.what());
+   }
+   return missingRoms;
+}
+
+void TableLibrary::SaveMissingRoms(const std::vector<MissingRom>& missingRoms) const
+{
+   std::error_code ec;
+   if (missingRoms.empty()) {
+      fs::remove(GetMissingRomsPath(), ec);
+      return;
+   }
+   nlohmann::ordered_json list = nlohmann::ordered_json::array();
+   for (const MissingRom& missing : missingRoms)
+      list.push_back({ { "rom", missing.rom }, { "folder", missing.folder }, { "files", missing.files }, { "table", missing.table }, { "reportedAt", missing.reportedAt } });
+   std::ofstream file(GetMissingRomsPath(), std::ios::trunc);
+   file << nlohmann::ordered_json { { "missingRoms", list } }.dump(2);
+   if (!file.good())
+      Log(LogLevel::Error, "Failed to save missing-roms.json");
+}
+
+void TableLibrary::AddMissingRom(const string& rom, const fs::path& folder, const std::vector<string>& files, const string& table)
+{
+   std::lock_guard lock(m_missingRomsMutex);
+   std::vector<MissingRom> missingRoms = LoadMissingRoms();
+   // A new report of the same ROM for the same table replaces the previous one, as the missing files may have changed (tables sharing a ROM each have an entry)
+   std::erase_if(missingRoms, [&rom, &table](const MissingRom& missing) { return ToLower(missing.rom) == ToLower(rom) && missing.table == table; });
+   MissingRom missing;
+   missing.rom = rom;
+   missing.folder = IsInsideTables(folder) ? RelativePath(folder) : folder.string();
+   missing.files = files;
+   missing.table = table;
+   missing.reportedAt = Now();
+   missingRoms.push_back(missing);
+   SaveMissingRoms(missingRoms);
+   Log(LogLevel::Info, "Missing ROM recorded: " + rom);
+}
+
+std::vector<TableLibrary::MissingRom> TableLibrary::GetMissingRoms() const
+{
+   std::lock_guard lock(m_missingRomsMutex);
+   return LoadMissingRoms();
+}
+
+void TableLibrary::ClearMissingRoms()
+{
+   std::lock_guard lock(m_missingRomsMutex);
+   SaveMissingRoms({});
+}
+
+void TableLibrary::OnFileAdded(const string& fileName)
+{
+   std::lock_guard lock(m_missingRomsMutex);
+   std::vector<MissingRom> missingRoms = LoadMissingRoms();
+   const string name = ToLower(fs::path(fileName).filename().string());
+   // Remove the ROMs which were uploaded, the uploaded files from the ROMs which miss them, and the ROMs which no longer miss any file
+   bool changed = false;
+   std::erase_if(missingRoms, [&name, &changed](MissingRom& missing) {
+      if (ToLower(missing.rom) == name)
+         return changed = true;
+      if (std::erase_if(missing.files, [&name](const string& file) { return ToLower(file) == name; }) == 0)
+         return false;
+      changed = true;
+      return missing.files.empty();
+   });
+   if (changed)
+      SaveMissingRoms(missingRoms);
 }
 
 }

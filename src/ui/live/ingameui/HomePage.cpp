@@ -47,6 +47,15 @@ void HomePage::BuildPage()
    if (m_player->CanReplaceTableImage())
       AddItem(std::make_unique<InGameUIItem>("Replace table image"s, "Use the current view as the image of this table in the table picker"s,
          [this]() { m_player->ReplaceTableImage(); }));
+
+   // The room of this table as the room of the lobby, from the table picker
+   if (g_app->m_launcherMode && !m_player->m_isLobby && std::ranges::any_of(m_player->m_ptable->GetParts(), VPApp::IsRoomPart))
+      AddItem(std::make_unique<InGameUIItem>("Use this VR room in the lobby"s, "The table picker will be shown in the room of this table, as it is now"s,
+         [this]()
+         {
+            const int nParts = g_app->UseTableRoomInLobby(m_player->m_ptable);
+            m_player->m_liveUI->PushNotification(nParts > 0 ? "The lobby will use the room of this table"s : "This table has no visible VR room"s, 4000);
+         }));
 #endif
 
    if (m_player->m_ptable->TournamentModePossible())

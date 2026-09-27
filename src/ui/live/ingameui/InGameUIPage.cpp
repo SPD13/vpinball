@@ -692,6 +692,10 @@ void InGameUIPage::Render(float elapsedS)
             ImGui::Text("%s", item->m_label.c_str());
             ImGui::SetCursorScreenPos(ImGui::GetCursorScreenPos() + ImVec2(0.f, itemPadding.y));
             break;
+         case InGameUIItem::LabelType::Error:
+            ImGui::TextColored(ImVec4(1.f, 0.25f, 0.25f, 1.f), "%s", item->m_label.c_str());
+            ImGui::SetCursorScreenPos(ImGui::GetCursorScreenPos() + ImVec2(0.f, itemPadding.y));
+            break;
          case InGameUIItem::LabelType::Header:
          {
             ImGui::Text("%s", item->m_label.c_str());

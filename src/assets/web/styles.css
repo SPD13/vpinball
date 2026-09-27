@@ -289,6 +289,65 @@ body {
   color: var(--text-secondary);
 }
 
+/* ROMs that tables could not find, shown in the pinmame/roms folders */
+.missing-roms {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--danger-color);
+  border-radius: var(--radius);
+  background: var(--card-background);
+}
+
+.missing-roms[hidden] {
+  display: none;
+}
+
+.missing-roms-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.missing-roms-title {
+  font-weight: 600;
+  color: var(--danger-color);
+}
+
+.missing-roms-hint {
+  margin: 0.25rem 0 0.5rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.missing-roms-list {
+  list-style: none;
+  color: var(--danger-color);
+  font-size: 0.875rem;
+}
+
+.missing-roms-table {
+  padding: 0.25rem 0;
+}
+
+.missing-roms-table-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.missing-roms-table ul {
+  list-style: none;
+  padding-left: 1rem;
+}
+
+.missing-roms-table ul li {
+  padding: 0.125rem 0;
+}
+
+.missing-rom-name {
+  font-weight: 600;
+}
+
 .search-container {
   position: relative;
 }

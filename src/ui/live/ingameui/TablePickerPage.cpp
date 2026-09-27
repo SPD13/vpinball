@@ -430,6 +430,30 @@ void TablePickerPage::BuildPage()
    if (g_app->IsSharedPinMAMEFolderUsed())
       AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Info, "ROMs (zipped): 'pinmame/roms' in the tables folder, or in a table's folder"s));
 
+   // The lobby may use the room of a table, chosen from the menu of that table while it is played
+   if (g_app->m_launcherMode)
+   {
+      if (const std::optional<VPApp::LobbyRoom> room = g_app->GetLobbyRoom(); room)
+      {
+         AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Info, "Lobby room: the room of " + room->tableName));
+         AddItem(std::make_unique<InGameUIItem>("Use the default lobby room"s, "Show the table picker in the default room again"s,
+            [this]()
+            {
+               g_app->ResetLobbyRoom();
+               if (m_player->m_isLobby)
+               {
+                  // Load the lobby again, with the default room
+                  g_app->m_reloadLobby = true;
+                  m_player->SetCloseState(Player::CS_CLOSE_APP);
+               }
+               else
+                  RequestRebuild();
+            }));
+      }
+      else
+         AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Info, "Lobby room: default (the room of a table can be used, from the menu of that table)"s));
+   }
+
    // In launcher mode, this page is the front door of the application: give access to the rest of the menu from it
    if (g_app->m_launcherMode)
       AddItem(std::make_unique<InGameUIItem>("Settings"s, "Controls, VR, graphics, sound and the other settings"s, "homepage"s));

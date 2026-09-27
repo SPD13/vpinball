@@ -42,6 +42,7 @@ private:
    void Delete(struct mg_connection *c, struct mg_http_message* hm);
    void Rename(struct mg_connection *c, struct mg_http_message* hm);
    void Move(struct mg_connection *c, struct mg_http_message* hm);
+   void MissingRoms(struct mg_connection *c, struct mg_http_message* hm);
    void Folder(struct mg_connection *c, struct mg_http_message* hm);
    void Extract(struct mg_connection *c, struct mg_http_message* hm);
    void Command(struct mg_connection *c, struct mg_http_message* hm);

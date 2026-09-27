@@ -169,8 +169,9 @@ static Primitive* CreateQuad(PinTable* table, const wstring& name, float left, f
 
 // The lobby is what is displayed behind the table picker of the launcher mode: an empty room with a floor. A table file can only be
 // authored with the Windows editor, so for the time being the lobby is made from the blank table shipped with the application, by
-// removing everything it contains (parts, script, playfield) and adding a floor.
-static void BuildLobby(PinTable* table)
+// removing everything it contains (parts, script, playfield) and adding a floor. The room of a table can be used instead (see
+// VPApp::GetLobbyRoom): then the lobby is made from that table, keeping only the parts of its room.
+static void BuildLobby(PinTable* table, const VPApp::LobbyRoom* room)
 {
    // Displayed by the home page of the in-game menu
    table->m_tableName = "Visual Pinball"s;
@@ -184,13 +185,31 @@ static void BuildLobby(PinTable* table)
    table->m_script_text = table->m_original_table_script;
    for (int i = 0; i < table->m_vcollection.size(); i++)
       table->m_vcollection[i].ClearParts();
-   // Parts hold a reference on their group, so groups go last
-   for (const bool removeGroups : { false, true })
+   if (room)
    {
+      // Only the parts of the room which were visible when it was chosen (the script which selects them is gone), along with the part groups
+      // which place them in the room
       const vector<IEditable*> parts = table->GetParts();
       for (IEditable* part : parts)
-         if ((part->GetItemType() == ItemTypeEnum::eItemPartGroup) == removeGroups)
+      {
+         if (part->GetItemType() == ItemTypeEnum::eItemPartGroup)
+            continue;
+         if (std::ranges::find(room->parts, part->GetName()) != room->parts.end())
+            VPApp::SetPartVisible(part, true);
+         else
             table->RemovePart(part);
+      }
+   }
+   else
+   {
+      // Parts hold a reference on their group, so groups go last
+      for (const bool removeGroups : { false, true })
+      {
+         const vector<IEditable*> parts = table->GetParts();
+         for (IEditable* part : parts)
+            if ((part->GetItemType() == ItemTypeEnum::eItemPartGroup) == removeGroups)
+               table->RemovePart(part);
+      }
    }
 
    // Outside of VR, look at the room like someone standing in front of a table. The legacy layout of the base table can not be used,
@@ -208,11 +227,18 @@ static void BuildLobby(PinTable* table)
    table->AddPart(playfield);
    playfield->Release();
 
+   // The room of a table has its own floor
+   if (room)
+   {
+      table->Undo(true);
+      return;
+   }
+
    // The floor lies in the room space, which in VR is the real world: z = 0 is the ground, without the playfield inclination
-   PartGroup* room = static_cast<PartGroup*>(EditableRegistry::CreateAndInit(ItemTypeEnum::eItemPartGroup, table, 0, 0));
-   room->SetName(L"LobbyRoom"s);
-   room->m_d.m_spaceReference = PartGroupData::SpaceReference::SR_ROOM;
-   table->AddPart(room);
+   PartGroup* floorGroup = static_cast<PartGroup*>(EditableRegistry::CreateAndInit(ItemTypeEnum::eItemPartGroup, table, 0, 0));
+   floorGroup->SetName(L"LobbyRoom"s);
+   floorGroup->m_d.m_spaceReference = PartGroupData::SpaceReference::SR_ROOM;
+   table->AddPart(floorGroup);
 
    // Two shades, as a uniform floor gives no sense of distance
    Material* floorMaterials[2];
@@ -240,12 +266,12 @@ static void BuildLobby(PinTable* table)
          tile->m_d.m_szMaterial = floorMaterials[(x + y) & 1]->m_name;
          tile->m_d.m_staticRendering = true;
          tile->m_d.m_disableLightingBelow = 1.f;
-         tile->SetPartGroup(room);
+         tile->SetPartGroup(floorGroup);
          table->AddPart(tile);
          tile->Release();
       }
    }
-   room->Release();
+   floorGroup->Release();
    table->Undo(true);
 }
 #endif
@@ -258,9 +284,15 @@ void PlayTableCommand::Play(bool openTablePicker)
    CComObject<PinTable>* table = LoadTable();
 #ifdef __STANDALONE__
    if (openTablePicker)
-      BuildLobby(table);
+   {
+      // The room of a table, if the lobby was loaded from that table (see LauncherCommand)
+      const std::optional<VPApp::LobbyRoom> room = g_app->GetLobbyRoom();
+      BuildLobby(table, (room && room->tablePath == m_tableFilename) ? &*room : nullptr);
+   }
    else
       g_app->GetTableLibrary().RecordPlay(m_tableFilename); // For the 'Recent' and 'Most played' lists of the table picker
+   // The lobby may be loaded from a table of the library: it must not be taken for that table (image, texture cache)
+   g_app->m_playingLobby = openTablePicker;
 #endif
    auto player = std::make_unique<Player>(table, Player::PlayMode::Play);
 #ifdef __STANDALONE__
@@ -269,6 +301,9 @@ void PlayTableCommand::Play(bool openTablePicker)
 #endif
    player->GameLoop();
    player = nullptr;
+#ifdef __STANDALONE__
+   g_app->m_playingLobby = false;
+#endif
    table->Release();
 }
 
@@ -304,10 +339,16 @@ void LauncherCommand::Execute()
    g_app->m_launcherMode = true;
    while (g_app->m_launcherMode)
    {
-      PlayTableCommand lobby(g_app->GetLobbyTablePath());
+      // The room of a table replaces the default lobby room while that table is available
+      const std::optional<VPApp::LobbyRoom> room = g_app->GetLobbyRoom();
+      PlayTableCommand lobby(room ? room->tablePath : g_app->GetLobbyTablePath());
       lobby.Play(true);
       if (g_app->m_nextTableFilename.empty())
+      {
+         if (std::exchange(g_app->m_reloadLobby, false))
+            continue;
          break;
+      }
       PlaySelectedTables();
    }
 }

@@ -261,6 +261,9 @@ function fetchInfo() {
     .then(response => response.json())
     .then(data => {
       _infoData = data;
+      // RAR and 7z archives are only supported by some builds
+      if (Array.isArray(data.extractableExtensions))
+        FileTypeHelper.EXTRACTABLE_EXTENSIONS = new Set(data.extractableExtensions);
       updateStatusDisplay();
       return data;
     })
@@ -385,6 +388,73 @@ function updateStatusDisplay() {
   }
 }
 
+// ROMs that tables could not find when they were played, recorded by the application. They are only shown in the PinMAME ROM folders
+// ('pinmame/roms', shared or along a table), where they must be uploaded, and the application removes them from the list when a file with
+// their name is uploaded.
+function isRomsFolder(directory) {
+  const parts = (directory || '').toLowerCase().split('/').filter(part => part);
+  return parts.length >= 2 && parts[parts.length - 2] === 'pinmame' && parts[parts.length - 1] === 'roms';
+}
+
+function renderMissingRoms(missingRoms) {
+  const list = DOMCache.get('missing-roms-list');
+  list.innerHTML = '';
+  // Grouped by table, so that the user knows which table each ROM is for
+  const tables = new Map();
+  for (const missing of missingRoms) {
+    const table = missing.table || 'Unknown table';
+    if (!tables.has(table))
+      tables.set(table, []);
+    tables.get(table).push(missing);
+  }
+  for (const [table, roms] of [...tables].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const group = document.createElement('li');
+    group.className = 'missing-roms-table';
+    const title = document.createElement('div');
+    title.className = 'missing-roms-table-name';
+    title.textContent = table;
+    group.appendChild(title);
+    const romList = document.createElement('ul');
+    for (const missing of roms) {
+      const item = document.createElement('li');
+      const name = document.createElement('span');
+      name.className = 'missing-rom-name';
+      name.textContent = missing.rom;
+      item.appendChild(name);
+      let details = '';
+      if (missing.files && missing.files.length)
+        details += ` (missing: ${missing.files.join(', ')})`;
+      if (missing.folder)
+        details += `: upload to ${missing.folder}`;
+      item.appendChild(document.createTextNode(details));
+      romList.appendChild(item);
+    }
+    group.appendChild(romList);
+    list.appendChild(group);
+  }
+  DOMCache.get('missing-roms').hidden = missingRoms.length === 0 || !isRomsFolder(_directory);
+}
+
+function updateMissingRoms(directory) {
+  if (!isRomsFolder(directory)) {
+    DOMCache.get('missing-roms').hidden = true;
+    return;
+  }
+  fetch('missing-roms')
+    .then((response) => response.json())
+    .then((data) => renderMissingRoms(data.missingRoms || []))
+    .catch((error) => console.error('Error fetching missing ROMs:', error));
+}
+
+function clearMissingRoms() {
+  if (!confirm('Clear the list of missing ROMs?'))
+    return;
+  fetch('missing-roms?clear=1', { method: 'POST' })
+    .then((response) => response.json())
+    .then((data) => renderMissingRoms(data.missingRoms || []))
+    .catch((error) => console.error('Error clearing missing ROMs:', error));
+}
+
 function fetchFiles(directory) {
   const filesPromise = fetch(`files?q=${encodeURIComponent(directory)}`)
     .then((response) => response.json());
@@ -393,6 +463,7 @@ function fetchFiles(directory) {
     .then((data) => {
       _directory = directory;
       _data = data;
+      updateMissingRoms(directory);
 
       sortFiles(_lastSort);
       updateSortIndicators();
@@ -632,7 +703,7 @@ const FileTypeHelper = {
     const iconMap = {
       txt: SVG_ICONS.file, log: SVG_ICONS.file, ini: SVG_ICONS.settings,
       json: SVG_ICONS.code, xml: SVG_ICONS.code, vbs: SVG_ICONS.code,
-      html: SVG_ICONS.web, zip: SVG_ICONS.zip, fnt: SVG_ICONS.font,
+      html: SVG_ICONS.web, zip: SVG_ICONS.zip, rar: SVG_ICONS.zip, '7z': SVG_ICONS.zip, fnt: SVG_ICONS.font,
       scv: SVG_ICONS.settings, pup: SVG_ICONS.settings,
       mp4: SVG_ICONS.video, webm: SVG_ICONS.video, ogg: SVG_ICONS.video,
       mp3: SVG_ICONS.audio, wav: SVG_ICONS.audio, m4a: SVG_ICONS.audio
