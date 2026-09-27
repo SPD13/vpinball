@@ -1883,21 +1883,29 @@ void Player::CaptureTableImageBeforeClosing()
 {
    if (m_tableImageCaptureStarted)
       return;
-   m_tableImageCaptureStarted = true;
 
-   const std::filesystem::path relativePath = m_ptable->m_filename.lexically_normal().lexically_relative(g_app->GetTableLibrary().GetTablesPath().lexically_normal());
    std::filesystem::path imagePath = m_ptable->m_filename;
    imagePath.replace_extension(".jpg");
    std::filesystem::path pngPath = m_ptable->m_filename;
    pngPath.replace_extension(".png");
-   if (relativePath.empty() || *relativePath.begin() == ".." || FileExists(imagePath) || FileExists(pngPath))
+   if (!CanReplaceTableImage() || FileExists(imagePath) || FileExists(pngPath))
    {
+      m_tableImageCaptureStarted = true;
       SetCloseState(CS_CLOSE_APP);
       return;
    }
 
-   m_liveUI->HideUI();
-   m_renderer->m_renderDevice->CaptureScreenshot({ m_playfieldWnd }, { imagePath },
+   // The in-game menu slides out when closed: wait for it to be gone, so that it is not captured
+   if (!m_tableImageMenuHidden)
+   {
+      m_liveUI->HideUI();
+      m_tableImageMenuHidden = true;
+   }
+   if (!IsInGameUIClosed())
+      return;
+
+   m_tableImageCaptureStarted = true;
+   CaptureTableImage(imagePath,
       [this, imagePath](bool success)
       {
          if (success)
@@ -1906,6 +1914,70 @@ void Player::CaptureTableImageBeforeClosing()
             PLOGE << "Failed to save table image: " << imagePath;
          SetCloseState(CS_CLOSE_APP);
       });
+}
+
+bool Player::IsInGameUIClosed() const
+{
+   const VPX::InGameUI::InGameUIPage* const page = m_liveUI->m_inGameUI.GetActivePage();
+   return page == nullptr || page->IsClosed();
+}
+
+// In VR, the view follows the head of the player, which may not face the table: the image is then taken from above the playfield
+void Player::CaptureTableImage(const std::filesystem::path& imagePath, const std::function<void(bool)>& onCaptured)
+{
+   #ifdef ENABLE_XR
+   if (m_vrDevice)
+      m_vrDevice->SetTableTopView(true);
+   #endif
+   m_renderer->m_renderDevice->CaptureScreenshot({ m_playfieldWnd }, { imagePath },
+      [this, onCaptured](bool success)
+      {
+         #ifdef ENABLE_XR
+         if (m_vrDevice)
+            m_vrDevice->SetTableTopView(false);
+         #endif
+         onCaptured(success);
+      },
+      3); // The views are moved above the table from the next frame on
+}
+
+bool Player::CanReplaceTableImage() const
+{
+   // Only the tables of the table library have an image (not the lobby, which is an application asset, nor tables played from elsewhere)
+   const std::filesystem::path relativePath = m_ptable->m_filename.lexically_normal().lexically_relative(g_app->GetTableLibrary().GetTablesPath().lexically_normal());
+   return !relativePath.empty() && *relativePath.begin() != "..";
+}
+
+void Player::ReplaceTableImage()
+{
+   if (!CanReplaceTableImage())
+      return;
+   // The table picker uses <table>.png first, then <table>.jpg: replace the one in use (the picker notices the new modification date)
+   std::filesystem::path imagePath = m_ptable->m_filename;
+   imagePath.replace_extension(".png");
+   if (!FileExists(imagePath))
+      imagePath.replace_extension(".jpg");
+   m_liveUI->HideUI();
+   m_tableImageReplacePath = imagePath; // Captured by the game loop once the in-game menu is gone
+}
+
+void Player::UpdateTableImageReplacement()
+{
+   if (!m_tableImageReplacePath.empty() && IsInGameUIClosed())
+   {
+      const std::filesystem::path imagePath = std::exchange(m_tableImageReplacePath, std::filesystem::path());
+      CaptureTableImage(imagePath,
+         [this, imagePath](bool success)
+         {
+            if (success)
+               PLOGI << "Table image replaced: " << imagePath;
+            else
+               PLOGE << "Failed to replace table image: " << imagePath;
+            m_tableImageReplaced = success ? 1 : 2; // Called on the render thread: the notification is pushed by the game loop
+         });
+   }
+   if (const int replaced = m_tableImageReplaced.exchange(0); replaced != 0)
+      m_liveUI->PushNotification(replaced == 1 ? "Table image replaced"s : "Failed to replace the table image"s, 3000);
 }
 #endif
 
@@ -1919,6 +1991,7 @@ bool Player::CallbackSteppedGameLoop()
    #if defined(__STANDALONE__) && !defined(__LIBVPINBALL__)
    if (GetCloseState() == CS_CLOSE_CAPTURE_SCREENSHOT)
       CaptureTableImageBeforeClosing();
+   UpdateTableImageReplacement();
    #endif
 
    // Continuously process input, synchronize with emulation and step physics to keep latency low

@@ -189,7 +189,7 @@ VRDevice::VRDevice(const Settings& settings)
       };
       // VRDevice is created before bgfx initialization (since it creates the graphic context expected by OpenXR), so bgfx::getRendererType() is not defined at this point.
       // Renderer is determined at compile time based on platform: D3D11 for Windows, Vulkan for Android.
-      #if BX_PLATFORM_WINDOWS
+      #if BX_PLATFORM_WINDOWS && !defined(__STANDALONE__)
          const string gfxBackend = g_pplayer->m_ptable->m_settings.GetPlayer_GfxBackend();
          if (gfxBackend == "Vulkan"sv)
          #ifdef _DEBUG
@@ -204,7 +204,7 @@ VRDevice::VRDevice(const Settings& settings)
             m_rendererType = bgfx::RendererType::Enum::Direct3D12;
          else
             m_rendererType = bgfx::RendererType::Enum::Direct3D11; // Default to Direct3D 11
-      #elif BX_PLATFORM_ANDROID || BX_PLATFORM_LINUX
+      #elif BX_PLATFORM_ANDROID || BX_PLATFORM_LINUX || BX_PLATFORM_WINDOWS // Standalone Windows build included, to render like the headsets
          m_rendererType = bgfx::RendererType::Enum::Vulkan;
       #else
          #error "Unsupported platform for OpenXR"
@@ -572,8 +572,9 @@ void VRDevice::SetupHMD()
    }
 
    // Limit to a resolution, under the maximum texture size supported by the GPU
+   // This is called before BGFX is initialized (the graphics backend is created below, then given to BGFX), and the caps are all zero until then
    const bgfx::Caps* caps = bgfx::getCaps();
-   if ((static_cast<uint32_t>(m_eyeWidth) >= caps->limits.maxTextureSize) || (static_cast<uint32_t>(m_eyeHeight) >= caps->limits.maxTextureSize))
+   if (caps->limits.maxTextureSize != 0 && ((static_cast<uint32_t>(m_eyeWidth) >= caps->limits.maxTextureSize) || (static_cast<uint32_t>(m_eyeHeight) >= caps->limits.maxTextureSize)))
    {
       PLOGI << "Requested resolution exceed the GPU capability, defaulting to headset recommended resolution";
       m_eyeWidth = std::min(m_viewConfigurationViews[0].recommendedImageRectWidth, caps->limits.maxTextureSize);
@@ -592,7 +593,7 @@ void VRDevice::SetupHMD()
       m_backend = std::make_unique<XRVulkanBackend>(m_xrInstance, m_systemID);
    }
    #endif
-   #if BX_PLATFORM_WINDOWS
+   #if BX_PLATFORM_WINDOWS && !defined(__STANDALONE__)
    if (m_rendererType == bgfx::RendererType::Direct3D11)
    {
       PLOGI << "Creating DX11 backend for OpenXR (before BGFX initialization)";
@@ -789,16 +790,14 @@ void VRDevice::CreateSession()
    g_pplayer->m_pininput.AddInputHandler(std::move(inputHandler));
 }
 
-// The UI is locked to the head (drawn in screen space for each eye), so pointing at it means finding where the point aimed by the
-// controller, a little further than the UI's apparent distance, lands in the eye viewports. Both eyes are averaged, as the UI is
-// shifted symmetrically between the eyes to give it some depth.
-void VRDevice::UpdateUIPointer(const std::vector<XrView>& views, XrTime time)
+// The UI is displayed on a vertical panel standing in the room (the reference space, in meters), placed in front of the head when it
+// is first displayed. Pointing at it is intersecting the aim ray of a controller with that panel.
+void VRDevice::UpdateUIPanel(const std::vector<XrView>& views, XrTime time)
 {
    m_uiPointerValid = false;
-   if (views.size() < 2 || m_xrInputHandler == nullptr)
+   if (views.size() < 2)
       return;
 
-   constexpr float pointedDistance = 2.f; // meters
    const auto rotate = [](const XrQuaternionf& q, const vec3& v)
    {
       const vec3 u(q.x, q.y, q.z);
@@ -806,8 +805,45 @@ void VRDevice::UpdateUIPointer(const std::vector<XrView>& views, XrTime time)
       return v + t * q.w + CrossProduct(u, t);
    };
 
+   const vec3 head = (vec3(views[0].pose.position.x, views[0].pose.position.y, views[0].pose.position.z) + vec3(views[1].pose.position.x, views[1].pose.position.y, views[1].pose.position.z)) * 0.5f;
+   m_uiHeadPos = head;
+   if (!m_uiPanelPlaced)
+   {
+      // The panel covers the whole UI display area, most of it being transparent. 2.8m wide at 1m gives about 109 degrees, so that
+      // the UI windows, laid out for the full field of view of the headset, stay readable without filling it
+      constexpr float distance = 1.0f, width = 2.8f, belowEyes = 0.1f; // meters
+      const float height = width * static_cast<float>(m_eyeHeight) / static_cast<float>(m_eyeWidth);
+      vec3 forward = rotate(views[0].pose.orientation, vec3(0.f, 0.f, -1.f));
+      forward.y = 0.f; // Upright panel, facing the head horizontally
+      if (forward.LengthSquared() < 1e-4f)
+         forward = vec3(0.f, 0.f, -1.f);
+      forward.Normalize();
+      const vec3 up(0.f, 1.f, 0.f);
+      const vec3 right = CrossProduct(forward, up);
+      const vec3 center = head + forward * distance - up * belowEyes;
+      m_uiPanelRight = right * width;
+      m_uiPanelDown = up * -height;
+      m_uiPanelOrigin = center - m_uiPanelRight * 0.5f - m_uiPanelDown * 0.5f;
+      m_uiPanelPlaced = true;
+   }
+
+   // Depth is not used (the shader outputs a constant depth, the UI being drawn over the scene), so near and far planes do not matter
+   for (int eye = 0; eye < 2; eye++)
+   {
+      Matrix3D view, proj;
+      XrPosef_ToMatrix3D(&view, &views[eye].pose);
+      proj.SetPerspectiveFovRH(views[eye].fov.angleLeft, views[eye].fov.angleRight, views[eye].fov.angleDown, views[eye].fov.angleUp, 0.05f, 100.f);
+      m_uiPanelViewProj[eye] = view * proj;
+   }
+
+   if (m_xrInputHandler == nullptr)
+      return;
+
    // Right hand first, left hand if the right one is not tracked or does not point at the UI
-   for (const auto& [space, trigger] : { std::pair<XrSpace, const char*> { m_rightAimSpace, "/user/hand/right/input/trigger/value" }, { m_leftAimSpace, "/user/hand/left/input/trigger/value" } })
+   const vec3 normal = CrossProduct(m_uiPanelRight, m_uiPanelDown);
+   struct Hand { XrSpace space; const char* trigger; const char* thumbstickY; };
+   for (const auto& [space, trigger, thumbstickY] : { Hand { m_rightAimSpace, "/user/hand/right/input/trigger/value", "/user/hand/right/input/thumbstick/y" },
+                                                      Hand { m_leftAimSpace, "/user/hand/left/input/trigger/value", "/user/hand/left/input/thumbstick/y" } })
    {
       XrSpaceLocation location { XR_TYPE_SPACE_LOCATION };
       if (space == XR_NULL_HANDLE || xrLocateSpace(space, m_referenceSpace, time, &location) != XR_SUCCESS)
@@ -815,36 +851,127 @@ void VRDevice::UpdateUIPointer(const std::vector<XrView>& views, XrTime time)
       if ((location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) == 0 || (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) == 0)
          continue;
       const vec3 origin(location.pose.position.x, location.pose.position.y, location.pose.position.z);
-      const vec3 pointed = origin + rotate(location.pose.orientation, vec3(0.f, 0.f, -1.f)) * pointedDistance;
-
-      float x = 0.f, y = 0.f;
-      bool inFront = true;
-      for (int eye = 0; eye < 2; eye++)
-      {
-         const XrView& view = views[eye];
-         const XrQuaternionf invOrientation { -view.pose.orientation.x, -view.pose.orientation.y, -view.pose.orientation.z, view.pose.orientation.w };
-         const vec3 inView = rotate(invOrientation, pointed - vec3(view.pose.position.x, view.pose.position.y, view.pose.position.z));
-         if (inView.z > -0.1f)
-         {
-            inFront = false;
-            break;
-         }
-         const float tanLeft = tanf(view.fov.angleLeft), tanRight = tanf(view.fov.angleRight), tanUp = tanf(view.fov.angleUp), tanDown = tanf(view.fov.angleDown);
-         x += 0.5f * (inView.x / -inView.z - tanLeft) / (tanRight - tanLeft);
-         y += 0.5f * (tanUp - inView.y / -inView.z) / (tanUp - tanDown);
-      }
-      if (!inFront || x < 0.f || x > 1.f || y < 0.f || y > 1.f)
+      const vec3 direction = rotate(location.pose.orientation, vec3(0.f, 0.f, -1.f));
+      const float denom = direction.Dot(normal);
+      if (fabsf(denom) < 1e-6f)
+         continue;
+      const float t = (m_uiPanelOrigin - origin).Dot(normal) / denom;
+      if (t <= 0.f)
+         continue;
+      const vec3 onPanel = origin + direction * t - m_uiPanelOrigin;
+      const float x = onPanel.Dot(m_uiPanelRight) / m_uiPanelRight.LengthSquared();
+      const float y = onPanel.Dot(m_uiPanelDown) / m_uiPanelDown.LengthSquared();
+      if (x < 0.f || x > 1.f || y < 0.f || y > 1.f)
          continue;
 
       m_uiPointerValid = true;
       m_uiPointerX = x;
       m_uiPointerY = y;
+      m_uiPointerRayStart = origin;
+      m_uiPointerRayEnd = origin + direction * t;
+      m_uiPointerScroll = m_xrInputHandler->GetFloatState(thumbstickY);
       // Hysteresis, as this is an analog trigger
       const float triggerValue = m_xrInputHandler->GetFloatState(trigger);
       m_uiPointerPressed = m_uiPointerPressed ? (triggerValue > 0.4f) : (triggerValue > 0.7f);
       return;
    }
    m_uiPointerPressed = false;
+   m_uiPointerScroll = 0.f;
+}
+
+void VRDevice::SetTableTopViewPoses(std::vector<XrView>& views, float vpuToWorldScale) const
+{
+   // Playfield center and extents in the reference space (meters), from the playfield placement of the previous frame
+   const PinTable* const table = g_pplayer->m_ptable;
+   const vec3 center = m_pfWorld.m_toWorld * vec3(0.5f * (table->m_left + table->m_right), 0.5f * (table->m_top + table->m_bottom), 0.f) * vpuToWorldScale;
+   const vec3 length = m_pfWorld.m_toWorld.MultiplyVectorNoTranslate(vec3(0.f, table->m_bottom - table->m_top, 0.f)) * vpuToWorldScale; // Towards the player
+   const vec3 width = m_pfWorld.m_toWorld.MultiplyVectorNoTranslate(vec3(table->m_right - table->m_left, 0.f, 0.f)) * vpuToWorldScale;
+
+   // Looking straight down (-Z of the view is forward), with the back of the table at the top of the image
+   const vec3 viewBack(0.f, 1.f, 0.f);
+   vec3 viewUp = length * -1.f;
+   viewUp.y = 0.f;
+   if (viewUp.LengthSquared() < 1e-8f)
+      return;
+   viewUp.Normalize();
+   const vec3 viewRight = CrossProduct(viewUp, viewBack);
+
+   // Rotation matrix (columns: right, up, back) to quaternion
+   const float m00 = viewRight.x, m01 = viewUp.x, m02 = viewBack.x;
+   const float m10 = viewRight.y, m11 = viewUp.y, m12 = viewBack.y;
+   const float m20 = viewRight.z, m21 = viewUp.z, m22 = viewBack.z;
+   XrQuaternionf orientation;
+   if (const float trace = m00 + m11 + m22; trace > 0.f)
+   {
+      const float s = 0.5f / sqrtf(trace + 1.f);
+      orientation = { (m21 - m12) * s, (m02 - m20) * s, (m10 - m01) * s, 0.25f / s };
+   }
+   else if (m00 > m11 && m00 > m22)
+   {
+      const float s = 2.f * sqrtf(1.f + m00 - m11 - m22);
+      orientation = { 0.25f * s, (m01 + m10) / s, (m02 + m20) / s, (m21 - m12) / s };
+   }
+   else if (m11 > m22)
+   {
+      const float s = 2.f * sqrtf(1.f + m11 - m00 - m22);
+      orientation = { (m01 + m10) / s, 0.25f * s, (m12 + m21) / s, (m02 - m20) / s };
+   }
+   else
+   {
+      const float s = 2.f * sqrtf(1.f + m22 - m00 - m11);
+      orientation = { (m02 + m20) / s, (m12 + m21) / s, 0.25f * s, (m10 - m01) / s };
+   }
+
+   // High enough for the whole playfield to fit in the (asymmetric) field of view of the captured eye, with a small margin
+   const XrFovf& fov = views[0].fov;
+   const float tanVertical = min(tanf(fov.angleUp), tanf(-fov.angleDown));
+   const float tanHorizontal = min(tanf(-fov.angleLeft), tanf(fov.angleRight));
+   const float height = 1.1f * max(0.5f * length.Length() / tanVertical, 0.5f * width.Length() / tanHorizontal);
+
+   for (XrView& view : views)
+   {
+      view.pose.orientation = orientation;
+      view.pose.position = { center.x, center.y + height, center.z };
+   }
+}
+
+bool VRDevice::GetUIPointerRayTransforms(Matrix3D (&quadToClip)[2]) const
+{
+   if (!m_uiPointerValid)
+      return false;
+   // A flat ribbon from the controller to the pointed position, turned towards the head so that it is seen from its wide side
+   constexpr float thickness = 0.004f; // meters
+   const vec3 along = m_uiPointerRayEnd - m_uiPointerRayStart;
+   vec3 across = CrossProduct(along, m_uiHeadPos - m_uiPointerRayStart);
+   if (across.LengthSquared() < 1e-10f)
+      return false;
+   across.Normalize();
+   across = across * thickness;
+   const vec3 start = m_uiPointerRayStart - across * 0.5f;
+   const Matrix3D quadToWorld(
+      along.x, along.y, along.z, 0.f,
+      across.x, across.y, across.z, 0.f,
+      0.f, 0.f, 1.f, 0.f,
+      start.x, start.y, start.z, 1.f);
+   for (int eye = 0; eye < 2; eye++)
+      quadToClip[eye] = quadToWorld * m_uiPanelViewProj[eye];
+   return true;
+}
+
+bool VRDevice::GetUIPanelTransforms(float width, float height, Matrix3D (&pixelToClip)[2]) const
+{
+   if (!m_uiPanelPlaced)
+      return false;
+   // UI pixel to reference space: the panel origin, then its full width and height spread over the UI display size
+   const vec3 dx = m_uiPanelRight * (1.f / width), dy = m_uiPanelDown * (1.f / height);
+   const Matrix3D pixelToPanel(
+      dx.x, dx.y, dx.z, 0.f,
+      dy.x, dy.y, dy.z, 0.f,
+      0.f, 0.f, 1.f, 0.f,
+      m_uiPanelOrigin.x, m_uiPanelOrigin.y, m_uiPanelOrigin.z, 1.f);
+   for (int eye = 0; eye < 2; eye++)
+      pixelToClip[eye] = pixelToPanel * m_uiPanelViewProj[eye];
+   return true;
 }
 
 void VRDevice::ReleaseSession()
@@ -1148,7 +1275,7 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
          rendered = false;
       }
       if (rendered)
-         UpdateUIPointer(views, renderLayerInfo.predictedDisplayTime);
+         UpdateUIPanel(views, renderLayerInfo.predictedDisplayTime);
       if (rendered)
       {
          // The steps that leads to the matrix stack implemented below are the followings, with first matrix being view, 
@@ -1169,6 +1296,10 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
          // Fixed value of 5 cm between playfield bottom and lockbar border
          // We could (should ?) make this a table data but this does not vary that much so this seems fine for the time being
          constexpr float lockbarToPlayfield = 5.f;
+
+         // Table image capture: the eyes are moved above the playfield (the composited frame then matches what was rendered)
+         if (m_tableTopView)
+            SetTableTopViewPoses(views, vpuToWorldScale);
 
          // Continuous space positioning based on controller pose (for setup where controllers can be placed along a VR cabinet and used for XR play)
          if (m_controllerViewCentering)

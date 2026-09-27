@@ -276,6 +276,7 @@ elseif(PLATFORM STREQUAL "windows-mingw")
 
    add_executable(vpinball
       ${VPX_STANDALONE_SOURCES}
+      ${VPX_WEBSERVER_SOURCES}
 
       src/utils/StackTrace.cpp
       src/utils/StackTrace.h
@@ -300,6 +301,7 @@ elseif(PLATFORM STREQUAL "windows-mingw")
 
    target_compile_definitions(vpinball PRIVATE
       __STANDALONE__
+      VPX_TABLE_WEBSERVER
 
       __LIBWINEVBS__
       WINE_UNICODE_NATIVE
@@ -310,6 +312,8 @@ elseif(PLATFORM STREQUAL "windows-mingw")
 
       ENABLE_BGFX
       $<IF:$<CONFIG:Debug>,BX_CONFIG_DEBUG=1,BX_CONFIG_DEBUG=0>
+      # Standalone build with OpenXR: the closest a PC gets to the Linux build running on a standalone headset
+      $<$<BOOL:${ENABLE_XR}>:ENABLE_XR>
 
       VPX_STANDALONE_CRASH_HANDLER
    )
@@ -344,6 +348,9 @@ elseif(PLATFORM STREQUAL "windows-mingw")
       winevbs64
       backtrace
       dbghelp
+      zip64 # Web server
+      ws2_32
+      iphlpapi
    )
 
    target_link_options(vpinball PUBLIC
@@ -375,6 +382,8 @@ elseif(PLATFORM STREQUAL "windows-mingw")
          COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/hidapi64.dll" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/openxr_loader64.dll" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/winevbs64.dll" "$<TARGET_FILE_DIR:vpinball>"
+         COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/libzip64.dll" "$<TARGET_FILE_DIR:vpinball>"
+         COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/zlib1.dll" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/libwinpthread-1.dll" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/libgcc_s_seh-1.dll" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/libstdc++-6.dll" "$<TARGET_FILE_DIR:vpinball>"
