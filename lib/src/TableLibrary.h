@@ -54,7 +54,8 @@ public:
                                        // is a separate file as the mobile launchers, which share the tables.json format, reject the fields they do not know
       std::vector<std::filesystem::path> excludedPaths; // Folders inside tablesPath that must not be scanned
       ZipFunction zip; // Usually ZipUtils::Zip, needed by Export
-      ZipFunction unzip; // Usually ZipUtils::Unzip, needed to import .zip/.vpxz bundles
+      ZipFunction unzip; // Usually ZipUtils::Extract, needed to import the bundles of 'archiveExtensions'
+      std::vector<std::string> archiveExtensions { ".zip", ".vpxz" }; // Lower case, with the dot: bundles imported with 'unzip'
       LogCallback log;
    };
 
@@ -62,7 +63,7 @@ public:
    ~TableLibrary();
 
    // Synchronize with the tables folder: drop entries whose file is gone, register new .vpx files, pick up
-   // artwork, and import the .zip/.vpxz bundles dropped at the root of the folder (deleted once imported).
+   // artwork, and import the bundles (.zip, .vpxz, and the other archiveExtensions) dropped at the root of the folder (deleted once imported).
    // Files modified during the last 'settleSeconds' are considered as still being copied and left for the
    // next rescan: use 0 when the caller knows that transfers are done (startup, web server event, button).
    void Rescan(const ProgressCallback& onProgress = nullptr, int settleSeconds = 0);
@@ -95,6 +96,21 @@ public:
    // Zip the table folder as <destFolder>/<name>.vpxz
    std::optional<std::filesystem::path> Export(const std::string& uuid, const std::filesystem::path& destFolder, const ProgressCallback& onProgress = nullptr);
 
+   // ROMs that tables need and are missing from the device, kept in missing-roms.json along tables.json to tell the user what to upload
+   // from the web server. A ROM is a zip file ('rom'), searched in 'folder' (relative to the tables folder when inside), in which 'files' were
+   // not found, for a table. It is removed from the list when a file with its name is added, and a missing file when a file with its name is added.
+   struct MissingRom {
+      std::string rom;
+      std::string folder;
+      std::vector<std::string> files;
+      std::string table; // Name of the table that needed it
+      int64_t reportedAt = 0; // Seconds since epoch
+   };
+   void AddMissingRom(const std::string& rom, const std::filesystem::path& folder, const std::vector<std::string>& files, const std::string& table);
+   std::vector<MissingRom> GetMissingRoms() const;
+   void ClearMissingRoms();
+   void OnFileAdded(const std::string& fileName);
+
    const std::filesystem::path& GetTablesPath() const { return m_config.tablesPath; }
    std::filesystem::path GetFullPath(const Table& table) const { return BuildPath(table.path); }
    std::filesystem::path GetImagePath(const Table& table) const { return table.image.empty() ? std::filesystem::path() : BuildPath(table.image); }
@@ -113,6 +129,7 @@ private:
    std::string RelativePath(const std::filesystem::path& fullPath) const;
    bool IsInsideTables(const std::filesystem::path& fullPath) const;
    bool IsExcluded(const std::filesystem::path& fullPath) const;
+   bool IsArchive(const std::filesystem::path& path) const;
    std::vector<std::filesystem::path> ListTableFiles(const std::filesystem::path& folder, int settleSeconds) const;
    std::string FindImage(const std::string& tablePath) const;
    std::string GenerateUUID(const std::vector<Table>& tables) const;
@@ -124,6 +141,10 @@ private:
    void Commit(std::vector<Table> tables);
    bool Update(const std::string& uuid, const std::function<bool(Table&)>& change, bool isContentChange = true);
    std::filesystem::path GetStatsPath() const;
+   std::filesystem::path GetMissingRomsPath() const;
+   std::vector<MissingRom> LoadMissingRoms() const;
+   void SaveMissingRoms(const std::vector<MissingRom>& missingRoms) const;
+   mutable std::mutex m_missingRomsMutex;
    static std::optional<int> FuzzyWordScore(const std::string& word, const std::string& text);
    std::vector<Table> ImportVPX(const std::filesystem::path& path, const std::vector<Table>& tables);
    std::vector<Table> ImportArchive(const std::filesystem::path& path, const std::vector<Table>& tables, const ProgressCallback& onProgress);

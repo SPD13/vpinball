@@ -108,6 +108,15 @@
         </div>
       </div>
 
+      <div id="missing-roms" class="missing-roms" hidden>
+        <div class="missing-roms-header">
+          <span class="missing-roms-title">Missing ROMs</span>
+          <button class="btn btn-secondary" onclick="clearMissingRoms()">Clear list</button>
+        </div>
+        <div class="missing-roms-hint">Tables failed to start without these ROMs. Upload each zip file, as is, to the folder shown.</div>
+        <ul id="missing-roms-list" class="missing-roms-list"></ul>
+      </div>
+
       <div id="file-list-container" class="file-list-container">
         <div class="file-list-header">
           <div class="file-name">

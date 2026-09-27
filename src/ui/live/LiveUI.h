@@ -15,6 +15,8 @@
 #include "PlumbOverlay.h"
 #include "BallControl.h"
 
+#include <deque>
+
 class LiveUI final
 {
 public:
@@ -41,6 +43,13 @@ public:
 
    unsigned int PushNotification(const string &message, const int lengthMs, const unsigned int reuseId = 0) { return m_notificationOverlay.PushNotification(message, lengthMs, reuseId); }
 
+   // Messages that the player must acknowledge, shown one at a time in the in-game UI (which pauses the game). Lines starting with '!' are
+   // shown as errors. ShowMessage can be called from any thread, ShowPendingMessage is called by the game loop.
+   void ShowMessage(const string& title, const string& text);
+   void ShowPendingMessage();
+   const string& GetMessageTitle() const { return m_messageTitle; }
+   const string& GetMessageText() const { return m_messageText; }
+
    // Ball Control
    BallControl m_ballControl;
 
@@ -62,6 +71,10 @@ public:
    void HandleSDLEvent(SDL_Event &e) const;
 
 private:
+   std::mutex m_messageMutex;
+   std::deque<std::pair<string, string>> m_pendingMessages; // Title and text
+   string m_messageTitle, m_messageText; // Displayed by the 'misc/message' page
+
    void SetupImGuiStyle(const bool isEditor) const;
    
    void NewFrame();

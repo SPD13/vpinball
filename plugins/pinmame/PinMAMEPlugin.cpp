@@ -20,6 +20,7 @@
 #include <cassert>
 #include <charconv>
 #include <mutex>
+#include <sstream>
 
 namespace PinMAME
 {
@@ -212,6 +213,21 @@ LPI_IMPLEMENT_CPP // Implement shared log support
 MSGPI_STRING_VAL_SETTING(pinMAMEPathProp, "PinMAMEPath", "PinMAME Path", "Folder that contains PinMAME subfolders (roms, nvram, ...)", true, "", 1024);
 MSGPI_BOOL_VAL_SETTING(cheatProp, "Cheat", "Cheat Mode", "", true, false);
 
+static std::mutex romLoadErrorsMutex;
+static string romLoadErrors;
+
+void SetRomLoadErrors(const string& errors)
+{
+   std::lock_guard lock(romLoadErrorsMutex);
+   romLoadErrors = errors;
+}
+
+string TakeRomLoadErrors()
+{
+   std::lock_guard lock(romLoadErrorsMutex);
+   return std::exchange(romLoadErrors, string());
+}
+
 void PINMAMECALLBACK OnLogMessage(PINMAME_LOG_LEVEL logLevel, const char* format, va_list args, void* const pUserData)
 {
    va_list args_copy;
@@ -233,6 +249,23 @@ void PINMAMECALLBACK OnLogMessage(PINMAME_LOG_LEVEL logLevel, const char* format
       else if (logLevel == PINMAME_LOG_LEVEL_ERROR)
       {
          LOGE(buffer);
+         // 'display_rom_load_results():' followed by a line per missing or invalid file, like 'xxx.rom NOT FOUND', and general remarks
+         // like 'SOUND WAS DISABLED DUE TO PROBLEMS WITH SOUND ROMS'. File lines are marked with '!', to be highlighted by ShowMessage.
+         if (buffer.starts_with("display_rom_load_results()"s))
+         {
+            string errors;
+            std::istringstream lines(buffer);
+            string line;
+            std::getline(lines, line); // Skip the function name
+            while (std::getline(lines, line))
+            {
+               if (line.empty())
+                  continue;
+               const bool isFile = line.find("NOT FOUND"sv) != string::npos || line.find("INCORRECT"sv) != string::npos || line.find("NO GOOD DUMP"sv) != string::npos;
+               errors += (isFile ? "!"s : ""s) + line + '\n';
+            }
+            SetRomLoadErrors(errors);
+         }
       }
    }
 }

@@ -30,6 +30,7 @@ public:
    enum class LabelType
    {
       Info, // Not scrollable basic text
+      Error, // Same as Info, in red, for what prevents something from working
       Header, // Not scrollable basic text, formated to split sections of the item list
       Markdown // Scrollable (therefore selectable), advanced formatting
    };

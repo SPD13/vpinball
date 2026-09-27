@@ -353,6 +353,12 @@ elseif(PLATFORM STREQUAL "windows-mingw")
       iphlpapi
    )
 
+   # RAR and 7z archives, when external.sh built libarchive (static, 7z needs liblzma), linked by full path so that MSYS2's is never used
+   if(EXISTS "${BUILD_LIBS_DIR}/libarchive.a")
+      target_compile_definitions(vpinball PRIVATE VPX_ARCHIVE_SUPPORT LIBARCHIVE_STATIC)
+      target_link_libraries(vpinball "${BUILD_LIBS_DIR}/libarchive.a" "${BUILD_LIBS_DIR}/liblzma.a" z bcrypt) # bcrypt: random names of temporary files
+   endif()
+
    target_link_options(vpinball PUBLIC
       -Wl,--dynamicbase
       -Wl,--nxcompat
@@ -610,6 +616,13 @@ elseif(PLATFORM STREQUAL "linux")
       zip
       $<$<BOOL:${ENABLE_XR}>:openxr_loader>
    )
+
+   # RAR and 7z archives, when external.sh built libarchive (static, 7z needs liblzma), linked by full path so that a system one is never used
+   set(BUILD_LIBS_DIR "${CMAKE_SOURCE_DIR}/third-party/build-libs/linux-${ARCH}")
+   if(EXISTS "${BUILD_LIBS_DIR}/libarchive.a")
+      target_compile_definitions(vpinball PRIVATE VPX_ARCHIVE_SUPPORT LIBARCHIVE_STATIC)
+      target_link_libraries(vpinball PUBLIC "${BUILD_LIBS_DIR}/libarchive.a" "${BUILD_LIBS_DIR}/liblzma.a" z)
+   endif()
 
    target_link_libraries(vpinball PUBLIC $<IF:$<STREQUAL:${RENDERER},BGFX>,bgfx,glad>)
 

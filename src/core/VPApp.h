@@ -72,6 +72,24 @@ public:
    // and gets back to it when a table is closed, until the user quits from the lobby or the picker
    bool m_launcherMode = false;
    std::filesystem::path GetLobbyTablePath() const;
+
+   // The VR room of a table can replace the default room of the lobby: the lobby then loads that table, and only keeps the parts of its room
+   // which were visible when it was chosen (kept in lobby-room.json). Without that table, the lobby gets back to the default room.
+   struct LobbyRoom
+   {
+      std::filesystem::path tablePath;
+      string tableName;
+      vector<string> parts;
+   };
+   std::optional<LobbyRoom> GetLobbyRoom();
+   int UseTableRoomInLobby(PinTable* table); // Returns the number of room parts kept, 0 if the table has no VR room (then nothing changes)
+   void ResetLobbyRoom();
+   static bool IsRoomPart(const IEditable* part);
+   // The 'Visible' property that scripts use, for the parts which have one
+   static std::optional<bool> GetPartVisible(IEditable* part);
+   static void SetPartVisible(IEditable* part, bool visible);
+   bool m_playingLobby = false; // Set while the lobby is played
+   bool m_reloadLobby = false; // Load the lobby again when it closes, for example to apply a new room
 #endif
 
 private:

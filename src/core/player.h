@@ -77,6 +77,7 @@ public:
 
    bool IsEditorMode() const { return m_playMode == PlayMode::FullEdit; }
    const PlayMode m_playMode;
+   bool m_isLobby = false; // The lobby of the launcher mode, which may be loaded from a table of the library (see VPApp::GetLobbyRoom)
 
    uint64_t m_timeUpdateTimeStamp = 0; // Timestamp in computer time that correspond to last update of game time
    double m_time_sec = 0.0; // current physics time

@@ -300,4 +300,13 @@ typedef struct VPXPluginAPI
    // --- Scripting
    void(MSGPIAPI* RunScript)(const char* script);
 
+   // --- User Interface (added after the first version: always check that the function is defined before calling it)
+   // Show a message that the player must acknowledge, like a problem that prevents the table from working, in the in-game menu (which pauses
+   // the game). Lines are separated by '\n', and the ones starting with '!' are highlighted as errors (without the '!').
+   // Thread safe: the message is displayed from the next frame on.
+   void(MSGPIAPI* ShowMessage)(const char* title, const char* message);
+   // Report that the table needs a file which is missing from the device, like a ROM: 'package' is the file to add (for example 'rom.zip'), in
+   // 'folder', and 'files' what was missing in it (lines separated by '\n'). Recorded for the table manager of the application, if any.
+   void(MSGPIAPI* ReportMissingFile)(const char* package, const char* folder, const char* files);
+
 } VPXPluginAPI;

@@ -382,6 +382,8 @@ set(VPX_SOURCES
    src/ui/live/ingameui/VRSettingsPage.cpp
    src/ui/live/ingameui/SystemInfoPage.h
    src/ui/live/ingameui/SystemInfoPage.cpp
+   src/ui/live/ingameui/MessagePage.h
+   src/ui/live/ingameui/MessagePage.cpp
 
    src/ui/win/codeview.cpp
    src/ui/win/codeview.h

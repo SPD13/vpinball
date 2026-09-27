@@ -33,6 +33,8 @@
 #include <SDL3_ttf/SDL_ttf.h>
 #include <filesystem>
 #include <libwinevbs/libwinevbs.h>
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include "lib/src/TableLibrary.h"
 #ifdef VPX_TABLE_WEBSERVER
 #include "lib/src/WebServer.h"
@@ -254,7 +256,10 @@ VPinballLib::TableLibrary& VPApp::GetTableLibrary()
       config.jsonPath = m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences, "tables.json");
 #ifdef VPX_TABLE_WEBSERVER
       config.zip = [](const std::filesystem::path& source, const std::filesystem::path& dest, VPinballLib::TableLibrary::ZipProgressCallback callback) { return ZipUtils::Zip(source, dest, callback); };
-      config.unzip = [](const std::filesystem::path& source, const std::filesystem::path& dest, VPinballLib::TableLibrary::ZipProgressCallback callback) { return ZipUtils::Unzip(source, dest, callback); };
+      config.unzip = [](const std::filesystem::path& source, const std::filesystem::path& dest, VPinballLib::TableLibrary::ZipProgressCallback callback) { return ZipUtils::Extract(source, dest, callback); };
+      config.archiveExtensions.clear();
+      for (const string& ext : ZipUtils::GetExtractableExtensions()) // .zip and .vpxz, and .rar and .7z when built with libarchive
+         config.archiveExtensions.push_back('.' + ext);
 #endif
       config.log = [](VPinballLib::TableLibrary::LogLevel level, const string& message)
       {
@@ -314,6 +319,108 @@ std::filesystem::path VPApp::GetLobbyTablePath() const
    // Base of the lobby, which is then emptied and given a floor (see BuildLobby in AppCommands.cpp)
    // FIXME replace by a dedicated lobby table (a room with nothing to play, designed for VR)
    return m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "blankTable.vpx");
+}
+
+// Parts placed in the room: in a part group using the room space reference, or, for tables made before part groups existed, in a layer named
+// after the room (like 'VR Room' or 'VR_Room', layers being loaded as part groups)
+bool VPApp::IsRoomPart(const IEditable* part)
+{
+   if (part->GetItemType() == ItemTypeEnum::eItemPartGroup)
+      return false;
+   for (const PartGroup* group = part->GetPartGroup(); group != nullptr; group = group->GetPartGroup())
+      if (group->m_d.m_spaceReference == PartGroupData::SpaceReference::SR_ROOM || lowerCase(group->GetName()).find("room") != string::npos)
+         return true;
+   return false;
+}
+
+std::optional<bool> VPApp::GetPartVisible(IEditable* part)
+{
+   static wchar_t visibleName[] = L"Visible";
+   LPOLESTR names = visibleName;
+   DISPID dispid;
+   IDispatch* const dispatch = part->GetIScriptable() ? part->GetIScriptable()->GetIDispatch() : nullptr;
+   if (dispatch == nullptr || FAILED(dispatch->GetIDsOfNames(IID_NULL, &names, 1, 0, &dispid)))
+      return std::nullopt;
+   DISPPARAMS noArgs = { nullptr, nullptr, 0, 0 };
+   CComVariant result;
+   if (FAILED(dispatch->Invoke(dispid, IID_NULL, 0, DISPATCH_PROPERTYGET, &noArgs, &result, nullptr, nullptr)) || FAILED(result.ChangeType(VT_BOOL)))
+      return std::nullopt;
+   return result.boolVal != VARIANT_FALSE;
+}
+
+void VPApp::SetPartVisible(IEditable* part, bool visible)
+{
+   static wchar_t visibleName[] = L"Visible";
+   LPOLESTR names = visibleName;
+   DISPID dispid;
+   IDispatch* const dispatch = part->GetIScriptable() ? part->GetIScriptable()->GetIDispatch() : nullptr;
+   if (dispatch == nullptr || FAILED(dispatch->GetIDsOfNames(IID_NULL, &names, 1, 0, &dispid)))
+      return;
+   CComVariant value(visible);
+   DISPID putId = DISPID_PROPERTYPUT;
+   DISPPARAMS args = { &value, &putId, 1, 1 };
+   dispatch->Invoke(dispid, IID_NULL, 0, DISPATCH_PROPERTYPUT, &args, nullptr, nullptr, nullptr);
+}
+
+std::optional<VPApp::LobbyRoom> VPApp::GetLobbyRoom()
+{
+   std::ifstream file(m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences, "lobby-room.json"));
+   if (!file.is_open())
+      return std::nullopt;
+   try
+   {
+      const nlohmann::json json = nlohmann::json::parse(file);
+      LobbyRoom room;
+      const string path = json.value("table", ""s);
+      room.tablePath = std::filesystem::path(reinterpret_cast<const char8_t*>(path.c_str()));
+      if (room.tablePath.is_relative())
+         room.tablePath = GetTableLibrary().GetTablesPath() / room.tablePath;
+      room.tableName = json.value("name", ""s);
+      room.parts = json.value("parts", vector<string>());
+      // The table may have been removed since
+      if (room.parts.empty() || !FileExists(room.tablePath))
+         return std::nullopt;
+      return room;
+   }
+   catch (const std::exception& e)
+   {
+      PLOGE << "Failed to read lobby-room.json: " << e.what();
+      return std::nullopt;
+   }
+}
+
+int VPApp::UseTableRoomInLobby(PinTable* table)
+{
+   // The parts visible now, as the table options (or its script) select which parts of the room are shown
+   vector<string> parts;
+   for (IEditable* part : table->GetParts())
+      if (IsRoomPart(part) && GetPartVisible(part).value_or(true))
+         parts.push_back(part->GetName());
+   if (parts.empty())
+      return 0;
+
+   // Relative to the tables folder when inside, so that the folder can be moved
+   std::filesystem::path path = table->m_filename;
+   const std::filesystem::path relative = path.lexically_normal().lexically_relative(GetTableLibrary().GetTablesPath().lexically_normal());
+   if (!relative.empty() && *relative.begin() != "..")
+      path = relative;
+   const std::u8string utf8Path = path.generic_u8string();
+   nlohmann::ordered_json json = {
+      { "table", string(utf8Path.begin(), utf8Path.end()) },
+      { "name", !table->m_tableName.empty() ? table->m_tableName : table->m_filename.stem().string() },
+      { "parts", parts },
+   };
+   std::ofstream file(m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences, "lobby-room.json"), std::ios::trunc);
+   file << json.dump(2);
+   PLOGI << "Lobby room set to the room of " << table->m_filename << " (" << parts.size() << " parts)";
+   return static_cast<int>(parts.size());
+}
+
+void VPApp::ResetLobbyRoom()
+{
+   std::error_code ec;
+   std::filesystem::remove(m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences, "lobby-room.json"), ec);
+   PLOGI << "Lobby room reset to the default one";
 }
 
 #ifdef VPX_TABLE_WEBSERVER

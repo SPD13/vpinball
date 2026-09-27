@@ -672,8 +672,32 @@ void LiveUI::OpenInGameUI(const string& page)
    m_inGameUI.Open(page);
 }
 
+void LiveUI::ShowMessage(const string& title, const string& text)
+{
+   std::lock_guard lock(m_messageMutex);
+   m_pendingMessages.emplace_back(title, text);
+}
+
+void LiveUI::ShowPendingMessage()
+{
+   if (m_editorUI.IsOpened() || m_inGameUI.IsOpened("misc/message"s))
+      return;
+   {
+      std::lock_guard lock(m_messageMutex);
+      if (m_pendingMessages.empty())
+         return;
+      std::tie(m_messageTitle, m_messageText) = m_pendingMessages.front();
+      m_pendingMessages.pop_front();
+   }
+   // Over the opened page if any, so that 'Continue' gets back to it
+   if (m_inGameUI.IsOpened())
+      m_inGameUI.Navigate("misc/message"s);
+   else
+      OpenInGameUI("misc/message"s);
+}
+
 void LiveUI::HideUI()
-{ 
+{
    m_renderer->InitLayout();
    if (m_inGameUI.IsOpened())
       m_inGameUI.Close();

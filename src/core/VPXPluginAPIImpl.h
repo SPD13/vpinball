@@ -72,6 +72,8 @@ private:
 
    static unsigned int MSGPIAPI PushNotification(const char* msg, const int lengthMs);
    static void MSGPIAPI UpdateNotification(const unsigned int handle, const char* msg, const int lengthMs);
+   static void MSGPIAPI ShowMessage(const char* title, const char* message);
+   static void MSGPIAPI ReportMissingFile(const char* package, const char* folder, const char* files);
 
    static void MSGPIAPI DisableStaticPrerendering(const BOOL disable);
    static void MSGPIAPI GetActiveViewSetup(VPXViewSetupDef* view);

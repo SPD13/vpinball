@@ -10,6 +10,7 @@
 #include <thread>
 #include <format>
 #include <fstream>
+#include <sstream>
 
 #include "plugins/VPXPlugin.h" // Only used for optional feature (visual feedback on error)
 #include <climits>
@@ -235,6 +236,7 @@ void Controller::Run(long hParentWnd, int nMinVersion)
    }
 
    // Trigger startup, status will be either 2 (starting), 1 (running), 0 (stopped, likely after failure)
+   TakeRomLoadErrors(); // Only keep the errors of this start
    PINMAME_STATUS status = PinmameRun(m_szGameName.c_str());
    while (PinmameIsRunning() == 2) // Wait until the machine is either running or stopped
       std::this_thread::sleep_for(std::chrono::milliseconds(75));
@@ -251,7 +253,34 @@ void Controller::Run(long hParentWnd, int nMinVersion)
       unsigned int getVpxApiId = m_msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_API);
       m_msgApi->BroadcastMsg(m_endpointId, getVpxApiId, &vpxApi);
       m_msgApi->ReleaseMsgID(getVpxApiId);
-      if (vpxApi)
+      if (vpxApi && vpxApi->ShowMessage)
+      {
+         // The table does not work without its ROM: tell the player what is missing and where it is searched
+         const string errors = TakeRomLoadErrors();
+         const std::filesystem::path romsPath = m_vpmPath.empty() ? std::filesystem::path() : std::filesystem::path(m_vpmPath) / "roms"sv;
+         string message = "PinMAME could not start the emulation of the ROM '"s + m_szRomName + "'.\n";
+         if (!errors.empty())
+            message += "\nMissing or invalid files in '"s + m_szRomName + ".zip':\n" + errors;
+         if (!romsPath.empty())
+            message += "\nROMs are searched, zipped, in:\n"s + romsPath.string() + '\n';
+         vpxApi->ShowMessage("The table can not work: ROM missing", message.c_str());
+
+         // Also recorded for the web server of the table library, to tell what to upload: the file names are the first word of the error lines (marked with '!')
+         if (vpxApi->ReportMissingFile && !romsPath.empty())
+         {
+            string files;
+            std::istringstream lines(errors);
+            for (string line; std::getline(lines, line);)
+               if (line.starts_with('!'))
+               {
+                  const size_t end = line.find(' ');
+                  files += line.substr(1, end == string::npos ? string::npos : end - 1) + '\n';
+               }
+            const std::u8string romsFolder = romsPath.u8string();
+            vpxApi->ReportMissingFile((m_szRomName + ".zip").c_str(), reinterpret_cast<const char*>(romsFolder.c_str()), files.c_str());
+         }
+      }
+      else if (vpxApi)
          vpxApi->PushNotification(("Failed to start emulation of rom '"s + m_szRomName + '\'').c_str(), 10000);
    }
    if (status == PINMAME_STATUS_GAME_ALREADY_RUNNING)

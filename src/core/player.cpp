@@ -92,6 +92,9 @@ Player::Player(PinTable *const table, const PlayMode playMode)
         table->m_settings.GetPlayer_SoundDeviceBG(), table->m_settings.GetPlayer_SoundDevice(), static_cast<VPX::SoundConfigTypes>(table->m_settings.GetPlayer_Sound3D())))
    , m_resURIResolver(m_pluginManager.GetMsgAPI(), m_pluginAPI.GetVPXEndPointId(), true, true, true)
 {
+   #ifdef __STANDALONE__
+   m_isLobby = g_app->m_playingLobby;
+   #endif
    // For the time being, lots of access are made through the global singleton, so ensure we are unique, and define it as soon as needed
    assert(g_pplayer == nullptr);
    g_pplayer = this;
@@ -542,7 +545,7 @@ Player::Player(PinTable *const table, const PlayMode playMode)
    {
       tinyxml2::XMLDocument xmlDoc;
       tinyxml2::XMLElement *preloadCache = nullptr;
-      if ((m_ptable->m_settings.GetPlayer_CacheMode() > 0) && FileExists(m_ptable->m_filename))
+      if ((m_ptable->m_settings.GetPlayer_CacheMode() > 0) && FileExists(m_ptable->m_filename) && !m_isLobby) // The cache of a table lists all its textures, while the lobby only keeps its room
       {
          try
          {
@@ -890,8 +893,8 @@ Player::~Player()
    // Save modified settings if any
    m_ptable->m_settings.Save();
 
-   // Save list of used textures to avoid stuttering in next play
-   if ((m_ptable->m_settings.GetPlayer_CacheMode() > 0) && FileExists(m_ptable->m_filename))
+   // Save list of used textures to avoid stuttering in next play (not for the lobby, which may be loaded from a table and only keep its room)
+   if ((m_ptable->m_settings.GetPlayer_CacheMode() > 0) && FileExists(m_ptable->m_filename) && !m_isLobby)
    {
       try
       {
@@ -1839,6 +1842,8 @@ void Player::UpdateGameLogic()
 
    m_pluginManager.ProcessAsyncCallbacks();
 
+   m_liveUI->ShowPendingMessage();
+
    #ifdef MSVC_CONCURRENCY_VIEWER
    delete tagSpan;
    #endif
@@ -1943,7 +1948,9 @@ void Player::CaptureTableImage(const std::filesystem::path& imagePath, const std
 
 bool Player::CanReplaceTableImage() const
 {
-   // Only the tables of the table library have an image (not the lobby, which is an application asset, nor tables played from elsewhere)
+   // Only the tables of the table library have an image (not the lobby, even when loaded from a table of the library, nor tables played from elsewhere)
+   if (m_isLobby)
+      return false;
    const std::filesystem::path relativePath = m_ptable->m_filename.lexically_normal().lexically_relative(g_app->GetTableLibrary().GetTablesPath().lexically_normal());
    return !relativePath.empty() && *relativePath.begin() != "..";
 }
