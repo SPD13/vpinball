@@ -43,6 +43,12 @@ void HomePage::BuildPage()
 
    AddItem(std::make_unique<InGameUIItem>("Generic Options"s, ""s, "table/general"s));
 
+#if defined(__STANDALONE__) && !defined(__LIBVPINBALL__)
+   if (m_player->CanReplaceTableImage())
+      AddItem(std::make_unique<InGameUIItem>("Replace table image"s, "Use the current view as the image of this table in the table picker"s,
+         [this]() { m_player->ReplaceTableImage(); }));
+#endif
+
    if (m_player->m_ptable->TournamentModePossible())
       AddItem(std::make_unique<InGameUIItem>("Generate Tournament File"s, ""s,
          [this]()

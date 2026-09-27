@@ -69,6 +69,7 @@ private:
    void UpdateScale();
 
    vector<std::shared_ptr<MeshBuffer>> m_meshBuffers;
+   std::shared_ptr<MeshBuffer> m_vrPointerRayMesh; // Ray from the VR controller to the pointed position on the UI panel
 
    // Editor UI
    VPX::EditorUI::EditorUI m_editorUI;
@@ -104,6 +105,9 @@ private:
    bool m_vrPointerVisible = false;
    bool m_vrPointerPressed = false;
    ImVec2 m_vrPointerPos;
+   ImVec2 m_vrPointerAnchor; // Pointed position (0..1) when button navigation started, to switch to pointer navigation when the pointer clearly moves
+   bool m_vrPointerAnchorValid = false;
+   bool m_vrInGameUIWasOpened = false; // To place the VR UI panel in front of the player each time the in-game UI opens
    ImFont *m_baseFont = nullptr;
    ImFont *m_overlayBoldFont = nullptr;
    ImFont *m_overlayFont = nullptr;

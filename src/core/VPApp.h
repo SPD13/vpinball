@@ -6,7 +6,7 @@
 #include "FileLocator.h"
 
 namespace VPinballLib { class TableLibrary; }
-class WebServer; // Only with VPX_TABLE_WEBSERVER, defined by the macOS and Linux builds (it uses POSIX network functions, and mobile builds have their own instance)
+class WebServer; // Only with VPX_TABLE_WEBSERVER, defined by the macOS, Linux and windows-mingw builds (mobile builds have their own instance)
 
 
 class VPApp final

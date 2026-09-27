@@ -281,6 +281,10 @@ void LiveUI::NewFrame()
          io.DisplayFramebufferScale.x = 1.f;
       if (io.DisplayFramebufferScale.y <= 0.f)
          io.DisplayFramebufferScale.y = 1.f;
+      // In VR, the UI is rendered to the headset eye views, so the scale of the desktop (preview) window gathered by ImGui_ImplSDL3_NewFrame
+      // does not apply (it was measured at about 40 horizontally on Windows, squeezing the UI into a few pixels wide strip)
+      if (m_renderer->m_stereo3D == STEREO_VR)
+         io.DisplayFramebufferScale = ImVec2(1.f, 1.f);
       switch (m_player->m_renderer->m_stereo3Denabled ? m_player->m_renderer->m_stereo3D : STEREO_OFF)
       {
       // Render is a vertically squashed view which is stretched back by the display
@@ -309,18 +313,36 @@ void LiveUI::NewFrame()
    }
 
    // In VR, a controller is used as a pointer when the in-game UI is opened: move the mouse where it points to, its trigger being the left button.
-   // Navigation only switches from buttons to pointer on a trigger press, as a hand is never still enough to tell it from mouse moves.
+   // Navigation switches from buttons to pointer on a trigger press, or when the pointer clearly moves (a hand is never still enough to switch on any
+   // move: pointing a little further than the jitter of a held controller, from where it was when button navigation started, tells a deliberate aim).
    #if defined(ENABLE_XR)
    if (m_player->m_vrDevice && m_inGameUI.IsOpened())
    {
-      float x, y;
+      float x, y, scroll;
       bool pressed;
-      const bool pointing = m_player->m_vrDevice->GetUIPointer(x, y, pressed);
+      const bool pointing = m_player->m_vrDevice->GetUIPointer(x, y, pressed, scroll);
       if (pointing)
       {
          io.AddMousePosEvent(x * io.DisplaySize.x, y * io.DisplaySize.y);
          if (pressed && !m_vrPointerPressed)
             m_inGameUI.UsePointerNav();
+         if (!m_inGameUI.IsFlipperNav())
+            m_vrPointerAnchorValid = false;
+         else if (!m_vrPointerAnchorValid)
+         {
+            m_vrPointerAnchor = ImVec2(x, y);
+            m_vrPointerAnchorValid = true;
+         }
+         else if (constexpr float moveThreshold = 0.03f; fabsf(x - m_vrPointerAnchor.x) > moveThreshold || fabsf(y - m_vrPointerAnchor.y) > moveThreshold)
+            m_inGameUI.UsePointerNav(); // Items are then highlighted when hovered
+         // The thumbstick of the pointing controller scrolls what it points at, as a mouse wheel (up to 12 notches per second). This also
+         // switches to pointer navigation, as button navigation keeps scrolling back to the selected item
+         constexpr float deadZone = 0.2f;
+         if (fabsf(scroll) > deadZone)
+         {
+            m_inGameUI.UsePointerNav();
+            io.AddMouseWheelEvent(0.f, (scroll > 0.f ? 1.f : -1.f) * (fabsf(scroll) - deadZone) / (1.f - deadZone) * 12.f * io.DeltaTime);
+         }
       }
       if (pressed != m_vrPointerPressed && (pointing || !pressed))
       {
@@ -329,9 +351,14 @@ void LiveUI::NewFrame()
       }
       m_vrPointerVisible = pointing;
       m_vrPointerPos = ImVec2(x * io.DisplaySize.x, y * io.DisplaySize.y);
+      if (!pointing)
+         m_vrPointerAnchorValid = false;
    }
    else
+   {
       m_vrPointerVisible = false;
+      m_vrPointerAnchorValid = false;
+   }
    #endif
 
    // Enable mouse capture when dragging (needed when dragging main windows)
@@ -344,6 +371,8 @@ void LiveUI::NewFrame()
    }
 
    // Late mouse position update to latest (async) global state (needed when dragging main windows)
+   // Not while a VR controller points at the UI: the desktop mouse would replace the pointed position (hover would follow it, not the controller)
+   if (!m_vrPointerVisible)
    {
       SDL_Point windowPos;
       SDL_FPoint globalMouse;
@@ -465,12 +494,26 @@ void LiveUI::RenderUI()
    const float right = (m_rotate == 1 || m_rotate == 3) ? io.DisplaySize.y : io.DisplaySize.x;
    const float bottom = (m_rotate == 1 || m_rotate == 3) ? io.DisplaySize.x : io.DisplaySize.y;
    Matrix3D matView[2];
-   matView[0] = matRotate * matTranslate * Matrix3D::MatrixOrthoOffCenterRH(0.f, right, bottom, 0.f, 0.f, 1.f);
-   if (m_rd->m_nEyes == 2)
-      matView[1] = matView[0];  
+   bool onVRPanel = false;
+   #if defined(ENABLE_XR)
+   // In VR, the UI is drawn on a panel standing in the room, placed in front of the player each time the in-game UI opens
+   if (m_player->m_vrDevice && m_rd->m_nEyes == 2)
+   {
+      if (m_inGameUI.IsOpened() && !m_vrInGameUIWasOpened)
+         m_player->m_vrDevice->RecenterUIPanel();
+      m_vrInGameUIWasOpened = m_inGameUI.IsOpened();
+      onVRPanel = m_player->m_vrDevice->GetUIPanelTransforms(right, bottom, matView);
+   }
+   #endif
+   if (!onVRPanel)
+   {
+      matView[0] = matRotate * matTranslate * Matrix3D::MatrixOrthoOffCenterRH(0.f, right, bottom, 0.f, 0.f, 1.f);
+      if (m_rd->m_nEyes == 2)
+         matView[1] = matView[0];
+   }
    m_rd->m_uiShader->SetMatrix(ShaderUniform::matWorldView, &matView[0], m_rd->m_nEyes);
    m_rd->m_uiShader->SetVector(ShaderUniform::staticColor_Alpha,
-      m_player->m_vrDevice ? ((float)m_player->m_vrDevice->GetEyeWidth() * 0.15f) : 0.f, // Stereo offset for VR (fake depth)
+      (m_player->m_vrDevice && !onVRPanel) ? ((float)m_player->m_vrDevice->GetEyeWidth() * 0.15f) : 0.f, // Stereo offset for head locked VR UI (fake depth), before the panel is placed
       0.f, // Unused
       0.f, // Unused
       // A value of 1.0 should be sdrWhite * 80, while in the WCG colorspace 80 nits is 0.5
@@ -541,6 +584,41 @@ void LiveUI::RenderUI()
          }
       }
    }
+
+   #if defined(ENABLE_XR)
+   // Ray from the pointing controller to the dot, drawn with the UI shader on a quad of unit size, using the white pixel of the font atlas
+   if (Matrix3D rayToClip[2]; onVRPanel && m_vrPointerVisible && io.Fonts->TexRef.GetTexID() && m_player->m_vrDevice->GetUIPointerRayTransforms(rayToClip))
+   {
+      if (m_vrPointerRayMesh == nullptr)
+      {
+         auto ib = std::make_shared<IndexBuffer>(m_rd, 6, true, IndexBuffer::Format::FMT_INDEX32);
+         auto vb = std::make_shared<VertexBuffer>(m_rd, 4, nullptr, true);
+         m_vrPointerRayMesh = std::make_shared<MeshBuffer>("VRPointerRay"s, vb, ib, false);
+         uint32_t* indices;
+         m_vrPointerRayMesh->m_ib->Lock(indices);
+         constexpr uint32_t quad[] = { 0, 1, 2, 2, 1, 3 };
+         memcpy(indices, quad, sizeof(quad));
+         m_vrPointerRayMesh->m_ib->Unlock();
+      }
+      // The white pixel moves when the atlas is rebuilt, so the vertices are updated each frame. The ray fades in from the controller.
+      Vertex3D_NoTex2* vertices;
+      m_vrPointerRayMesh->m_vb->Lock(vertices);
+      for (unsigned int i = 0; i < 4; i++)
+      {
+         vertices[i].x = static_cast<float>(i & 1);
+         vertices[i].y = static_cast<float>(i >> 1);
+         vertices[i].z = (i & 1) ? 0.8f : 0.1f; // alpha
+         vertices[i].nx = vertices[i].ny = vertices[i].nz = 1.f; // white
+         vertices[i].tu = io.Fonts->TexUvWhitePixel.x;
+         vertices[i].tv = io.Fonts->TexUvWhitePixel.y;
+      }
+      m_vrPointerRayMesh->m_vb->Unlock();
+      m_rd->m_uiShader->SetMatrix(ShaderUniform::matWorldView, &rayToClip[0], 2);
+      m_rd->m_uiShader->SetVector(ShaderUniform::clip_plane, -1.f, -1.f, 2.f, 2.f); // No clipping
+      m_rd->m_uiShader->SetTexture(ShaderUniform::tex_base_color, io.Fonts->TexRef.GetTexID());
+      m_rd->DrawMesh(m_rd->m_uiShader, true, Vertex3Ds(0.f, 0.f, 0.f), static_cast<float>(depthSort), m_vrPointerRayMesh, RenderDevice::TRIANGLELIST, 0, 6);
+   }
+   #endif
 
    NewFrame();
 }

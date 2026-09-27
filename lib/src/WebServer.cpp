@@ -22,7 +22,13 @@
 #include <fstream>
 #include <sstream>
 #include <iomanip>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#else
 #include <ifaddrs.h>
+#endif
 #include <filesystem>
 #include <map>
 #include <algorithm>
@@ -52,6 +58,18 @@ namespace {
 
    constexpr const char* PAIRING_COOKIE = "vpx_pairing";
    constexpr int MAX_FAILED_PAIRINGS = 5;
+
+   // Mongoose and the browser use UTF-8 file names (on Windows, std::filesystem::path::string() uses the ANSI code page instead)
+   string PathToUTF8(const std::filesystem::path& path)
+   {
+      const std::u8string s = path.u8string();
+      return string(s.begin(), s.end());
+   }
+
+   std::filesystem::path UTF8ToPath(const string& utf8)
+   {
+      return std::filesystem::path(std::u8string(utf8.begin(), utf8.end()));
+   }
 }
 
 // The mobile launchers are notified through the library events, while the desktop application owns its table library
@@ -445,47 +463,49 @@ void WebServer::Files(struct mg_connection *c, struct mg_http_message* hm)
 
    PLOGD.printf("Retrieving file list: q=%s", q.c_str());
 
-   string path = BuildTablePath(q.c_str());
-   if (!q.empty())
-      path += PATH_SEPARATOR_CHAR;
+   const std::filesystem::path path = BuildTablePath(q.c_str());
 
-   DIR* dir = opendir(path.c_str());
-   if (!dir) {
+   std::error_code ec;
+   std::filesystem::directory_iterator it(path, ec);
+   if (ec) {
       mg_http_reply(c, STATUS_BAD_REQUEST, "", "%s", RESPONSE_BAD_REQUEST);
       return;
    }
 
    json files = json::array();
-   struct dirent *entry;
-
-   while ((entry = readdir(dir)) != NULL) {
-      if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+   for (; it != std::filesystem::directory_iterator(); it.increment(ec)) {
+      if (ec)
+         break;
+      const std::filesystem::directory_entry& entry = *it;
+      const string name = PathToUTF8(entry.path().filename());
+      const bool isDir = entry.is_directory(ec);
+      const auto writeTime = entry.last_write_time(ec);
+      if (ec)
+         continue;
+      const std::uintmax_t size = isDir ? 0 : entry.file_size(ec);
+      if (ec)
          continue;
 
-      string file = path + entry->d_name;
-      string ext;
-      if (entry->d_type != DT_DIR) ext = extension_from_path(file);
+      const std::time_t mtime = std::chrono::system_clock::to_time_t(std::chrono::file_clock::to_sys(writeTime));
+      char datebuf[32];
+      std::tm tm;
+#ifdef _WIN32
+      gmtime_s(&tm, &mtime);
+#else
+      gmtime_r(&mtime, &tm);
+#endif
+      strftime(datebuf, sizeof(datebuf), "%Y-%m-%dT%H:%M:%SZ", &tm);
 
-      struct stat st;
-      if (stat(file.c_str(), &st) == 0) {
-         char datebuf[32];
-         struct tm tm;
-         gmtime_r(&st.st_mtime, &tm);
-         strftime(datebuf, sizeof(datebuf), "%Y-%m-%dT%H:%M:%SZ", &tm);
+      json fileEntry = {
+         {"name", name},
+         {"ext", isDir ? string() : extension_from_path(name)},
+         {"isDir", isDir},
+         {"size", static_cast<long long>(size)},
+         {"date", datebuf}
+      };
 
-         json fileEntry = {
-            {"name", entry->d_name},
-            {"ext", ext},
-            {"isDir", entry->d_type == DT_DIR},
-            {"size", (long long)st.st_size},
-            {"date", datebuf}
-         };
-
-         files.push_back(fileEntry);
-      }
+      files.push_back(fileEntry);
    }
-
-   closedir(dir);
 
    string response = files.dump();
    mg_http_reply(c, STATUS_OK, HEADER_JSON, "%s", response.c_str());
@@ -499,7 +519,7 @@ void WebServer::Download(struct mg_connection *c, struct mg_http_message* hm)
 
    PLOGI.printf("Downloading file: q=%s", q.c_str());
 
-   string path = BuildTablePath(q.c_str());
+   const string path = PathToUTF8(BuildTablePath(q.c_str()));
 
    struct mg_http_serve_opts opts = {};
    mg_http_serve_file(c, hm, path.c_str(), &opts);
@@ -529,24 +549,24 @@ void WebServer::Upload(struct mg_connection *c, struct mg_http_message* hm)
    mg_http_get_var(&hm->query, "length", lengthStr, sizeof(lengthStr));
    long length = lengthStr[0] ? strtol(lengthStr, nullptr, 10) : 0;
 
-   string path = BuildTablePath(q);
+   const std::filesystem::path path = BuildTablePath(q);
 
    // Chunks are appended in a hidden staging folder, and the file is moved in place when complete: an interrupted transfer never leaves a truncated table that would be listed (and played)
    std::error_code ec;
-   const std::filesystem::path stagingPath = std::filesystem::path(path) / ".upload";
+   const std::filesystem::path stagingPath = path / ".upload";
    if (hm->body.len == 0) {
       // The web page ends each transfer with an empty request, which is also all it sends for an empty file
       if (length == 0 && offset == 0) {
          std::filesystem::create_directories(path, ec);
-         std::ofstream(std::filesystem::path(path) / file, std::ios::trunc);
+         std::ofstream(path / UTF8ToPath(file), std::ios::trunc);
          SetLastUpdate();
       }
-      mg_http_upload(c, hm, &mg_fs_posix, stagingPath.string().c_str(), MAX_UPLOAD_SIZE); // Only replies, as there is nothing to write
+      mg_http_upload(c, hm, &mg_fs_posix, PathToUTF8(stagingPath).c_str(), MAX_UPLOAD_SIZE); // Only replies, as there is nothing to write
       return;
    }
    std::filesystem::create_directories(stagingPath, ec);
-   if (mg_http_upload(c, hm, &mg_fs_posix, stagingPath.string().c_str(), MAX_UPLOAD_SIZE) == length) {
-      std::filesystem::rename(stagingPath / file, std::filesystem::path(path) / file, ec);
+   if (mg_http_upload(c, hm, &mg_fs_posix, PathToUTF8(stagingPath).c_str(), MAX_UPLOAD_SIZE) == length) {
+      std::filesystem::rename(stagingPath / UTF8ToPath(file), path / UTF8ToPath(file), ec);
       if (ec) {
          PLOGE.printf("Failed to finalize upload: file=%s, error=%s", file.c_str(), ec.message().c_str());
          return;
@@ -569,7 +589,7 @@ void WebServer::Delete(struct mg_connection *c, struct mg_http_message* hm)
    if (!ValidatePathParameter(c, hm, "q", q))
       return;
 
-   string path = BuildTablePath(q.c_str());
+   const std::filesystem::path path = BuildTablePath(q.c_str());
 
    std::error_code ec;
    if (std::filesystem::is_regular_file(path, ec)) {
@@ -607,7 +627,7 @@ void WebServer::Rename(struct mg_connection *c, struct mg_http_message* hm)
    if (!ValidatePathParameter(c, hm, "name", newName))
       return;
 
-   string oldPath = BuildTablePath(q.c_str());
+   const std::filesystem::path oldPath = BuildTablePath(q.c_str());
    std::filesystem::path oldFile(oldPath);
 
    std::error_code ec;
@@ -616,7 +636,7 @@ void WebServer::Rename(struct mg_connection *c, struct mg_http_message* hm)
       return;
    }
 
-   std::filesystem::path newFile = oldFile.parent_path() / newName;
+   std::filesystem::path newFile = oldFile.parent_path() / UTF8ToPath(newName);
    if (std::filesystem::exists(newFile, ec)) {
       mg_http_reply(c, STATUS_CONFLICT, "", RESPONSE_CONFLICT);
       return;
@@ -643,8 +663,8 @@ void WebServer::Move(struct mg_connection *c, struct mg_http_message* hm)
    if (!ValidatePathParameter(c, hm, "dest", dest))
       return;
 
-   string oldPath = BuildTablePath(q.c_str());
-   string newPath = BuildTablePath(dest.c_str());
+   const std::filesystem::path oldPath = BuildTablePath(q.c_str());
+   const std::filesystem::path newPath = BuildTablePath(dest.c_str());
 
    std::filesystem::path oldFile(oldPath);
    std::filesystem::path newFile(newPath);
@@ -690,7 +710,7 @@ void WebServer::Folder(struct mg_connection *c, struct mg_http_message* hm)
       return;
    }
 
-   string path = BuildTablePath(q);
+   const std::filesystem::path path = BuildTablePath(q);
 
    std::error_code ec;
    if (std::filesystem::create_directory(path, ec)) {
@@ -713,15 +733,15 @@ void WebServer::Extract(struct mg_connection *c, struct mg_http_message* hm)
       return;
    }
 
-   string path = BuildTablePath(q);
+   const std::filesystem::path path = BuildTablePath(q);
 
    const std::filesystem::path filePath(path);
    std::error_code ec;
    if (std::filesystem::is_regular_file(filePath, ec)) {
-      const string ext = extension_from_path(path);
+      const string ext = extension_from_path(q);
       if (ext == "zip" || ext == "vpxz") {
          if (ZipUtils::Unzip(filePath, filePath.parent_path(), nullptr)) {
-            PLOGI.printf("File unzipped: q=%s", path.c_str());
+            PLOGI.printf("File unzipped: q=%s", q);
             SetLastUpdate();
             mg_http_reply(c, STATUS_OK, "", RESPONSE_OK);
          }
@@ -849,6 +869,33 @@ void WebServer::BroadcastStatus()
 
 string WebServer::GetIPAddress()
 {
+#ifdef _WIN32
+   // First IPv4 address of an adapter that is up and has a gateway (Wi-Fi or Ethernet, not loopback nor virtual adapters without route)
+   ULONG size = 16 * 1024;
+   std::vector<uint8_t> buffer(size);
+   auto adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+   constexpr ULONG flags = GAA_FLAG_INCLUDE_GATEWAYS | GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+   if (GetAdaptersAddresses(AF_INET, flags, nullptr, adapters, &size) == ERROR_BUFFER_OVERFLOW)
+   {
+      buffer.resize(size);
+      adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+   }
+   if (GetAdaptersAddresses(AF_INET, flags, nullptr, adapters, &size) != NO_ERROR)
+      return string();
+   for (const IP_ADAPTER_ADDRESSES* adapter = adapters; adapter != nullptr; adapter = adapter->Next)
+   {
+      if (adapter->OperStatus != IfOperStatusUp || adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK || adapter->FirstGatewayAddress == nullptr)
+         continue;
+      for (const IP_ADAPTER_UNICAST_ADDRESS* address = adapter->FirstUnicastAddress; address != nullptr; address = address->Next)
+      {
+         char host[NI_MAXHOST];
+         if (address->Address.lpSockaddr->sa_family == AF_INET
+            && getnameinfo(address->Address.lpSockaddr, address->Address.iSockaddrLength, host, NI_MAXHOST, nullptr, 0, NI_NUMERICHOST) == 0)
+            return host;
+      }
+   }
+   return string();
+#else
    struct ifaddrs *ifaddr;
    struct ifaddrs *ifa;
 
@@ -877,6 +924,7 @@ string WebServer::GetIPAddress()
    freeifaddrs(ifaddr);
 
    return string();
+#endif
 }
 
 bool WebServer::ValidatePathParameter(struct mg_connection *c, struct mg_http_message* hm, const char* paramName, string& outValue)
@@ -895,11 +943,12 @@ bool WebServer::ValidatePathParameter(struct mg_connection *c, struct mg_http_me
 
 std::filesystem::path WebServer::BuildTablePath(const char* relativePath)
 {
+   // Requests use UTF-8
 #ifdef __LIBVPINBALL__
-   return g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Tables) / relativePath;
+   return g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Tables) / UTF8ToPath(relativePath);
 #else
    // On desktop, the default tables location is the user's documents folder: only expose the folder owned by the table library
-   return g_app->GetTableLibrary().GetTablesPath() / relativePath;
+   return g_app->GetTableLibrary().GetTablesPath() / UTF8ToPath(relativePath);
 #endif
 }
 

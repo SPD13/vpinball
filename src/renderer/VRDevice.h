@@ -19,7 +19,12 @@
       #define BX_PLATFORM_LINUX 1
    #endif
 
-   #if BX_PLATFORM_WINDOWS
+   #if BX_PLATFORM_WINDOWS && defined(__STANDALONE__)
+      // Standalone Windows build (MinGW): Vulkan only, to render like the standalone builds for headsets
+      #define XR_USE_PLATFORM_WIN32
+      #define XR_USE_GRAPHICS_API_VULKAN
+      #define VK_USE_PLATFORM_WIN32_KHR
+   #elif BX_PLATFORM_WINDOWS
       #define XR_USE_PLATFORM_WIN32
       #define XR_USE_GRAPHICS_API_VULKAN
       #define XR_USE_GRAPHICS_API_OPENGL
@@ -151,14 +156,25 @@ public:
    unsigned int GetEyeHeight() const { return m_eyeHeight; }
 
    #if defined(ENABLE_XR)
-   // Position pointed by a controller in the head locked UI, normalized to 0..1 from the top left of the eye viewport. Returns false if no controller points at it
-   bool GetUIPointer(float& x, float& y, bool& pressed) const
+   // The UI is displayed on a panel standing in the room, placed in front of the player when it is first displayed and each time RecenterUIPanel is called
+   void RecenterUIPanel() { m_uiPanelPlaced = false; }
+   // Transforms from UI pixel coordinates (0..width, 0..height from the top left of the panel) to each eye clip space. Returns false if the panel is not placed yet
+   bool GetUIPanelTransforms(float width, float height, Matrix3D (&pixelToClip)[2]) const;
+   // Position pointed by a controller on the UI panel, normalized to 0..1 from its top left, and vertical axis of the thumbstick of that
+   // controller (-1..1, up is positive). Returns false if no controller points at it
+   bool GetUIPointer(float& x, float& y, bool& pressed, float& scroll) const
    {
       x = m_uiPointerX;
       y = m_uiPointerY;
       pressed = m_uiPointerPressed;
+      scroll = m_uiPointerScroll;
       return m_uiPointerValid;
    }
+   // Transforms from a unit quad (x along the ray from the controller to the pointed position, y across it) to each eye clip space.
+   // Returns false if no controller points at the UI panel
+   bool GetUIPointerRayTransforms(Matrix3D (&quadToClip)[2]) const;
+   // While enabled, both eyes look straight down at the whole playfield instead of following the head, to capture the image of a table
+   void SetTableTopView(bool enable) { m_tableTopView = enable; }
    #endif
    
    float GetLockbarWidth() const { return m_lockbarWidth; }
@@ -284,14 +300,22 @@ private:
    XrSpace m_leftControllerSpace = XR_NULL_HANDLE;
    XrSpace m_rightControllerSpace = XR_NULL_HANDLE;
 
-   // UI pointer: the aim ray of a controller, projected in the head locked UI
+   // UI panel, in the reference space (meters): top left corner, and vectors along its full width and height
+   bool m_uiPanelPlaced = false;
+   vec3 m_uiPanelOrigin, m_uiPanelRight, m_uiPanelDown;
+   Matrix3D m_uiPanelViewProj[2]; // Reference space to each eye clip space
+   // UI pointer: the aim ray of a controller, intersected with the UI panel
    XrSpace m_leftAimSpace = XR_NULL_HANDLE;
    XrSpace m_rightAimSpace = XR_NULL_HANDLE;
    bool m_uiPointerValid = false;
    bool m_uiPointerPressed = false;
    float m_uiPointerX = 0.f;
    float m_uiPointerY = 0.f;
-   void UpdateUIPointer(const std::vector<XrView>& views, XrTime time);
+   float m_uiPointerScroll = 0.f;
+   std::atomic<bool> m_tableTopView = false;
+   void SetTableTopViewPoses(std::vector<XrView>& views, float vpuToWorldScale) const;
+   vec3 m_uiPointerRayStart, m_uiPointerRayEnd, m_uiHeadPos; // Reference space (meters)
+   void UpdateUIPanel(const std::vector<XrView>& views, XrTime time);
 
    struct RenderLayerInfo
    {

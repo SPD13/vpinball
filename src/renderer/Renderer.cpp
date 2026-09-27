@@ -228,6 +228,16 @@ Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncM
       m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_diffuse_env, m_envRadianceTexture.get());
       m_renderDevice->m_ballShader->SetTexture(ShaderUniform::tex_diffuse_env, m_envRadianceTexture.get());
    #else // Compute radiance on the GPU
+   if (m_stereo3D == STEREO_VR)
+   {
+      // Same issue as Android VR on every platform: the render thread keeps m_framePending set until OpenXR gives it a swapchain image, so no frame can be submitted from here yet
+      m_envRadianceBitmap = EnvmapPrecalc(envTex, envTexWidth, envTexHeight);
+      m_renderDevice->m_texMan.SetDirty(m_envRadianceBitmap.get());
+      m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_diffuse_env, m_envRadianceBitmap.get());
+      m_renderDevice->m_ballShader->SetTexture(ShaderUniform::tex_diffuse_env, m_envRadianceBitmap.get());
+   }
+   else
+   {
       const colorFormat rad_format = envTex->m_format == BaseTexture::RGB_FP32 ? colorFormat::RGBA32F : colorFormat::RGBA16F;
       m_envRadianceTexture = new RenderTarget(m_renderDevice, SurfaceType::RT_DEFAULT, "Irradiance"s, envTexWidth, envTexHeight, rad_format, false, 1, "Failed to create irradiance render target");
       m_renderDevice->ResetRenderState();
@@ -241,6 +251,7 @@ Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncM
       m_renderDevice->SubmitRenderFrame(); // Force submission as result users do not explicitly declare the dependency on this pass
       m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_diffuse_env, m_envRadianceTexture->GetColorSampler());
       m_renderDevice->m_ballShader->SetTexture(ShaderUniform::tex_diffuse_env, m_envRadianceTexture->GetColorSampler());
+   }
    #endif
    envTex.reset();
    PLOGI << "Environment map radiance computed"; // For profiling
@@ -367,6 +378,7 @@ Renderer::~Renderer()
    m_envRadianceTexture.reset();
    #else
    delete m_envRadianceTexture;
+   m_envRadianceBitmap.reset();
    #endif
    ReleaseAORenderTargets();
    m_ballEnvSampler = nullptr;

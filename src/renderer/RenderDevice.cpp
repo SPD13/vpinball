@@ -395,6 +395,8 @@ void RenderDevice::RenderThread(RenderDevice* rd, bgfx::Init init)
       init.type = g_pplayer->m_vrDevice->GetGraphicContextType();
       init.platformData.context = g_pplayer->m_vrDevice->GetGraphicContext();
       assert(init.platformData.context != nullptr);
+      // The context is a device of this backend (created by OpenXR), so BGFX must not fall back to another backend which would use it as its own device type and crash
+      init.fallback = false;
       // For the time being, we do not support having a desktop swapchain along the headset swapchain under Vulkan, so we run BGFX in headless mode
       // Note that this is needed for native VR (running directly on the headset)
       if (init.type == bgfx::RendererType::Vulkan)
@@ -2437,7 +2439,11 @@ void RenderDevice::UploadTexture(ITexManCacheable* texture, const bool linearRGB
    std::shared_ptr<Sampler> sampler = m_texMan.LoadTexture(texture, linearRGB);
    #if defined(ENABLE_BGFX)
    // BGFX dispatch operations to the render thread, so the texture manager does not actually loads data to the GPU nor perform mipmap generation
-   std::lock_guard lock(m_frameMutex);
+   // Wait for the render thread to accept a frame: in VR, it only does when the headset requests one (it starts with a pending frame to
+   // delay the first frame preparation), and this is called from the texture loading threads while the main thread processes OS messages
+   while (m_framePending || !m_frameMutex.try_lock())
+      std::this_thread::yield();
+   std::lock_guard lock(m_frameMutex, std::adopt_lock);
    m_pendingTextureUploads.push_back(sampler);
    SubmitRenderFrame(); // Submit texture upload to render thread
    SubmitRenderFrame(); // Block until render thread has processed the pending texture uploads and mipmap generations

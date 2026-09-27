@@ -343,6 +343,7 @@ private:
    std::shared_ptr<BaseTexture> m_envRadianceTexture = nullptr;
    #else
    RenderTarget* m_envRadianceTexture = nullptr;
+   std::shared_ptr<BaseTexture> m_envRadianceBitmap = nullptr; // Computed on the CPU instead, in VR (see Renderer::Renderer)
    #endif
 
    // Segment display rendering

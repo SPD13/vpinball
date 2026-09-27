@@ -416,7 +416,7 @@ fi
 # build libzip
 #
 
-LIBZIP_EXPECTED_SHA="${LIBZIP_SHA}"
+LIBZIP_EXPECTED_SHA="${LIBZIP_SHA}-002"
 LIBZIP_FOUND_SHA="$([ -f libzip/cache.txt ] && cat libzip/cache.txt || echo "")"
 
 if [ "${LIBZIP_EXPECTED_SHA}" != "${LIBZIP_FOUND_SHA}" ]; then
@@ -431,8 +431,12 @@ if [ "${LIBZIP_EXPECTED_SHA}" != "${LIBZIP_FOUND_SHA}" ]; then
    mv libzip-${LIBZIP_SHA} libzip
    cd libzip
    sed -i.bak 's/\(set_target_properties(zip PROPERTIES\)/\1 OUTPUT_NAME "zip64"/' lib/CMakeLists.txt
+   # Same as Linux: deflate only, otherwise it links against the zstd, bzip2 and lzma DLLs of MSYS2 that are not shipped
    cmake \
       -DBUILD_SHARED_LIBS=ON \
+      -DENABLE_ZSTD=OFF \
+      -DENABLE_BZIP2=OFF \
+      -DENABLE_LZMA=OFF \
       -DBUILD_TOOLS=OFF \
       -DBUILD_REGRESS=OFF \
       -DBUILD_OSSFUZZ=OFF \

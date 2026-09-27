@@ -125,9 +125,19 @@ private:
 #ifdef ENABLE_BGFX
    bool CallbackSteppedGameLoop();
 #if defined(__STANDALONE__) && !defined(__LIBVPINBALL__)
+public:
+   // The image of a table in the table picker is captured the first time it is closed, and can be captured again from the in-game menu
+   bool CanReplaceTableImage() const;
+   void ReplaceTableImage();
 private:
    void CaptureTableImageBeforeClosing();
+   void UpdateTableImageReplacement();
+   void CaptureTableImage(const std::filesystem::path& imagePath, const std::function<void(bool)>& onCaptured);
+   bool IsInGameUIClosed() const;
    bool m_tableImageCaptureStarted = false;
+   bool m_tableImageMenuHidden = false;
+   std::filesystem::path m_tableImageReplacePath; // Set while waiting for the in-game menu to close
+   std::atomic<int> m_tableImageReplaced = 0; // Result of ReplaceTableImage, set by the render thread: 1 replaced, 2 failed
 public:
 #endif
    void MultithreadedGameLoop();
