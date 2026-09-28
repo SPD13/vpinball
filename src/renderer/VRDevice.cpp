@@ -809,9 +809,11 @@ void VRDevice::UpdateUIPanel(const std::vector<XrView>& views, XrTime time)
    m_uiHeadPos = head;
    if (!m_uiPanelPlaced)
    {
-      // The panel covers the whole UI display area, most of it being transparent. 2.8m wide at 1m gives about 109 degrees, so that
-      // the UI windows, laid out for the full field of view of the headset, stay readable without filling it
-      constexpr float distance = 1.0f, width = 2.8f, belowEyes = 0.1f; // meters
+      // The panel covers the whole UI display area, most of it being transparent. The UI windows are laid out for the full field of view
+      // of the headset: at the default distance of 0.8m, they get bigger than at 1m (where 2.8m wide gives about 109 degrees).
+      // The player chooses the distance (Standalone.VRMenuDistance), keeping the size, so a closer window looks bigger.
+      constexpr float width = 2.8f, belowEyes = 0.1f; // meters
+      const float distance = clamp(g_app->m_settings.GetStandalone_VRMenuDistance(), 0.3f, 3.f);
       const float height = width * static_cast<float>(m_eyeHeight) / static_cast<float>(m_eyeWidth);
       vec3 forward = rotate(views[0].pose.orientation, vec3(0.f, 0.f, -1.f));
       forward.y = 0.f; // Upright panel, facing the head horizontally
