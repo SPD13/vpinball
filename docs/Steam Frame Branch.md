@@ -9,8 +9,8 @@ This document lists everything the branch changes, where, and how far each part 
 | Part | State |
 |---|---|
 | Table library, table picker, launcher mode, web upload, shared ROM folder | Built and run on macOS arm64. Checked through automated tests, scripted runs with frame captures of the real application, and `curl` for the web server. Not yet driven by a person with a mouse, a keyboard or a controller for every feature (see each section). |
-| OpenXR on Linux, Valve Frame controller profile, Vulkan extension filter, VR pointer | **Compiled only**, for Linux ARM64 with `ENABLE_XR=ON` in Valve's Steam Linux Runtime 3.0 (sniper) SDK container. **None of it has run in a headset or against any OpenXR runtime.** |
-| Windows | Nothing compiled. The Visual Studio build does not include the launcher (see "Build variants"). The `windows-mingw` build includes it but has never been compiled with these changes. |
+| OpenXR, Valve Frame controller profile, Vulkan extension filter, VR menu panel and pointer | **Run in VR on Windows with a PSVR2** (SteamVR 2.17), in the `windows-mingw` build with `ENABLE_XR=ON` (2026-09-27), which is standalone + OpenXR + Vulkan like the Frame build. Linux ARM64: compiled on 2026-09-19 only, **before** the work done on Windows (section 8), which has not been compiled for Linux yet. Nothing has run on a Steam Frame. |
+| Windows | `windows-mingw` (with or without `ENABLE_XR`): built and used with GCC 16 (MSYS2 UCRT64), Debug. Visual Studio build: built and run in VR in Debug with Vulkan, without the launcher (see "Build variants"). |
 | iOS / Android library builds | Not compiled. Shared files they use were changed (`WebServer`, `InGameUIPage`, `VPApp`, `player`); see "Effects on existing builds". |
 
 ## Build variants: what contains what
@@ -20,8 +20,8 @@ The launcher lives in the in-game menu and is compiled only in *standalone* buil
 | Build | Table picker and launcher | Web upload | OpenXR |
 |---|---|---|---|
 | macOS | yes | yes | no (no macOS branch in `VRDevice`) |
-| Linux x64 / aarch64 | yes | yes | yes, with `-DENABLE_XR=ON` (new) |
-| windows-mingw | yes (never compiled) | no | no (`ENABLE_XR` is only defined for non-standalone builds) |
+| Linux x64 / aarch64 | yes | yes (RAR/7z when `external.sh` built libarchive) | yes, with `-DENABLE_XR=ON` (new) |
+| windows-mingw | yes | yes | yes, with `-DENABLE_XR=ON` (new, Vulkan only) |
 | Windows, Visual Studio | no | no | yes (as upstream) |
 | iOS / Android library | hidden (they have a native launcher) | yes (as upstream) | Android as upstream |
 
@@ -105,7 +105,7 @@ Known gaps: plain HTTP; the static page and `/assets/*` are served without pairi
 
 The plugin looks for ROMs in `pinmame/roms` next to the table, then in its `PinMAMEPath` setting, then in `~/.pinmame`. When the setting is empty (or equal to the default below) and `~/.pinmame/roms` does not exist, the setting is pointed at `<tables folder>/pinmame` and `pinmame/roms` is created, so ROMs can be uploaded from the browser. The value is reset when the application closes, but it can still be written to `VPinballX.ini` if a settings page saves while it is applied. Desktop standalone builds only.
 
-## 7. OpenXR (compiled, never run)
+## 7. OpenXR
 
 Files: `CMakeLists.txt`, `make/CMakeLists_app.txt`, `platforms/linux-x64/external.sh`, `platforms/linux-aarch64/external.sh`, `src/renderer/VRDevice.h/.cpp`, `src/renderer/XRVulkanBackend.h`, `src/input/XRInputHandler.h`, `src/ui/live/LiveUI.h/.cpp`.
 
@@ -115,11 +115,26 @@ Files: `CMakeLists.txt`, `make/CMakeLists_app.txt`, `platforms/linux-x64/externa
 - **VR menu panel.** The in-game menu is drawn on a panel fixed in the room (`VRDevice::UpdateUIPanel`), placed in front of the player, 10 cm below the eyes, when the menu opens. It is 2.8 m wide, so a closer panel looks bigger.
 - **Menu distance.** New setting `Standalone/VRMenuDistance`: distance between the player and the panel, 0.3 m to 3 m, default 0.8 m. In VR, the MENU tab of the picker shows "Menu distance" with − and + buttons that move the panel by 10 cm and place it again at once. The buttons are used with the pointer; flipper-button navigation does not change them.
 - **VR pointer.** `VRDevice::UpdateUIPanel` intersects a controller's aim ray with the panel; `LiveUI::NewFrame` feeds the hit point to ImGui as the mouse position, with the trigger as the left button (press at 0.7, release at 0.4), draws the ray and a dot, and scrolls with the thumbstick. The right hand is preferred.
+- **Windows standalone.** `ENABLE_XR` is also offered for `PLATFORM=windows-mingw`; standalone builds only use the Vulkan OpenXR backend.
 - Left as upstream: the desktop preview window created in VR.
+
+## 8. Added on Windows with a PSVR2 (2026-09-26 and 27)
+
+Used in the headset in the `windows-mingw` build with `ENABLE_XR`. Not compiled for Linux yet.
+
+- **Upstream VR fixes:** the eye resolution was 0x0 (`SetupHMD` read the bgfx caps before bgfx was initialized); no bgfx backend fallback with a device created by OpenXR (it crashed); computing the environment irradiance on the GPU and uploading the textures of a table's texture cache submitted frames before the headset requested one (assertions in Debug). The in-game UI ignores the scale of the desktop preview window, which squeezed it to a few pixels.
+- **Menu panel and pointer** (section 7): `Standalone/VRMenuDistance`; the ImGui vertex shader has per eye matrices (`vs_imgui.sc`, `bgfx_imgui.h` regenerated).
+- **Table picker:** MENU tab (the options formerly below the table list); virtual keyboard for the search field in VR; the menu distance buttons.
+- **Table images:** "Replace table image" in the table's menu (`Player::ReplaceTableImage`). Captures wait for the menu to be closed. In VR, `VRDevice::SetTableCaptureView` replaces the eye poses for the capture frames with the view chosen by `Standalone/TableImageFocus`: Backglass (default; framed on the bounding vertices of the parts named, or primitives textured with an image named, "backglass", otherwise on an estimate), Table (playfield from above) or Cabinet. The target is centred for each eye's asymmetric field of view.
+- **Missing ROMs:** plugin API `ShowMessage` (a message page the player acknowledges, `MessagePage`, lines starting with `!` shown in red) and `ReportMissingFile`, used by the PinMAME plugin when a ROM cannot start. The library records them in `missing-roms.json` (preferences folder); the web page shows them, grouped by table, when browsing `pinmame/roms`, with a Clear button; an upload of a file with the same name removes the entry (`/missing-roms` route).
+- **RAR and 7z** imports and web extraction through libarchive (`ZipUtils::Extract`, `IsExtractable`, `GetExtractableExtensions`), see section 1.
+- **Lobby room from a table:** "Use this VR room in the lobby" in a table's menu (`VPApp::UseTableRoomInLobby`, `lobby-room.json`): the lobby is loaded from that table and keeps only the visible parts of its room (room space part groups, layers named after a room, collections named `VR…` that are not the cabinet). "Use the default lobby room" in the MENU tab. The lobby does not use the image or texture cache of that table, and the table itself still shows Play.
+- **Notifications** in VR are stacked just above the menu window (`NotificationOverlay`).
+- **Web server on Windows** (network address through `GetAdaptersAddresses`, `std::filesystem` listing on all platforms, UTF-8 paths), and an upload progress banner on the web page.
 
 ## Effects on existing builds
 
-- `-Play`, the editor and the Visual Studio build behave as before, except for the three OpenXR changes that apply everywhere: the Vulkan extension filter, the extra controller inputs and default mappings, and the pointer in the in-game menu.
+- `-Play`, the editor and the Visual Studio build behave as before, except for the OpenXR changes that apply everywhere: the Vulkan extension filter, the extra controller inputs and default mappings, the menu panel and pointer, and the upstream VR fixes of section 8.
 - Standalone desktop builds get a "Tables" entry at the top of the in-game menu. When a table starts they create `VPinballX/Tables/pinmame/roms` in the documents folder, unless a PinMAME folder is already defined or `~/.pinmame/roms` exists (section 6).
 - iOS/Android library builds: uploads are staged in `.upload`; `InGameUIPage` has the tile code; no other intended change.
 - The Visual Studio project files (`make/*.vcxproj`) were not updated. None of the new files is needed by a non-standalone build; the CMake build lists them.
@@ -133,6 +148,8 @@ lib/src/TableLibrary.h
 lib/src/TableLibrary.cpp
 src/ui/live/ingameui/TablePickerPage.h
 src/ui/live/ingameui/TablePickerPage.cpp
+src/ui/live/ingameui/MessagePage.h
+src/ui/live/ingameui/MessagePage.cpp
 tests/test-table-library.cpp
 docs/Steam Frame Branch.md
 ```
