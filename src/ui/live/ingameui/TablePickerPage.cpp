@@ -12,6 +12,7 @@
 #endif
 #include "renderer/Renderer.h"
 #include "renderer/Texture.h"
+#include "renderer/VRDevice.h"
 #include "ui/live/LiveUI.h"
 
 #include "fonts/IconsForkAwesome.h"
@@ -501,6 +502,32 @@ void TablePickerPage::BuildMenuTab()
          VPApp::NextTableImageFocus();
          RequestRebuild();
       }));
+
+   // Distance of the menu window in VR, changed by steps of 10cm, the window being placed again at once
+   if (m_player->m_vrDevice)
+      AddItem(std::make_unique<InGameUIItem>("Menu distance"s, "How far from the player the menu window is placed in VR"s,
+         [this](int index, const InGameUIItem*)
+         {
+            const float distance = g_app->m_settings.GetStandalone_VRMenuDistance();
+            const auto setDistance = [this](float value)
+            {
+               g_app->m_settings.SetStandalone_VRMenuDistance(clamp(roundf(value * 10.f) / 10.f, 0.3f, 3.f), false);
+               m_player->m_vrDevice->RecenterUIPanel();
+            };
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("Menu distance: %.1f m", distance);
+            const float buttonWidth = ImGui::GetFrameHeight() * 1.6f;
+            ImGui::SameLine(0.f, ImGui::GetStyle().ItemSpacing.x * 3.f);
+            ImGui::BeginDisabled(distance <= 0.3f + 1e-3f);
+            if (ImGui::Button(std::format("{}##MenuCloser{}", ICON_FK_MINUS, index).c_str(), ImVec2(buttonWidth, 0.f)))
+               setDistance(distance - 0.1f);
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::BeginDisabled(distance >= 3.f - 1e-3f);
+            if (ImGui::Button(std::format("{}##MenuFarther{}", ICON_FK_PLUS, index).c_str(), ImVec2(buttonWidth, 0.f)))
+               setDistance(distance + 0.1f);
+            ImGui::EndDisabled();
+         }));
 
    AddItem(std::make_unique<InGameUIItem>(sortAscending ? "Sort: A to Z"s : "Sort: Z to A"s, "Change the sort order of the 'All' list"s,
       [this, sortAscending]()
