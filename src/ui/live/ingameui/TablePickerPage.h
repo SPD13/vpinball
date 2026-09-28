@@ -40,6 +40,8 @@ private:
    void SetPage(int page, const string& pagerItem);
    void SetSearch(const string& search);
    void RenderTabs();
+   void BuildMenuTab();
+   void KeepThumbnails(const ankerl::unordered_dense::set<string>& displayedTables);
    void RenderSearch();
    void RenderVirtualKeyboard();
    bool m_virtualKeyboard = false; // Shown under the search field in VR, where there is no keyboard, from its activation until 'Done'

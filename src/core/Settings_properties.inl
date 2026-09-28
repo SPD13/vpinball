@@ -1384,6 +1384,7 @@ PropEnumWithMin(Standalone, RenderingModeOverride, "Override rendering mode"s, "
 PropString(Standalone, TablesPath, "Tables folder"s, "Folder of the table library used by the in-game table picker. When empty, 'VPinballX/Tables' in the user's documents folder is used."s, ""s);
 PropBool(Standalone, TablePickerGridView, "Table picker grid view"s, "Display the tables of the in-game table picker as a grid of images instead of a list of names"s, true);
 PropBool(Standalone, TablePickerSortAscending, "Table picker sort order"s, "Sort the tables of the in-game table picker from A to Z instead of Z to A"s, true);
+PropEnum(Standalone, TableImageFocus, "Table image focus"s, "What the images of the tables captured in VR show: the backglass, the playfield seen from above, or the whole cabinet"s, int, 0, "Backglass"s, "Table"s, "Cabinet"s);
 
 // Editor settings
 PropIntUnbounded(Editor, WindowLeft, "WindowLeft"s, "Main window left"s, -1);

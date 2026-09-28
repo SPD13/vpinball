@@ -89,6 +89,10 @@ public:
    static std::optional<bool> GetPartVisible(IEditable* part);
    static void SetPartVisible(IEditable* part, bool visible);
    bool m_playingLobby = false; // Set while the lobby is played
+
+   // What the images of the tables captured in VR show (Standalone.TableImageFocus), for the menus that choose it
+   static string GetTableImageFocusLabel();
+   static void NextTableImageFocus();
    bool m_reloadLobby = false; // Load the lobby again when it closes, for example to apply a new room
 #endif
 

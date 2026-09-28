@@ -1927,23 +1927,52 @@ bool Player::IsInGameUIClosed() const
    return page == nullptr || page->IsClosed();
 }
 
-// In VR, the view follows the head of the player, which may not face the table: the image is then taken from above the playfield
+#ifdef ENABLE_XR
+// The parts showing the backglass of a table, as visible now: named after it (like 'VR_Backbox_Backglass'), or primitives showing an image named after
+// it. Their bounding vertices, each with the space reference of its part, to frame the backglass images on them.
+static vector<std::pair<int, vec3>> GetBackglassBounds(PinTable* table)
+{
+   vector<std::pair<int, vec3>> result;
+   vector<Vertex3Ds> bounds;
+   for (IEditable* part : table->GetParts())
+   {
+      if (part->m_desktopBackdrop) // Not in the 3D scene
+         continue;
+      const Primitive* const prim = part->GetItemType() == ItemTypeEnum::eItemPrimitive ? static_cast<const Primitive*>(part) : nullptr;
+      if (lowerCase(part->GetName()).find("backglass") == string::npos && (prim == nullptr || lowerCase(prim->m_d.m_szImage).find("backglass") == string::npos))
+         continue;
+      bounds.clear();
+      part->GetBoundingVertices(bounds, nullptr); // Nothing for hidden parts
+      const int space = static_cast<int>(part->GetPartGroup() ? part->GetPartGroup()->GetReferenceSpace() : PartGroupData::SpaceReference::SR_PLAYFIELD);
+      for (const Vertex3Ds& v : bounds)
+         result.emplace_back(space, vec3(v.x, v.y, v.z));
+   }
+   return result;
+}
+#endif
+
+// In VR, the view follows the head of the player, which may not face the table: the image is then framed on the table as the settings choose
+// (its backglass by default, its playfield seen from above, or its whole cabinet)
 void Player::CaptureTableImage(const std::filesystem::path& imagePath, const std::function<void(bool)>& onCaptured)
 {
    #ifdef ENABLE_XR
    if (m_vrDevice)
-      m_vrDevice->SetTableTopView(true);
+   {
+      constexpr VRDevice::TableCaptureView views[] = { VRDevice::TableCaptureView::Backglass, VRDevice::TableCaptureView::Table, VRDevice::TableCaptureView::Cabinet };
+      const VRDevice::TableCaptureView view = views[clamp(g_app->m_settings.GetStandalone_TableImageFocus(), 0, 2)];
+      m_vrDevice->SetTableCaptureView(view, view == VRDevice::TableCaptureView::Backglass ? GetBackglassBounds(m_ptable) : vector<std::pair<int, vec3>>());
+   }
    #endif
    m_renderer->m_renderDevice->CaptureScreenshot({ m_playfieldWnd }, { imagePath },
       [this, onCaptured](bool success)
       {
          #ifdef ENABLE_XR
          if (m_vrDevice)
-            m_vrDevice->SetTableTopView(false);
+            m_vrDevice->SetTableCaptureView(VRDevice::TableCaptureView::None);
          #endif
          onCaptured(success);
       },
-      3); // The views are moved above the table from the next frame on
+      3); // The views are moved from the next frame on
 }
 
 bool Player::CanReplaceTableImage() const

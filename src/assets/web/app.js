@@ -92,6 +92,30 @@ const UIState = {
   isUploadingFolder: false
 };
 
+// Upload progress, fixed at the bottom of the window: the status line is at the top of the page and scrolls away with a long file list
+const UploadBanner = {
+  hideTimeout: null,
+  // percent: 0..100, or null while the size of the work is not known yet (reading, analyzing)
+  update(text, percent) {
+    const banner = DOMCache.get('upload-banner');
+    if (!banner) return;
+    clearTimeout(this.hideTimeout);
+    banner.hidden = false;
+    banner.classList.remove('success', 'error');
+    DOMCache.get('upload-banner-text').textContent = text;
+    const fill = DOMCache.get('upload-banner-fill');
+    fill.classList.toggle('indeterminate', percent === null);
+    fill.style.width = percent === null ? '100%' : `${Math.max(0, Math.min(100, percent))}%`;
+  },
+  finish(text, success) {
+    const banner = DOMCache.get('upload-banner');
+    if (!banner) return;
+    this.update(text, 100);
+    banner.classList.add(success ? 'success' : 'error');
+    this.hideTimeout = setTimeout(() => { banner.hidden = true; }, success ? 3000 : 8000);
+  }
+};
+
 const UploadProgress = {
   totalFiles: 0,
   completedFiles: 0,
@@ -128,6 +152,7 @@ const UploadProgress = {
     }
 
     showStatusMessage("main-status", message, "info", true);
+    UploadBanner.update(message, overallPercent);
   },
   lastDisplayedPercent: -1
 };
@@ -847,6 +872,7 @@ function uploadFile() {
     if (fileInput.files.length > 0) {
       var file = fileInput.files[0];
       var reader = new FileReader();
+      UploadBanner.update(`Reading ${file.name}...`, null); // Large files take a while to be read before being sent
       reader.readAsArrayBuffer(file);
       reader.onload = () => {
         const filePath = _directory ? `${_directory}/${file.name}` : file.name;
@@ -882,6 +908,7 @@ function uploadFolder() {
     UploadProgress.totalFiles = files.length;
     UploadProgress.totalBytes = files.reduce((total, file) => total + file.size, 0);
     showStatusMessage("main-status", `Found ${files.length} files. Starting upload...`, "info", true);
+    UploadBanner.update(`Found ${files.length} files. Starting upload...`, null);
 
     try {
       const createdDirs = new Set();
@@ -906,8 +933,10 @@ function uploadFolder() {
         UploadProgress.updateOverallProgress();
       }
       showStatusMessage("main-status", `✓ Successfully uploaded ${files.length} files!`, "success", true);
+      UploadBanner.finish(`${files.length} files uploaded`, true);
     } catch (error) {
       showStatusMessage("main-status", `✗ Upload failed: ${error.message}`, "error", true);
+      UploadBanner.finish(`Upload failed: ${error.message}`, false);
     }
     UIState.isUploadingFolder = false;
     navigateToPath(_directory);
@@ -1370,10 +1399,11 @@ function showStatusMessage(elementId, message, type, persistent = false) {
 }
 
 function sendChunk(filePath, data, offset, chunkSize, statusId, callback) {
-  const progressPercentage = (offset / data.length) * 100;
+  const progressPercentage = data.length > 0 ? (offset / data.length) * 100 : 100;
   const statusElement = DOMCache.get(statusId);
   statusElement.innerHTML = `Uploading... ${progressPercentage.toFixed(0)}%`;
   statusElement.style.color = "var(--primary-color)";
+  UploadBanner.update(`Uploading ${filePath.split('/').pop()}... ${progressPercentage.toFixed(0)}%`, progressPercentage);
 
   let directory = "";
   let filename = filePath;
@@ -1395,6 +1425,8 @@ function sendChunk(filePath, data, offset, chunkSize, statusId, callback) {
     .then((text) => {
       if (text === "0") {
         showStatusMessage(statusId, "Upload complete!", "success");
+        if (!UIState.isUploadingFolder)
+          UploadBanner.finish(`${filePath.split('/').pop()} uploaded`, true);
         if (callback) {
           callback();
         }
@@ -1403,6 +1435,7 @@ function sendChunk(filePath, data, offset, chunkSize, statusId, callback) {
     .catch((error) => {
       console.error("Error:", error);
       showStatusMessage(statusId, "Upload failed", "error");
+      UploadBanner.finish(`Upload of ${filePath.split('/').pop()} failed`, false);
     });
 }
 
@@ -1594,11 +1627,12 @@ function sendChunkSequential(filePath, data, offset, chunkSize, statusId, fileSi
         UploadProgress.updateOverallProgress();
       } else {
         const statusElement = DOMCache.get(statusId);
+        const fileName = filePath.split('/').pop();
         if (statusElement) {
-          const fileName = filePath.split('/').pop();
           statusElement.innerHTML = `Uploading ${fileName}... ${progressPercentage.toFixed(0)}%`;
           statusElement.style.color = "var(--primary-color)";
         }
+        UploadBanner.update(`Uploading ${fileName}... ${progressPercentage.toFixed(0)}%`, progressPercentage);
       }
       
       let directory = "";
@@ -1683,6 +1717,7 @@ async function uploadDataTransferToDir(dataTransfer, targetDir) {
   if (items && items.length > 0) {
     UIState.isUploadingFolder = true;
     showStatusMessage("main-status", "Analyzing files... Please wait.", "info", true);
+    UploadBanner.update("Analyzing files...", null);
 
     UploadProgress.reset();
     const allEntries = [];
@@ -1702,9 +1737,11 @@ async function uploadDataTransferToDir(dataTransfer, targetDir) {
 
     if (UploadProgress.totalFiles === 1) {
       showStatusMessage("main-status", "Starting file upload...", "info", true);
+      UploadBanner.update("Starting file upload...", null);
       UIState.isUploadingFolder = false;
     } else {
       showStatusMessage("main-status", `Found ${UploadProgress.totalFiles} files. Starting upload...`, "info", true);
+      UploadBanner.update(`Found ${UploadProgress.totalFiles} files. Starting upload...`, null);
     }
 
     try {
@@ -1720,12 +1757,15 @@ async function uploadDataTransferToDir(dataTransfer, targetDir) {
 
       if (UploadProgress.totalFiles > 1) {
         showStatusMessage("main-status", `✓ Successfully uploaded ${UploadProgress.totalFiles} files!`, "success", true);
+        UploadBanner.finish(`${UploadProgress.totalFiles} files uploaded`, true);
       } else {
         showStatusMessage("main-status", "✓ Upload completed successfully!", "success", true);
+        UploadBanner.finish("Upload complete", true);
       }
     } catch (error) {
       UIState.isUploadingFolder = false;
       showStatusMessage("main-status", `✗ Upload failed: ${error.message}`, "error", true);
+      UploadBanner.finish(`Upload failed: ${error.message}`, false);
     }
 
     setTimeout(() => {

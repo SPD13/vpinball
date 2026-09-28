@@ -878,7 +878,8 @@ void WebServer::BroadcastStatus()
 {
    if (s_instance == nullptr) return;
 
-   bool running = g_pplayer != nullptr;
+   // The lobby of the launcher mode is not a table, even when it is loaded from one to use its VR room
+   bool running = g_pplayer != nullptr && !g_pplayer->m_isLobby;
    string currentTable = running ? g_pplayer->m_ptable->m_filename.string() : ""s;
 
    json j = {
