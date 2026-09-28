@@ -24,8 +24,8 @@ namespace VPX::InGameUI
 {
 
 // State of the picker, kept while the application runs (the page is recreated each time it is opened)
-enum class PickerTab { All, Recent, NewlyAdded, MostPlayed, Favorites };
-static constexpr const char* TAB_NAMES[] = { "All", "Recent", "Newly added", "Most played", "Favorites" };
+enum class PickerTab { All, Recent, NewlyAdded, MostPlayed, Favorites, Menu }; // Menu: the options of the library and the application, instead of a list
+static constexpr const char* TAB_NAMES[] = { "All", "Recent", "Newly added", "Most played", "Favorites", "MENU" };
 static PickerTab s_tab = PickerTab::All;
 static string s_search;
 static int s_page = 0;
@@ -74,6 +74,9 @@ static string GetTableStatsInfo(const LibraryTable& table, bool compact = false)
 
 static bool IsRunningTable(const Player* player, const LibraryTable& table)
 {
+   // The lobby may be loaded from a table, to use its VR room: that table is not running then
+   if (player->m_isLobby)
+      return false;
    std::error_code ec;
    return std::filesystem::equivalent(player->m_ptable->m_filename, g_app->GetTableLibrary().GetFullPath(table), ec);
 }
@@ -225,6 +228,9 @@ void TablePickerPage::RenderTabs()
          if (ImGui::GetCursorScreenPos().x + size.x > right)
             ImGui::NewLine();
       }
+      // MENU is not a list: it stands apart, at the right end of the line, clear of the scroll bar
+      if (static_cast<PickerTab>(i) == PickerTab::Menu)
+         ImGui::SetCursorScreenPos(ImVec2(right - size.x - style.ScrollbarSize - style.ItemSpacing.x, ImGui::GetCursorScreenPos().y));
       const ImVec2 pos = ImGui::GetCursorScreenPos();
       if (ImGui::InvisibleButton(TAB_NAMES[i], size))
          SetTab(i);
@@ -341,7 +347,7 @@ void TablePickerPage::BuildPage()
    ankerl::unordered_dense::map<string, int> nameCounts;
    for (const LibraryTable& table : tables)
       nameCounts[table.name]++;
-   const std::filesystem::path runningTable = m_player->m_ptable->m_filename.lexically_normal();
+   const std::filesystem::path runningTable = m_player->m_isLobby ? std::filesystem::path() : m_player->m_ptable->m_filename.lexically_normal(); // See IsRunningTable
 
    // The tab selects and orders the tables
    constexpr size_t filterMinTables = 9; // With a few tables, going through the list is quicker than selecting a letter
@@ -353,7 +359,7 @@ void TablePickerPage::BuildPage()
    {
    case PickerTab::All:
       std::erase_if(tables, [](const LibraryTable& table) { return s_filterInitial != 0 && GetInitial(table) != s_filterInitial; });
-      emptyMessage = "No table yet: copy table folders to the tables folder, or add them from a browser (see below)";
+      emptyMessage = "No table yet: copy table folders to the tables folder, or add them from a browser (see MENU)";
       break;
    case PickerTab::Recent:
       std::erase_if(tables, [](const LibraryTable& table) { return table.lastPlayedAt == 0; });
@@ -372,6 +378,8 @@ void TablePickerPage::BuildPage()
    case PickerTab::Favorites:
       std::erase_if(tables, [](const LibraryTable& table) { return !table.favorite; });
       emptyMessage = "No favorite yet: use the star of a table, or 'Add to favorites' in its page";
+      break;
+   case PickerTab::Menu:
       break;
    }
 
@@ -401,6 +409,12 @@ void TablePickerPage::BuildPage()
    }
 
    AddItem(std::make_unique<InGameUIItem>(TABS_ITEM, "Left/Right: previous/next list"s, [this](int, const InGameUIItem*) { RenderTabs(); }));
+   if (s_tab == PickerTab::Menu)
+   {
+      KeepThumbnails({});
+      BuildMenuTab();
+      return;
+   }
    AddItem(std::make_unique<InGameUIItem>(SEARCH_ITEM, "Type a few letters of the name of a table. Without a keyboard, Left/Right open a text entry page."s, [this](int, const InGameUIItem*) { RenderSearch(); }));
 
    AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Header,
@@ -446,7 +460,12 @@ void TablePickerPage::BuildPage()
    if (m_pageCount > 1)
       AddItem(std::make_unique<InGameUIItem>(PAGER_BOTTOM_ITEM, "Left/Right: previous/next page"s, [this](int, const InGameUIItem*) { RenderPager(PAGER_BOTTOM_ITEM); }));
 
-   // Only keep the images of the displayed page
+   KeepThumbnails(displayedTables);
+}
+
+// Only keep the images of the displayed page
+void TablePickerPage::KeepThumbnails(const ankerl::unordered_dense::set<string>& displayedTables)
+{
    for (auto it = m_thumbnails.begin(); it != m_thumbnails.end();)
    {
       if (displayedTables.contains(it->first))
@@ -458,6 +477,14 @@ void TablePickerPage::BuildPage()
          it = m_thumbnails.erase(it);
       }
    }
+}
+
+// The MENU tab: the options of the library and of the application, which are not needed while choosing a table
+void TablePickerPage::BuildMenuTab()
+{
+   TableLibrary& library = g_app->GetTableLibrary();
+   const bool gridView = g_app->m_settings.GetStandalone_TablePickerGridView();
+   const bool sortAscending = g_app->m_settings.GetStandalone_TablePickerSortAscending();
 
    AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Header, "Library"s));
 
@@ -468,7 +495,13 @@ void TablePickerPage::BuildPage()
          RequestRebuild();
       }));
 
-   if (s_tab == PickerTab::All)
+   AddItem(std::make_unique<InGameUIItem>(VPApp::GetTableImageFocusLabel(), "What the images of the tables captured in VR show: their backglass, their playfield seen from above, or their whole cabinet"s,
+      [this]()
+      {
+         VPApp::NextTableImageFocus();
+         RequestRebuild();
+      }));
+
    AddItem(std::make_unique<InGameUIItem>(sortAscending ? "Sort: A to Z"s : "Sort: Z to A"s, "Change the sort order of the 'All' list"s,
       [this, sortAscending]()
       {

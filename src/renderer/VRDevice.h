@@ -173,8 +173,17 @@ public:
    // Transforms from a unit quad (x along the ray from the controller to the pointed position, y across it) to each eye clip space.
    // Returns false if no controller points at the UI panel
    bool GetUIPointerRayTransforms(Matrix3D (&quadToClip)[2]) const;
-   // While enabled, both eyes look straight down at the whole playfield instead of following the head, to capture the image of a table
-   void SetTableTopView(bool enable) { m_tableTopView = enable; }
+   // Unless None, both eyes frame the table instead of following the head, to capture the image of a table: its backglass, its whole playfield
+   // seen from above, or its whole cabinet seen from the front and a little from the side and above
+   enum class TableCaptureView { None, Backglass, Table, Cabinet };
+   // backglassBounds: bounding vertices of the parts showing the backglass (see Player::CaptureTableImage), each with the space reference of its
+   // part (PartGroupData::SpaceReference). Without them, the backglass is placed like on a real cabinet.
+   void SetTableCaptureView(TableCaptureView view, vector<std::pair<int, vec3>> backglassBounds = {})
+   {
+      if (view != TableCaptureView::None)
+         m_tableCaptureBounds = std::move(backglassBounds); // Only read by the render thread while a capture view is set
+      m_tableCaptureView = view;
+   }
    #endif
    
    float GetLockbarWidth() const { return m_lockbarWidth; }
@@ -312,8 +321,9 @@ private:
    float m_uiPointerX = 0.f;
    float m_uiPointerY = 0.f;
    float m_uiPointerScroll = 0.f;
-   std::atomic<bool> m_tableTopView = false;
-   void SetTableTopViewPoses(std::vector<XrView>& views, float vpuToWorldScale) const;
+   std::atomic<TableCaptureView> m_tableCaptureView = TableCaptureView::None;
+   vector<std::pair<int, vec3>> m_tableCaptureBounds;
+   void SetTableCaptureViewPoses(std::vector<XrView>& views, float vpuToWorldScale, TableCaptureView captureView) const;
    vec3 m_uiPointerRayStart, m_uiPointerRayEnd, m_uiHeadPos; // Reference space (meters)
    void UpdateUIPanel(const std::vector<XrView>& views, XrTime time);
 

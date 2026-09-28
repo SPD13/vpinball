@@ -879,24 +879,109 @@ void VRDevice::UpdateUIPanel(const std::vector<XrView>& views, XrTime time)
    m_uiPointerScroll = 0.f;
 }
 
-void VRDevice::SetTableTopViewPoses(std::vector<XrView>& views, float vpuToWorldScale) const
+void VRDevice::SetTableCaptureViewPoses(std::vector<XrView>& views, float vpuToWorldScale, TableCaptureView captureView) const
 {
-   // Playfield center and extents in the reference space (meters), from the playfield placement of the previous frame
+   // Playfield in the reference space (meters), from the playfield placement of the previous frame
    const PinTable* const table = g_pplayer->m_ptable;
-   const vec3 center = m_pfWorld.m_toWorld * vec3(0.5f * (table->m_left + table->m_right), 0.5f * (table->m_top + table->m_bottom), 0.f) * vpuToWorldScale;
-   const vec3 length = m_pfWorld.m_toWorld.MultiplyVectorNoTranslate(vec3(0.f, table->m_bottom - table->m_top, 0.f)) * vpuToWorldScale; // Towards the player
+   const float cx = 0.5f * (table->m_left + table->m_right);
+   const vec3 front = m_pfWorld.m_toWorld * vec3(cx, table->m_bottom, 0.f) * vpuToWorldScale;
+   const vec3 back = m_pfWorld.m_toWorld * vec3(cx, table->m_top, 0.f) * vpuToWorldScale;
+   const vec3 center = (front + back) * 0.5f;
    const vec3 width = m_pfWorld.m_toWorld.MultiplyVectorNoTranslate(vec3(table->m_right - table->m_left, 0.f, 0.f)) * vpuToWorldScale;
-
-   // Looking straight down (-Z of the view is forward), with the back of the table at the top of the image
-   const vec3 viewBack(0.f, 1.f, 0.f);
-   vec3 viewUp = length * -1.f;
-   viewUp.y = 0.f;
-   if (viewUp.LengthSquared() < 1e-8f)
+   const float length = (front - back).Length();
+   const vec3 up(0.f, 1.f, 0.f);
+   vec3 toPlayer = front - back; // Horizontal direction from the back of the table to the player
+   toPlayer.y = 0.f;
+   if (toPlayer.LengthSquared() < 1e-8f)
       return;
-   viewUp.Normalize();
-   const vec3 viewRight = CrossProduct(viewUp, viewBack);
+   toPlayer.Normalize();
 
-   // Rotation matrix (columns: right, up, back) to quaternion
+   // The captured eye has an asymmetric field of view: its image is centered on a direction which is not the view axis. The framing uses the half
+   // extents of the image around that direction (the eye is then shifted so that the target is at the center of the image, see below).
+   const XrFovf& fov = views[0].fov;
+   const float tanVertical = 0.5f * (tanf(fov.angleUp) - tanf(fov.angleDown));
+   const float tanHorizontal = 0.5f * (tanf(fov.angleRight) - tanf(fov.angleLeft));
+   const float tanCenterX = 0.5f * (tanf(fov.angleRight) + tanf(fov.angleLeft));
+   const float tanCenterY = 0.5f * (tanf(fov.angleUp) + tanf(fov.angleDown));
+   const auto fitDistance = [&](float halfWidth, float halfHeight) { return 1.1f * max(halfHeight / tanVertical, halfWidth / tanHorizontal); };
+
+   vec3 eye, target, upHint = up;
+   switch (captureView)
+   {
+   case TableCaptureView::Table:
+      // Straight down on the whole playfield, the back of the table at the top of the image
+      target = center;
+      eye = center + up * fitDistance(0.5f * width.Length(), 0.5f * length);
+      upHint = toPlayer * -1.f;
+      break;
+
+   case TableCaptureView::Backglass:
+   {
+      if (!m_tableCaptureBounds.empty())
+      {
+         // Facing the parts which show the backglass, framed on their bounds as seen from the player
+         const auto toWorld = [&](int space, const vec3& p)
+         {
+            using enum PartGroupData::SpaceReference;
+            const PartGroupData::SpaceReference spaceRef = static_cast<PartGroupData::SpaceReference>(space);
+            const Matrix3D& m = spaceRef == SR_CABINET ? m_cabWorld.m_toWorld : spaceRef == SR_CABINET_FEET ? m_feetWorld.m_toWorld : spaceRef == SR_ROOM ? m_roomWorld.m_toWorld : m_pfWorld.m_toWorld;
+            return (m * p) * vpuToWorldScale;
+         };
+         vec3 boundsMin(FLT_MAX, FLT_MAX, FLT_MAX), boundsMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+         vector<vec3> points;
+         for (const auto& [space, p] : m_tableCaptureBounds)
+         {
+            const vec3 w = toWorld(space, p);
+            points.push_back(w);
+            boundsMin = vec3(min(boundsMin.x, w.x), min(boundsMin.y, w.y), min(boundsMin.z, w.z));
+            boundsMax = vec3(max(boundsMax.x, w.x), max(boundsMax.y, w.y), max(boundsMax.z, w.z));
+         }
+         target = (boundsMin + boundsMax) * 0.5f;
+         const vec3 side = CrossProduct(up, toPlayer);
+         float halfWidth = 0.f, halfHeight = 0.f, front = 0.f;
+         for (const vec3& w : points)
+         {
+            const vec3 d = w - target;
+            halfWidth = max(halfWidth, fabsf(d.Dot(side)));
+            halfHeight = max(halfHeight, fabsf(d.Dot(up)));
+            front = max(front, d.Dot(toPlayer));
+         }
+         eye = target + toPlayer * (front + fitDistance(halfWidth, halfHeight));
+         break;
+      }
+      // Tables that do not name their backglass parts: it is placed like on a real cabinet (scaled like it), the glass centered
+      // about 55cm above and 10cm behind the back of the playfield. The framed area, 90 x 80cm, is larger than a usual glass (about 75 x 60cm)
+      // so that taller or higher backboxes keep their top
+      target = back + up * (0.55f * m_scale) - toPlayer * (0.1f * m_scale);
+      eye = target + toPlayer * fitDistance(0.45f * m_scale, 0.4f * m_scale);
+      break;
+   }
+
+   case TableCaptureView::Cabinet:
+   {
+      // From the front, 30 degrees to the right and 20 degrees above, the whole cabinet from the floor (reference space ground) to the top of the backbox
+      const float top = back.y + 0.85f * m_scale;
+      target = vec3(center.x, 0.5f * top, center.z);
+      const float yaw = ANGTORAD(30.f), pitch = ANGTORAD(20.f);
+      const vec3 side = CrossProduct(up, toPlayer); // Horizontal, to the right of the player
+      const vec3 horizontal = toPlayer * cosf(yaw) + side * sinf(yaw);
+      const vec3 direction = horizontal * cosf(pitch) + up * sinf(pitch);
+      const float radius = 0.5f * sqrtf(length * length + top * top + width.LengthSquared());
+      eye = target + direction * (1.1f * radius / sinf(atanf(min(tanVertical, tanHorizontal))));
+      break;
+   }
+
+   default: return;
+   }
+
+   // Look at the target: view basis (-Z of the view is forward), then rotation matrix (columns: right, up, back) to quaternion
+   vec3 viewBack = eye - target;
+   viewBack.Normalize();
+   vec3 viewRight = CrossProduct(upHint, viewBack);
+   if (viewRight.LengthSquared() < 1e-8f)
+      return;
+   viewRight.Normalize();
+   const vec3 viewUp = CrossProduct(viewBack, viewRight);
    const float m00 = viewRight.x, m01 = viewUp.x, m02 = viewBack.x;
    const float m10 = viewRight.y, m11 = viewUp.y, m12 = viewBack.y;
    const float m20 = viewRight.z, m21 = viewUp.z, m22 = viewBack.z;
@@ -922,16 +1007,15 @@ void VRDevice::SetTableTopViewPoses(std::vector<XrView>& views, float vpuToWorld
       orientation = { (m02 + m20) / s, (m12 + m21) / s, 0.25f * s, (m10 - m01) / s };
    }
 
-   // High enough for the whole playfield to fit in the (asymmetric) field of view of the captured eye, with a small margin
-   const XrFovf& fov = views[0].fov;
-   const float tanVertical = min(tanf(fov.angleUp), tanf(-fov.angleDown));
-   const float tanHorizontal = min(tanf(-fov.angleLeft), tanf(fov.angleRight));
-   const float height = 1.1f * max(0.5f * length.Length() / tanVertical, 0.5f * width.Length() / tanHorizontal);
+   // Shift the eye (not its orientation) so that the target lands at the center of the image, which is off the view axis: seen from the shifted eye,
+   // the target is in the direction (tanCenterX, tanCenterY, -1) of the view
+   const float distance = (eye - target).Length();
+   eye = eye - (viewRight * tanCenterX + viewUp * tanCenterY) * distance;
 
    for (XrView& view : views)
    {
       view.pose.orientation = orientation;
-      view.pose.position = { center.x, center.y + height, center.z };
+      view.pose.position = { eye.x, eye.y, eye.z };
    }
 }
 
@@ -1297,9 +1381,9 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
          // We could (should ?) make this a table data but this does not vary that much so this seems fine for the time being
          constexpr float lockbarToPlayfield = 5.f;
 
-         // Table image capture: the eyes are moved above the playfield (the composited frame then matches what was rendered)
-         if (m_tableTopView)
-            SetTableTopViewPoses(views, vpuToWorldScale);
+         // Table image capture: the eyes are moved to frame the table (the composited frame then matches what was rendered)
+         if (const TableCaptureView captureView = m_tableCaptureView; captureView != TableCaptureView::None)
+            SetTableCaptureViewPoses(views, vpuToWorldScale, captureView);
 
          // Continuous space positioning based on controller pose (for setup where controllers can be placed along a VR cabinet and used for XR play)
          if (m_controllerViewCentering)

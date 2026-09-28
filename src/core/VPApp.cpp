@@ -437,6 +437,17 @@ int VPApp::UseTableRoomInLobby(PinTable* table)
    return static_cast<int>(parts.size());
 }
 
+string VPApp::GetTableImageFocusLabel()
+{
+   static const char* const labels[] = { "Table image: Backglass", "Table image: Table (from above)", "Table image: Cabinet" };
+   return labels[clamp(g_app->m_settings.GetStandalone_TableImageFocus(), 0, 2)];
+}
+
+void VPApp::NextTableImageFocus()
+{
+   g_app->m_settings.SetStandalone_TableImageFocus((clamp(g_app->m_settings.GetStandalone_TableImageFocus(), 0, 2) + 1) % 3, false);
+}
+
 void VPApp::ResetLobbyRoom()
 {
    std::error_code ec;

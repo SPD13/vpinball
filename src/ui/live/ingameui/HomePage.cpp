@@ -45,8 +45,18 @@ void HomePage::BuildPage()
 
 #if defined(__STANDALONE__) && !defined(__LIBVPINBALL__)
    if (m_player->CanReplaceTableImage())
-      AddItem(std::make_unique<InGameUIItem>("Replace table image"s, "Use the current view as the image of this table in the table picker"s,
+   {
+      if (m_player->m_vrDevice)
+         AddItem(std::make_unique<InGameUIItem>(VPApp::GetTableImageFocusLabel(), "What the image shows: the backglass, the playfield seen from above, or the whole cabinet"s,
+            [this]()
+            {
+               VPApp::NextTableImageFocus();
+               RequestRebuild();
+            }));
+      AddItem(std::make_unique<InGameUIItem>("Replace table image"s,
+         m_player->m_vrDevice ? "Capture a new image of this table for the table picker, framed as chosen above"s : "Use the current view as the image of this table in the table picker"s,
          [this]() { m_player->ReplaceTableImage(); }));
+   }
 
    // The room of this table as the room of the lobby, from the table picker
    if (g_app->m_launcherMode && !m_player->m_isLobby && !VPApp::GetRoomParts(m_player->m_ptable).empty())
