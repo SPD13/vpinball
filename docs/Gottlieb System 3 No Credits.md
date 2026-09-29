@@ -73,6 +73,6 @@ PinMAME's System 3 switch numbers used by the test: coins 0 to 3, Start 4, coin 
 
 ## Follow-ups
 
-- [ ] Super Mario Bros (`smb.nv`) has the same zero settings: fix it with the manual solution, or the same scripted steps once its menu is checked.
+- [x] Super Mario Bros (`smb.nv`) had the same zero settings, fixed the same way on 2026-09-28 (previous file kept as `smb.nv.bak-2026-09-28-zero-settings`). Its older menu is shorter: one press of 7 shows "Test mode", one left flipper press reaches "Credit button to load factory settings", then Start twice. The first replay level becomes 60,000,000; checked by inserting 2 coins and pressing Start, which starts a game (Start alone does not).
 - [ ] Other Gottlieb System 3 tables added later will start with zero settings too.
 - [ ] Launcher idea, not implemented: detect a System 3 ROM whose adjustments are still zero and run the factory reset on its first start, or warn the player.
