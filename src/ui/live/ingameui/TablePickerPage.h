@@ -6,6 +6,8 @@
 
 #ifdef __STANDALONE__
 
+#include <future>
+
 namespace VPinballLib { struct Table; }
 class BaseTexture;
 
@@ -26,14 +28,20 @@ public:
 private:
    void BuildPage() override;
 
-   // Table images, loaded when they get visible, one per frame at most as decoding takes a few milliseconds
+   // Table images, loaded when they get visible. Decoding takes a few milliseconds, too long for a frame: it runs on worker threads, a few at
+   // a time, and the decoded images are uploaded to the GPU one per frame at most. The tiles show a spinner meanwhile.
    struct Thumbnail
    {
       std::shared_ptr<BaseTexture> texture;
       int64_t modifiedAt = 0;
+      std::future<std::shared_ptr<BaseTexture>> loading; // Valid while decoding
+      int64_t loadingModifiedAt = 0;
    };
    ImTextureID GetThumbnail(const VPinballLib::Table& table);
+   bool IsThumbnailLoading(const VPinballLib::Table& table) const;
+   void UpdateThumbnailLoads();
    ankerl::unordered_dense::map<string, Thumbnail> m_thumbnails;
+   vector<std::future<std::shared_ptr<BaseTexture>>> m_abandonedLoads; // Of thumbnails no longer displayed, kept until done not to wait for them
    bool m_thumbnailLoadedThisFrame = false;
 
    void SetTab(int tab);

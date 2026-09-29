@@ -58,7 +58,7 @@ New files: `src/ui/live/ingameui/TablePickerPage.h/.cpp`. Registered as `tables/
 - **Tabs:** All, Recent (by last played), Newly added (by date added), Most played, Favorites.
 - **Search box** filtering as you type, on every tab. In All, results are ordered by score.
 - **Pages** of 12 tables, with a pager above and below the tables. Only the tables of the page get menu items, sub-pages and thumbnails; thumbnails of other pages are released.
-- **Grid view** with thumbnails (decoded when visible, at most one per frame, downscaled to 512 px) and a **favorite star** on each thumbnail, or **list view**.
+- **Grid view** with thumbnails (decoded when visible on worker threads, two at a time, with a spinner on the tile meanwhile, uploaded to the GPU at most one per frame, downscaled to 512 px) and a **favorite star** on each thumbnail, or **list view**.
 - In the All tab: letter filter (from 9 tables up) and A–Z / Z–A sort.
 - Hovering or selecting a table shows when it was added, when it was last played and how many times.
 - Per-table page: Play / Restart, Add to / Remove from favorites, Rename, Reset table settings (if an `.ini` exists), Delete with confirmation. Reset and Delete are not offered for the running table. Actions fire once per press (the stock menu repeats an action every frame while a button is held).

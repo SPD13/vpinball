@@ -1028,6 +1028,15 @@ void InGameUIPage::RenderTile(int index, const ImVec2& pos, const ImVec2& size, 
       {
          drawList->AddRectFilled(imagePos, imagePos + imageSize, IM_COL32(255, 255, 255, 24));
          drawList->AddRect(imagePos, imagePos + imageSize, IM_COL32(255, 255, 255, 64));
+         if (item->m_tileLoading && item->m_tileLoading())
+         {
+            // Spinner: an arc of 3/4 of a turn, turning about once per second
+            const ImVec2 center = imagePos + imageSize * 0.5f;
+            const float radius = 0.12f * min(imageSize.x, imageSize.y);
+            const float start = static_cast<float>(ImGui::GetTime()) * 2.f * static_cast<float>(M_PI);
+            drawList->PathArcTo(center, radius, start, start + 1.5f * static_cast<float>(M_PI), 32);
+            drawList->PathStroke(IM_COL32(255, 255, 255, 160), ImDrawFlags_None, max(2.f, 0.2f * radius));
+         }
       }
 
       if (hovered)

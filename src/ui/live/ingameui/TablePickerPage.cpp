@@ -88,8 +88,17 @@ TablePickerPage::TablePickerPage()
 {
 }
 
+// Each decode keeps a core busy: a few at a time leave the others to the game and rendering threads
+static constexpr int MAX_THUMBNAIL_LOADS = 2;
+
+static bool IsReady(const std::future<std::shared_ptr<BaseTexture>>& future)
+{
+   return future.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+}
+
 TablePickerPage::~TablePickerPage()
 {
+   // Loads still running are waited for by their futures (a few milliseconds)
    for (auto& [uuid, thumbnail] : m_thumbnails)
       if (thumbnail.texture)
          m_player->m_renderer->m_renderDevice->m_texMan.UnloadTexture(thumbnail.texture.get());
@@ -99,18 +108,48 @@ ImTextureID TablePickerPage::GetThumbnail(const LibraryTable& table)
 {
    if (table.image.empty())
       return nullptr;
-   TextureManager& texMan = m_player->m_renderer->m_renderDevice->m_texMan;
    Thumbnail& thumbnail = m_thumbnails[table.uuid];
-   if (thumbnail.modifiedAt != table.modifiedAt && !m_thumbnailLoadedThisFrame)
+   // First use, or the image was replaced (the library updates the modification date): decode it on a worker thread
+   if (thumbnail.modifiedAt != table.modifiedAt && !thumbnail.loading.valid())
    {
-      // First use, or the image was replaced (the library updates the modification date)
-      m_thumbnailLoadedThisFrame = true;
-      if (thumbnail.texture)
-         texMan.UnloadTexture(thumbnail.texture.get());
-      thumbnail.texture = BaseTexture::CreateFromFile(g_app->GetTableLibrary().GetImagePath(table), 512);
-      thumbnail.modifiedAt = table.modifiedAt;
+      int loads = static_cast<int>(m_abandonedLoads.size());
+      for (const auto& [uuid, other] : m_thumbnails)
+         loads += other.loading.valid() ? 1 : 0;
+      if (loads < MAX_THUMBNAIL_LOADS)
+      {
+         thumbnail.loadingModifiedAt = table.modifiedAt;
+         thumbnail.loading = std::async(std::launch::async, [path = g_app->GetTableLibrary().GetImagePath(table)]() { return BaseTexture::CreateFromFile(path, 512); });
+      }
    }
-   return thumbnail.texture ? texMan.LoadTexture(thumbnail.texture.get(), false) : nullptr;
+   // Until then, the previous image if it was replaced
+   return thumbnail.texture ? m_player->m_renderer->m_renderDevice->m_texMan.LoadTexture(thumbnail.texture.get(), false) : nullptr;
+}
+
+bool TablePickerPage::IsThumbnailLoading(const LibraryTable& table) const
+{
+   if (table.image.empty())
+      return false;
+   const auto it = m_thumbnails.find(table.uuid);
+   return it == m_thumbnails.end() || (it->second.texture == nullptr && it->second.modifiedAt != table.modifiedAt);
+}
+
+// Takes the decoded images, one per frame at most as it is uploaded to the GPU when the tile is drawn
+void TablePickerPage::UpdateThumbnailLoads()
+{
+   std::erase_if(m_abandonedLoads, [](const auto& loading) { return IsReady(loading); });
+   for (auto& [uuid, thumbnail] : m_thumbnails)
+   {
+      if (m_thumbnailLoadedThisFrame)
+         break;
+      if (thumbnail.loading.valid() && IsReady(thumbnail.loading))
+      {
+         m_thumbnailLoadedThisFrame = true;
+         if (thumbnail.texture)
+            m_player->m_renderer->m_renderDevice->m_texMan.UnloadTexture(thumbnail.texture.get());
+         thumbnail.texture = thumbnail.loading.get(); // Null if the image could not be decoded: not tried again until it changes
+         thumbnail.modifiedAt = thumbnail.loadingModifiedAt;
+      }
+   }
 }
 
 void TablePickerPage::Open(bool isBackwardAnimation)
@@ -123,6 +162,7 @@ void TablePickerPage::Open(bool isBackwardAnimation)
 void TablePickerPage::Render(float elapsedS)
 {
    m_thumbnailLoadedThisFrame = false;
+   UpdateThumbnailLoads();
 
    // Scans run on a worker thread (they may import large files) and are also triggered outside of this page
    const TableLibrary& library = g_app->GetTableLibrary();
@@ -451,6 +491,7 @@ void TablePickerPage::BuildPage()
       if (gridView)
       {
          item.m_tileImage = [this, table]() { return GetThumbnail(table); };
+         item.m_tileLoading = [this, table]() { return IsThumbnailLoading(table); };
          item.m_tileToggleIconOn = ICON_FK_STAR;
          item.m_tileToggleIconOff = ICON_FK_STAR_O;
          item.m_tileToggleState = [favorite = table.favorite]() { return favorite; };
@@ -475,6 +516,8 @@ void TablePickerPage::KeepThumbnails(const ankerl::unordered_dense::set<string>&
       {
          if (it->second.texture)
             m_player->m_renderer->m_renderDevice->m_texMan.UnloadTexture(it->second.texture.get());
+         if (it->second.loading.valid())
+            m_abandonedLoads.push_back(std::move(it->second.loading));
          it = m_thumbnails.erase(it);
       }
    }

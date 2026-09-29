@@ -120,6 +120,8 @@ public:
    // Navigation and runnable items which define this are displayed as tiles (image with the label below) laid out as a grid.
    // The callback is only called for visible tiles, and may return a null image (not available, or not yet loaded).
    std::function<ImTextureID()> m_tileImage;
+   // Optional: true while the image of the tile is being loaded, to show a spinner instead of the empty placeholder
+   std::function<bool()> m_tileLoading;
 
    // Optional toggle of a tile, displayed as an icon in the top right corner of its image and clicked independently of the tile (for example a
    // favorite star). Pointer only: pages must offer another way to toggle it for button navigation.
