@@ -460,7 +460,17 @@ function renderMissingRoms(missingRoms) {
   DOMCache.get('missing-roms').hidden = missingRoms.length === 0 || !isRomsFolder(_directory);
 }
 
+// The shared ROM folder, in the tables folder: a direct link to it, as it gets lost in a long list of tables
+const ROMS_FOLDER = 'pinmame/roms';
+
+function updateRomsFolderLink(directory) {
+  const link = DOMCache.get('roms-folder-link');
+  if (link) // A page cached from before the link existed
+    link.hidden = (directory || '').toLowerCase() === ROMS_FOLDER;
+}
+
 function updateMissingRoms(directory) {
+  updateRomsFolderLink(directory);
   const panel = DOMCache.get('missing-roms');
   if (!panel) // A page cached from before the panel existed
     return;

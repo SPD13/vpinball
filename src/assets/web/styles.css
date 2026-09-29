@@ -358,6 +358,25 @@ body {
   to { opacity: 0.6; }
 }
 
+/* Direct links to folders that get lost in a long list of tables */
+.quick-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+}
+
+.quick-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.quick-links a[hidden] {
+  display: none;
+}
+
 /* ROMs that tables could not find, shown in the pinmame/roms folders */
 .missing-roms {
   margin: 0 0 1rem;
