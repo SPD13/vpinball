@@ -663,9 +663,10 @@ void InGameUIPage::Render(float elapsedS)
       {
          hoveredItem = item.get();
          ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0, 255, 0, 255));
-         ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetCursorScreenPos() - itemPadding,
-            ImGui::GetCursorScreenPos() + ImVec2(itemPadding.x, itemPadding.y * 2.f) + ImVec2(itemEndScreenX - ImGui::GetCursorScreenPos().x + itemPadding.x, rowHeight),
-            IM_COL32(0, 255, 0, 50));
+         if (!item->m_customHighlight)
+            ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetCursorScreenPos() - itemPadding,
+               ImGui::GetCursorScreenPos() + ImVec2(itemPadding.x, itemPadding.y * 2.f) + ImVec2(itemEndScreenX - ImGui::GetCursorScreenPos().x + itemPadding.x, rowHeight),
+               IM_COL32(0, 255, 0, 50));
          if (m_player->m_liveUI->m_inGameUI.IsFlipperNav())
          {
             if (ImGui::GetCursorPosY() - ImGui::GetScrollY() < 0.f)

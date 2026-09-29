@@ -131,6 +131,7 @@ public:
    string m_tileToggleIconOff;
 
    // UI behavior
+   bool m_customHighlight = false; // CustomRender items which highlight their own parts (like buttons): the page does not highlight their whole row
    bool m_excludeFromDefault = false; // If set this item is not reseted to its default value when user request a reset
 
 private:
