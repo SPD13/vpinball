@@ -1,3 +1,14 @@
+# Visual Pinball for the Steam Frame (unofficial fork)
+
+This fork is an attempt to create a standalone version of Visual Pinball for the Valve Steam Frame (SteamOS on ARM64, OpenXR, Vulkan), with a table launcher that works from inside the headset, and to add some quality of life features to the VR version: a table library and picker, a lobby, table images, uploading tables and ROMs from a browser, a menu usable with the VR controllers, and more.
+
+> [!CAUTION]
+> **This fork is not endorsed by the Visual Pinball community, as it extensively uses AI generated code.** It is not an official release: please do not report its problems to the Visual Pinball team. The official repository is [vpinball/vpinball](https://github.com/vpinball/vpinball).
+
+See [The `steam-frame` branch](docs/Steam%20Frame%20Branch.md) for what this fork changes, and how far each part has been tested.
+
+The rest of this file is the upstream README.
+
 # Visual Pinball
 
 *An open source pinball table editor and simulator.*

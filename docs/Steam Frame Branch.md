@@ -80,7 +80,7 @@ Files: `src/core/AppCommands.h/.cpp`, `src/core/main.cpp`, `src/core/VPApp.h/.cp
 - `-Play <table>` is unchanged, plus: the picker can switch table from the menu (`VPApp::m_nextTableFilename`, loop in `PlayTableCommand::Execute`).
 - A play is recorded in the library when a library table starts (`PlayTableCommand::Play`).
 - **Lobby.** `BuildLobby()` loads upstream's `src/assets/blankTable.vpx` and, in memory, replaces the script with an empty one, removes every part, adds an invisible `playfield_mesh`, sets a title and description, switches the views to camera mode, and adds a 12 × 12 m floor made of 36 tiles in two shades. The floor is in a part group using the room space (`SR_ROOM`). It is made of tiles because, outside VR, the near clipping plane is derived from the bounding-box corners of each part, which clips a single large quad away entirely. A table file authored in the editor can replace this by changing `VPApp::GetLobbyTablePath()` and removing the `BuildLobby()` call.
-- **Table image on close.** When a library table without an image is closed, a screenshot of the playfield window is saved as `<table>.jpg` (`Player::CaptureTableImageBeforeClosing`, triggered by `CS_CLOSE_CAPTURE_SCREENSHOT`, which the quit action now uses in launcher mode). This mirrors what the mobile library does. There is no timeout: if a capture never completed, the table would not close.
+- **Table image on close.** When a library table without an image is closed, a screenshot of the playfield window is saved as `<table>.jpg` (`Player::CaptureTableImageBeforeClosing`, triggered by `CS_CLOSE_CAPTURE_SCREENSHOT`, which the quit action now uses in launcher mode). This mirrors what the mobile library does. If the in-game menu is open (quitting from it, or from the missing ROM message), the capture waits for it to slide out; while closing, `LiveUI::RenderUI` keeps rendering the menu until it is gone but no other overlay, so none ends up in the image. There is no timeout: if a capture never completed, the table would not close.
 
 ## 5. Web upload on desktop
 
@@ -118,7 +118,7 @@ Files: `CMakeLists.txt`, `make/CMakeLists_app.txt`, `platforms/linux-x64/externa
 - **Windows standalone.** `ENABLE_XR` is also offered for `PLATFORM=windows-mingw`; standalone builds only use the Vulkan OpenXR backend.
 - Left as upstream: the desktop preview window created in VR.
 
-## 8. Added on Windows with a PSVR2 (2026-09-26 and 27)
+## 8. Added on Windows with a PSVR2 (2026-09-26 to 28)
 
 Used in the headset in the `windows-mingw` build with `ENABLE_XR`. Not compiled for Linux yet.
 
@@ -126,7 +126,8 @@ Used in the headset in the `windows-mingw` build with `ENABLE_XR`. Not compiled 
 - **Menu panel and pointer** (section 7): `Standalone/VRMenuDistance`; the ImGui vertex shader has per eye matrices (`vs_imgui.sc`, `bgfx_imgui.h` regenerated).
 - **Table picker:** MENU tab (the options formerly below the table list); virtual keyboard for the search field in VR; the menu distance buttons.
 - **Table images:** "Replace table image" in the table's menu (`Player::ReplaceTableImage`). Captures wait for the menu to be closed. In VR, `VRDevice::SetTableCaptureView` replaces the eye poses for the capture frames with the view chosen by `Standalone/TableImageFocus`: Backglass (default; framed on the bounding vertices of the parts named, or primitives textured with an image named, "backglass", otherwise on an estimate), Table (playfield from above) or Cabinet. The target is centred for each eye's asymmetric field of view.
-- **Missing ROMs:** plugin API `ShowMessage` (a message page the player acknowledges, `MessagePage`, lines starting with `!` shown in red) and `ReportMissingFile`, used by the PinMAME plugin when a ROM cannot start. The library records them in `missing-roms.json` (preferences folder); the web page shows them, grouped by table, when browsing `pinmame/roms`, with a Clear button; an upload of a file with the same name removes the entry (`/missing-roms` route).
+- **Missing ROMs:** plugin API `ShowMessage` (a message page the player acknowledges, `MessagePage`, lines starting with `!` shown in red) and `ReportMissingFile`, used by the PinMAME plugin when a ROM cannot start. The library records them in `missing-roms.json` (preferences folder); the web page shows them, grouped by table, when browsing `pinmame/roms`, with a Clear button; an upload of a file with the same name removes the entry (`/missing-roms` route). "Back to the table picker" on the message used to hang when the table had no image (the capture waited for a menu that was no longer rendered, see section 4); fixed.
+- **Link to the ROM folder** on the web page: "PinMAME ROMs (pinmame/roms)" above the file list opens the shared ROM folder, which gets lost in a long list of tables; hidden when already there.
 - **RAR and 7z** imports and web extraction through libarchive (`ZipUtils::Extract`, `IsExtractable`, `GetExtractableExtensions`), see section 1.
 - **Lobby room from a table:** "Use this VR room in the lobby" in a table's menu (`VPApp::UseTableRoomInLobby`, `lobby-room.json`): the lobby is loaded from that table and keeps only the visible parts of its room (room space part groups, layers named after a room, collections named `VR…` that are not the cabinet). "Use the default lobby room" in the MENU tab. The lobby does not use the image or texture cache of that table, and the table itself still shows Play.
 - **Notifications** in VR are stacked just above the menu window (`NotificationOverlay`).
@@ -157,13 +158,15 @@ docs/Steam Frame Branch.md
 Modified:
 
 ```
+README.md                               notice about this fork
 CMakeLists.txt                          ENABLE_XR option for Linux
 make/CMakeLists_sources.txt             new sources, VPX_WEBSERVER_SOURCES
 make/CMakeLists_app.txt                 web server, zip, ENABLE_XR and loader on macOS/Linux
 platforms/linux-aarch64/external.sh     OpenXR loader
 platforms/linux-x64/external.sh         OpenXR loader
 lib/src/WebServer.h, WebServer.cpp      desktop use, pairing, staged uploads
-src/assets/web/app.js, vpx.html         pairing prompt, Upload Folder
+src/assets/web/app.js, vpx.html         pairing prompt, Upload Folder, missing ROMs, ROM folder link
+src/assets/web/styles.css               missing ROMs, ROM folder link, upload banner
 src/core/AppCommands.h, AppCommands.cpp -Launcher, table switching, lobby
 src/core/main.cpp                       launcher counts as play mode
 src/core/VPApp.h, VPApp.cpp             table library, web server, ROM folder, lobby path
@@ -173,7 +176,7 @@ src/input/InputManager.cpp              quit action captures the image in launch
 src/input/XRInputHandler.h              Frame controller, aim poses, analog read
 src/renderer/VRDevice.h, VRDevice.cpp   Linux, Frame extension, pointer
 src/renderer/XRVulkanBackend.h          run-time libvulkan on Linux, extension filter
-src/ui/live/LiveUI.h, LiveUI.cpp        pointer fed to ImGui
+src/ui/live/LiveUI.h, LiveUI.cpp        pointer fed to ImGui, menu rendered while closing for the table image
 src/ui/live/ingameui/HomePage.cpp       "Tables" entry
 src/ui/live/ingameui/InGameUI.h, .cpp   page registration, accessors
 src/ui/live/ingameui/InGameUIItem.h     tile image and toggle
