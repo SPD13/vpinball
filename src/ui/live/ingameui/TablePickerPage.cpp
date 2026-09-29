@@ -256,16 +256,25 @@ void TablePickerPage::AdjustItem(float direction, bool isInitialPress)
 
 void TablePickerPage::RenderTabs()
 {
-   // One clickable label per tab, wrapping on a second line if the menu is narrow (VR). With buttons, left/right change the tab.
+   // One button per tab, large enough to be hit easily with a mouse or a VR pointer, wrapping on a second line if the menu is narrow (VR).
+   // With buttons, left/right change the tab.
    const ImGuiStyle& style = ImGui::GetStyle();
    const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+   const float textHeight = ImGui::GetTextLineHeight();
+   const ImVec2 padding(0.9f * textHeight, 0.4f * textHeight);
+   const float rounding = 0.3f * textHeight;
+   ImDrawList* const drawList = ImGui::GetWindowDrawList();
+   // The row is not highlighted as a whole (only the hovered button is): with buttons, the selected tab turns green when the row has the focus
+   const InGameUIItem* const selectedItem = GetSelectedItem();
+   const bool hasFocus = m_player->m_liveUI->m_inGameUI.IsFlipperNav() && selectedItem != nullptr && selectedItem->m_label == TABS_ITEM;
    ImGui::PushID(TABS_ITEM);
    for (int i = 0; i < static_cast<int>(std::size(TAB_NAMES)); i++)
    {
-      const ImVec2 size = ImGui::CalcTextSize(TAB_NAMES[i]);
+      const ImVec2 textSize = ImGui::CalcTextSize(TAB_NAMES[i]);
+      const ImVec2 size = textSize + padding * 2.f;
       if (i > 0)
       {
-         ImGui::SameLine(0.f, 2.f * style.ItemSpacing.x);
+         ImGui::SameLine(0.f, style.ItemSpacing.x);
          if (ImGui::GetCursorScreenPos().x + size.x > right)
             ImGui::NewLine();
       }
@@ -276,10 +285,13 @@ void TablePickerPage::RenderTabs()
       if (ImGui::InvisibleButton(TAB_NAMES[i], size))
          SetTab(i);
       const bool isActive = static_cast<int>(s_tab) == i;
-      const ImU32 color = isActive ? IM_COL32(255, 255, 255, 255) : ImGui::IsItemHovered() ? IM_COL32(0, 255, 0, 255) : IM_COL32(170, 170, 170, 255);
-      ImGui::GetWindowDrawList()->AddText(pos, color, TAB_NAMES[i]);
+      const bool isHovered = ImGui::IsItemHovered() || (hasFocus && isActive);
+      const ImU32 background = isHovered ? IM_COL32(0, 255, 0, 50) : isActive ? IM_COL32(255, 255, 255, 56) : IM_COL32(255, 255, 255, 16);
+      const ImU32 color = isHovered ? IM_COL32(0, 255, 0, 255) : isActive ? IM_COL32(255, 255, 255, 255) : IM_COL32(170, 170, 170, 255);
+      drawList->AddRectFilled(pos, pos + size, background, rounding);
       if (isActive)
-         ImGui::GetWindowDrawList()->AddLine(ImVec2(pos.x, pos.y + size.y + 1.f), ImVec2(pos.x + size.x, pos.y + size.y + 1.f), color, 2.f);
+         drawList->AddRect(pos, pos + size, color, rounding, ImDrawFlags_None, 2.f);
+      drawList->AddText(pos + padding, color, TAB_NAMES[i]);
    }
    ImGui::PopID();
 }
@@ -449,7 +461,7 @@ void TablePickerPage::BuildPage()
       tables = vector<LibraryTable>(tables.begin() + static_cast<std::ptrdiff_t>(first), tables.begin() + static_cast<std::ptrdiff_t>(min(first + TABLES_PER_PAGE, matchCount)));
    }
 
-   AddItem(std::make_unique<InGameUIItem>(TABS_ITEM, "Left/Right: previous/next list"s, [this](int, const InGameUIItem*) { RenderTabs(); }));
+   AddItem(std::make_unique<InGameUIItem>(TABS_ITEM, "Left/Right: previous/next list"s, [this](int, const InGameUIItem*) { RenderTabs(); })).m_customHighlight = true;
    if (s_tab == PickerTab::Menu)
    {
       KeepThumbnails({});
