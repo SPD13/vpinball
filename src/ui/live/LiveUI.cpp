@@ -395,7 +395,12 @@ void LiveUI::Render3D()
 
 void LiveUI::RenderUI()
 {
-   if (m_player == nullptr || m_player->GetCloseState() != Player::CS_PLAYING || m_rd->GetCurrentPass() == nullptr || m_player->m_playMode == Player::PlayMode::CaptureAttract)
+   if (m_player == nullptr || m_rd->GetCurrentPass() == nullptr || m_player->m_playMode == Player::PlayMode::CaptureAttract)
+      return;
+   // When closing to capture the table image, the capture waits for the in-game menu to have slid out (see Player::CaptureTableImageBeforeClosing):
+   // keep rendering it until then, but nothing else, so that it does not end up in the image
+   const bool closingForCapture = m_player->GetCloseState() == Player::CS_CLOSE_CAPTURE_SCREENSHOT;
+   if (m_player->GetCloseState() != Player::CS_PLAYING && !closingForCapture)
       return;
 
    const ImGuiIO& io = ImGui::GetIO();
@@ -403,53 +408,57 @@ void LiveUI::RenderUI()
    const int width = static_cast<int>(rotated ? io.DisplaySize.y : io.DisplaySize.x);
    const int height = static_cast<int>(rotated ? io.DisplaySize.x : io.DisplaySize.y);
 
-   UpdateTouchUI();
+   if (!closingForCapture)
+      UpdateTouchUI();
 
    ImGui::PushFont(m_baseFont, m_baseFont->LegacySize);
 
    // Tweak UI (aligned to playfield view, using custom flipper controls)
    m_inGameUI.Update();
 
-   // VR controller pointer
-   if (m_vrPointerVisible)
+   if (!closingForCapture)
    {
-      ImGui::GetForegroundDrawList()->AddCircleFilled(m_vrPointerPos, 7.f * m_uiScale, m_vrPointerPressed ? IM_COL32(0, 255, 0, 255) : IM_COL32(255, 255, 255, 255));
-      ImGui::GetForegroundDrawList()->AddCircle(m_vrPointerPos, 7.f * m_uiScale, IM_COL32(0, 0, 0, 255), 0, 2.f * m_uiScale);
+      // VR controller pointer
+      if (m_vrPointerVisible)
+      {
+         ImGui::GetForegroundDrawList()->AddCircleFilled(m_vrPointerPos, 7.f * m_uiScale, m_vrPointerPressed ? IM_COL32(0, 255, 0, 255) : IM_COL32(255, 255, 255, 255));
+         ImGui::GetForegroundDrawList()->AddCircle(m_vrPointerPos, 7.f * m_uiScale, IM_COL32(0, 0, 0, 255), 0, 2.f * m_uiScale);
+      }
+
+      if (!m_player->IsPlaying() && !m_editorUI.IsOpened())
+      {
+         ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 24 * m_uiScale, 4 * m_uiScale));
+         ImGui::Begin("PauseOverlay", nullptr, ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoBringToFrontOnFocus // Prevent focus issues
+               | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+         ImGui::Text(ICON_FK_PAUSE);
+         ImGui::End();
+      }
+
+      if (m_editorUI.IsOpened())
+      { // Editor UI (aligned to desktop, using traditional mouse interaction)
+         SetupImGuiStyle(true);
+         m_editorUI.RenderUI();
+         SetupImGuiStyle(false);
+      }
+      else if (!m_inGameUI.IsOpened())
+      { // No UI displayed: process ball control & throw balls
+         m_ballControl.Update(width, height);
+      }
+
+      // Display plumb state overlay
+      m_plumbOverlay.Update();
+
+      // Display notification overlays except when script has an unaligned rotation. In VR, the UI display area is a large panel of which the player
+      // looks at the in-game menu window: notifications (like the confirmation of a menu action) are stacked just above that window, not to be missed
+      float notificationsAboveY = -1.f;
+      if (m_player->m_vrDevice && m_inGameUI.IsOpened())
+         if (const float menuTop = m_inGameUI.GetActivePage()->GetWindowPos().y; menuTop > 0.1f * io.DisplaySize.y)
+            notificationsAboveY = menuTop - 10.f * m_uiScale;
+      m_notificationOverlay.Update(true, m_overlayFont, notificationsAboveY);
+
+      // Display performance overlays
+      m_perfUI.Update();
    }
-
-   if (!m_player->IsPlaying() && !m_editorUI.IsOpened())
-   {
-      ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 24 * m_uiScale, 4 * m_uiScale));
-      ImGui::Begin("PauseOverlay", nullptr, ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoBringToFrontOnFocus // Prevent focus issues
-            | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
-      ImGui::Text(ICON_FK_PAUSE);
-      ImGui::End();
-   }
-
-   if (m_editorUI.IsOpened())
-   { // Editor UI (aligned to desktop, using traditional mouse interaction)
-      SetupImGuiStyle(true);
-      m_editorUI.RenderUI();
-      SetupImGuiStyle(false);
-   }
-   else if (!m_inGameUI.IsOpened())
-   { // No UI displayed: process ball control & throw balls
-      m_ballControl.Update(width, height);
-   }
-
-   // Display plumb state overlay
-   m_plumbOverlay.Update();
-
-   // Display notification overlays except when script has an unaligned rotation. In VR, the UI display area is a large panel of which the player
-   // looks at the in-game menu window: notifications (like the confirmation of a menu action) are stacked just above that window, not to be missed
-   float notificationsAboveY = -1.f;
-   if (m_player->m_vrDevice && m_inGameUI.IsOpened())
-      if (const float menuTop = m_inGameUI.GetActivePage()->GetWindowPos().y; menuTop > 0.1f * io.DisplaySize.y)
-         notificationsAboveY = menuTop - 10.f * m_uiScale;
-   m_notificationOverlay.Update(true, m_overlayFont, notificationsAboveY);
-
-   // Display performance overlays
-   m_perfUI.Update();
 
    ImGui::PopFont();
 
