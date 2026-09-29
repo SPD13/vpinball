@@ -156,7 +156,8 @@ public:
    unsigned int GetEyeHeight() const { return m_eyeHeight; }
 
    #if defined(ENABLE_XR)
-   // The UI is displayed on a panel standing in the room, placed in front of the player when it is first displayed and each time RecenterUIPanel is called
+   // The UI is displayed on a panel standing in the room, placed in front of the player in the table's forward direction (not where the head looks)
+   // when it is first displayed and each time RecenterUIPanel is called
    void RecenterUIPanel() { m_uiPanelPlaced = false; }
    // Transforms from UI pixel coordinates (0..width, 0..height from the top left of the panel) to each eye clip space. Returns false if the panel is not placed yet
    bool GetUIPanelTransforms(float width, float height, Matrix3D (&pixelToClip)[2]) const;

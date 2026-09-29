@@ -790,8 +790,8 @@ void VRDevice::CreateSession()
    g_pplayer->m_pininput.AddInputHandler(std::move(inputHandler));
 }
 
-// The UI is displayed on a vertical panel standing in the room (the reference space, in meters), placed in front of the head when it
-// is first displayed. Pointing at it is intersecting the aim ray of a controller with that panel.
+// The UI is displayed on a vertical panel standing in the room (the reference space, in meters), placed in front of the head, facing the
+// table's forward direction, when it is first displayed. Pointing at it is intersecting the aim ray of a controller with that panel.
 void VRDevice::UpdateUIPanel(const std::vector<XrView>& views, XrTime time)
 {
    m_uiPointerValid = false;
@@ -815,11 +815,11 @@ void VRDevice::UpdateUIPanel(const std::vector<XrView>& views, XrTime time)
       constexpr float width = 2.8f, belowEyes = 0.1f; // meters
       const float distance = clamp(g_app->m_settings.GetStandalone_VRMenuDistance(), 0.3f, 3.f);
       const float height = width * static_cast<float>(m_eyeHeight) / static_cast<float>(m_eyeWidth);
-      vec3 forward = rotate(views[0].pose.orientation, vec3(0.f, 0.f, -1.f));
-      forward.y = 0.f; // Upright panel, facing the head horizontally
-      if (forward.LengthSquared() < 1e-4f)
-         forward = vec3(0.f, 0.f, -1.f);
-      forward.Normalize();
+      // Upright panel in the forward direction of the table (the way the player faces it at the lockbar), wherever the head looks, so that
+      // the player turns to the table, or moves, to read the menu. The scene orientation is the yaw of that direction (see the table
+      // centering in RenderFrame: looking along -Z gives 0, turned left towards -X gives +90 degrees).
+      const float orientation = ANGTORAD(m_orientation);
+      const vec3 forward(-sinf(orientation), 0.f, -cosf(orientation));
       const vec3 up(0.f, 1.f, 0.f);
       const vec3 right = CrossProduct(forward, up);
       const vec3 center = head + forward * distance - up * belowEyes;
