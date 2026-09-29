@@ -4,11 +4,27 @@ This branch of the fork `SPD13/vpinball` prepares Visual Pinball's standalone pl
 
 This document lists everything the branch changes, where, and how far each part has been checked.
 
+## What the player gets
+
+Changes a player sees, in the standalone builds (details in the numbered sections):
+
+- **Table picker** in the in-game menu ("Tables"), which is also the start screen in launcher mode: choose and switch tables without leaving the player (section 3).
+- **Lists of tables** as tabs: All, Recent, Newly added, Most played, Favorites, plus a MENU tab for the library and application options. The tabs are large buttons, easy to hit with a mouse or a VR pointer.
+- **Thumbnails**: a grid of table images, loaded in the background with a spinner on each tile meanwhile; a list view is also available. A table without an image gets a screenshot when it is closed, and "Replace table image" takes a new one (sections 4 and 8).
+- **Favorites**: a star on each thumbnail, or "Add to favorites" in the table's page; the Favorites tab lists them.
+- **Pagination**: 12 tables per page, with a pager above and below the list, so large libraries stay fast.
+- **Search** as you type (a virtual keyboard in VR), a letter filter and A–Z / Z–A sort in the All tab, and play statistics (added, last played, times played) for the hovered table.
+- **Table actions**: play, restart, rename, reset the table settings, delete, and use the table's VR room in the lobby.
+- **Lobby** in launcher mode, from which tables are started and to which they return (section 4).
+- **Web upload**: add tables and ROMs from a browser on the local network, with a pairing code, missing ROMs listed, and a link to the ROM folder (sections 5 and 8).
+- **Missing ROM message** naming the files to add and where (section 8).
+- **VR**: the menu on a panel standing in the room, in the table's direction, at an adjustable distance, used with the controllers' pointer; notifications above the menu (sections 7 and 8).
+
 ## Status
 
 | Part | State |
 |---|---|
-| Table library, table picker, launcher mode, web upload, shared ROM folder | Built and run on macOS arm64. Checked through automated tests, scripted runs with frame captures of the real application, and `curl` for the web server. Not yet driven by a person with a mouse, a keyboard or a controller for every feature (see each section). |
+| Table library, table picker, launcher mode, web upload, shared ROM folder | Built and run on macOS arm64. Checked through automated tests, scripted runs with frame captures of the real application, and `curl` for the web server. On Windows, the table picker was tested by hand (tabs, thumbnail grid, favorite stars, pager arrows, search box); other parts are not yet driven by a person for every feature (see each section). |
 | OpenXR, Valve Frame controller profile, Vulkan extension filter, VR menu panel and pointer | **Run in VR on Windows with a PSVR2** (SteamVR 2.17), in the `windows-mingw` build with `ENABLE_XR=ON` (2026-09-27), which is standalone + OpenXR + Vulkan like the Frame build. Linux ARM64: compiled on 2026-09-19 only, **before** the work done on Windows (section 8), which has not been compiled for Linux yet. Nothing has run on a Steam Frame. |
 | Windows | `windows-mingw` (with or without `ENABLE_XR`): built and used with GCC 16 (MSYS2 UCRT64), Debug. Visual Studio build: built and run in VR in Debug with Vulkan, without the launcher (see "Build variants"). |
 | iOS / Android library builds | Not compiled. Shared files they use were changed (`WebServer`, `InGameUIPage`, `VPApp`, `player`); see "Effects on existing builds". |
@@ -55,7 +71,7 @@ Files: `src/ui/live/ingameui/InGameUIItem.h`, `InGameUIPage.h/.cpp`, `InGameUI.h
 
 New files: `src/ui/live/ingameui/TablePickerPage.h/.cpp`. Registered as `tables/picker` in `InGameUI.cpp`; "Tables" entry added at the top of `HomePage.cpp` for standalone builds other than the mobile library.
 
-- **Tabs:** All, Recent (by last played), Newly added (by date added), Most played, Favorites.
+- **Tabs:** All, Recent (by last played), Newly added (by date added), Most played, Favorites, and MENU at the right end (the library and application options, section 8). They are drawn as padded buttons (`RenderTabs`); only the hovered button is highlighted, not the whole row (new `InGameUIItem::m_customHighlight`), and with buttons the current tab turns green when the row has the focus.
 - **Search box** filtering as you type, on every tab. In All, results are ordered by score.
 - **Pages** of 12 tables, with a pager above and below the tables. Only the tables of the page get menu items, sub-pages and thumbnails; thumbnails of other pages are released.
 - **Grid view** with thumbnails (decoded when visible on worker threads, two at a time, with a spinner on the tile meanwhile, uploaded to the GPU at most one per frame, downscaled to 512 px) and a **favorite star** on each thumbnail, or **list view**.
@@ -70,7 +86,7 @@ New settings (`src/core/Settings_properties.inl`): `Standalone/TablesPath` (empt
 
 The library is owned by `VPApp::GetTableLibrary()` (`src/core/VPApp.h/.cpp`). It uses a dedicated sub folder because upstream's default tables location on desktop is the whole documents folder, which must not be scanned, served by the web server, or have its zips consumed.
 
-Not verified: clicking a star, a tab or a pager arrow with a real mouse, and typing in the search box. The scripted checks drove the same code paths without input devices.
+Tested by hand on Windows (2026-09-28) and working: the tabs, the grid with its thumbnails, clicking a star, the pager arrows and the search box.
 
 ## 4. Launcher mode and lobby
 
