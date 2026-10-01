@@ -24,8 +24,8 @@ Changes a player sees, in the standalone builds (details in the numbered section
 
 | Part | State |
 |---|---|
-| Table library, table picker, launcher mode, web upload, shared ROM folder | Built and run on macOS arm64. Checked through automated tests, scripted runs with frame captures of the real application, and `curl` for the web server. On Windows, the table picker was tested by hand (tabs, thumbnail grid, favorite stars, pager arrows, search box); other parts are not yet driven by a person for every feature (see each section). |
-| OpenXR, Valve Frame controller profile, Vulkan extension filter, VR menu panel and pointer | **Run in VR on Windows with a PSVR2** (SteamVR 2.17), in the `windows-mingw` build with `ENABLE_XR=ON` (2026-09-27), which is standalone + OpenXR + Vulkan like the Frame build. Linux ARM64: compiled on 2026-09-19 only, **before** the work done on Windows (section 8), which has not been compiled for Linux yet. Nothing has run on a Steam Frame. |
+| Table library, table picker, launcher mode, web upload, shared ROM folder | Built and run on macOS arm64. Checked through automated tests, scripted runs with frame captures of the real application, and `curl` for the web server. On Windows, the table picker was tested by hand (tabs, thumbnail grid, favorite stars, pager arrows, search box); other parts are not yet driven by a person for every feature (see each section). On the Steam Frame (2026-10-01), the lobby, the Wi-Fi upload and uploaded tables were used in the headset. |
+| OpenXR, Valve Frame controller profile, Vulkan extension filter, VR menu panel and pointer | **Run in VR on Windows with a PSVR2** (SteamVR 2.17), in the `windows-mingw` build with `ENABLE_XR=ON` (2026-09-27), which is standalone + OpenXR + Vulkan like the Frame build. Linux ARM64: rebuilt with everything on 2026-09-28 and **run in the headset on the Steam Frame on 2026-10-01** after the driver workaround of section 7: OpenXR runtime found, Frame controller profile accepted with its 32 bindings, lobby and tables displayed (details in `Doc/steam-frame-port-plan.md`, section 6). Not yet checked there: launch from the Steam library, pointer and buttons, performance. |
 | Windows | `windows-mingw` (with or without `ENABLE_XR`): built and used with GCC 16 (MSYS2 UCRT64), Debug. Visual Studio build: built and run in VR in Debug with Vulkan, without the launcher (see "Build variants"). |
 | iOS / Android library builds | Not compiled. Shared files they use were changed (`WebServer`, `InGameUIPage`, `VPApp`, `player`); see "Effects on existing builds". |
 
@@ -132,6 +132,8 @@ Files: `CMakeLists.txt`, `make/CMakeLists_app.txt`, `platforms/linux-x64/externa
 - **Menu distance.** New setting `Standalone/VRMenuDistance`: distance between the player and the panel, 0.3 m to 3 m, default 0.8 m. In VR, the MENU tab of the picker shows "Menu distance" with − and + buttons that move the panel by 10 cm and place it again at once. The buttons are used with the pointer; flipper-button navigation does not change them.
 - **VR pointer.** `VRDevice::UpdateUIPanel` intersects a controller's aim ray with the panel; `LiveUI::NewFrame` feeds the hit point to ImGui as the mouse position, with the trigger as the left button (press at 0.7, release at 0.4), draws the ray and a dot, and scrolls with the thumbstick. The right hand is preferred.
 - **Windows standalone.** `ENABLE_XR` is also offered for `PLATFORM=windows-mingw`; standalone builds only use the Vulkan OpenXR backend.
+- **VR by default on standalone OpenXR builds.** `PlayerVR/AskToTurnOn` defaults to "Autodetect" when `__STANDALONE__` and `ENABLE_XR` are both defined (Steam Frame, windows-mingw with `ENABLE_XR`); it stays "Enabled" on Android and "Disabled" elsewhere. Without it the Frame ran the launcher in a flat window.
+- **Steam Frame Vulkan driver workaround (Linux ARM64 only).** `platforms/linux-aarch64/bgfx-turnip-descriptor-pool.patch`, applied to bgfx by `platforms/linux-aarch64/external.sh`, creates bgfx's descriptor pools without `VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT` (bgfx never frees single sets, it resets whole pools every frame, so the flag was unused). With the flag, Turnip (Mesa 26.3.0-devel on the Frame, 2026-09-30) allocates sets from a free-list heap and places them partly outside the pool's memory: the first `vkUpdateDescriptorSets` of every run crashed inside the driver, and once that was padded around, every sampled texture read as black (the GPU was reading descriptors from unmapped memory), which showed as an empty black view in the headset and a black desktop window. Found with bgfx's own examples on the device: geometry and gradients rendered, every texture did not. The dependency script's cache key carries a `-turnip2` suffix so existing dependency builds rebuild bgfx. The change is harmless on other drivers and could go to bgfx upstream.
 - Left as upstream: the desktop preview window created in VR.
 
 ## 8. Added on Windows with a PSVR2 (2026-09-26 to 28)
@@ -178,7 +180,8 @@ README.md                               notice about this fork
 CMakeLists.txt                          ENABLE_XR option for Linux
 make/CMakeLists_sources.txt             new sources, VPX_WEBSERVER_SOURCES
 make/CMakeLists_app.txt                 web server, zip, ENABLE_XR and loader on macOS/Linux
-platforms/linux-aarch64/external.sh     OpenXR loader
+platforms/linux-aarch64/external.sh     OpenXR loader, xz + libarchive, bgfx patch for the Frame's driver
+platforms/linux-aarch64/bgfx-turnip-descriptor-pool.patch   descriptor pools without the free-set flag (section 7)
 platforms/linux-x64/external.sh         OpenXR loader
 lib/src/WebServer.h, WebServer.cpp      desktop use, pairing, staged uploads
 src/assets/web/app.js, vpx.html         pairing prompt, Upload Folder, missing ROMs, ROM folder link
@@ -186,7 +189,7 @@ src/assets/web/styles.css               missing ROMs, ROM folder link, upload ba
 src/core/AppCommands.h, AppCommands.cpp -Launcher, table switching, lobby
 src/core/main.cpp                       launcher counts as play mode
 src/core/VPApp.h, VPApp.cpp             table library, web server, ROM folder, lobby path
-src/core/Settings_properties.inl        three Standalone settings
+src/core/Settings_properties.inl        Standalone settings, VR autodetect default on standalone OpenXR builds
 src/core/player.h, player.cpp           table image on close
 src/input/InputManager.cpp              quit action captures the image in launcher mode
 src/input/XRInputHandler.h              Frame controller, aim poses, analog read

@@ -247,6 +247,9 @@ PropInt(Input, PlungerSensorCount, "Plunger Sensor Count"s, "Number of hardware 
 #if SDL_PLATFORM_ANDROID && defined(ENABLE_XR)
 // Android with VR is native Quest build, so force VR mode
 PropEnum(PlayerVR, AskToTurnOn, "Enable VR"s, "Ask to turn on VR"s, int, 0, "Enabled"s, "Autodetect"s, "Disabled"s);
+#elif defined(__STANDALONE__) && defined(ENABLE_XR)
+// Standalone builds with OpenXR (Steam Frame, Windows MinGW with ENABLE_XR) are meant for a headset: use it when the runtime reports one
+PropEnum(PlayerVR, AskToTurnOn, "Enable VR"s, "Ask to turn on VR"s, int, 1, "Enabled"s, "Autodetect"s, "Disabled"s);
 #else
 PropEnum(PlayerVR, AskToTurnOn, "Enable VR"s, "Ask to turn on VR"s, int, 2, "Enabled"s, "Autodetect"s, "Disabled"s);
 #endif
