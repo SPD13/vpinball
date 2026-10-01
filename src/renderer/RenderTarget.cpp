@@ -225,6 +225,9 @@ RenderTarget::RenderTarget(RenderDevice* const rd, const SurfaceType type, const
          exit(-1);
       }
       bgfx::setName(m_framebuffer, name.c_str());
+      #ifdef BGFX_RESOLVE_FRAGMENT_DENSITY_MAP
+      m_plainFramebuffer = m_framebuffer;
+      #endif
    }
 
    // Create ancillary framebuffers to be able to blit & render from/to the other layers
@@ -549,8 +552,60 @@ RenderTarget::RenderTarget(RenderDevice* const rd, const SurfaceType type, const
 #endif
 }
 
+#if defined(ENABLE_BGFX) && defined(BGFX_RESOLVE_FRAGMENT_DENSITY_MAP)
+void RenderTarget::SetFragmentDensityMap(bgfx::TextureHandle map)
+{
+   if (!bgfx::isValid(m_plainFramebuffer))
+      return;
+   if (!bgfx::isValid(map))
+   {
+      m_framebuffer = m_plainFramebuffer;
+      return;
+   }
+   const auto cached = m_fdmFramebuffers.find(map.idx);
+   if (cached != m_fdmFramebuffers.end())
+   {
+      m_framebuffer = cached->second;
+      return;
+   }
+   // Same attachments as the plain frame buffer, plus the density map, which bgfx keeps out of the color targets
+   std::array<bgfx::Attachment, 3> attachments;
+   uint8_t n = 0;
+   attachments[n++].init(m_color_tex, bgfx::Access::Write, 0, m_nLayers, 0, BGFX_RESOLVE_NONE);
+   if (m_has_depth)
+      attachments[n++].init(IsMSAA() ? m_msaaResolveDepthTex : m_depth_tex, bgfx::Access::Write, 0, m_nLayers, 0, BGFX_RESOLVE_NONE);
+   attachments[n++].init(map, bgfx::Access::Read, 0, m_nLayers, 0, BGFX_RESOLVE_FRAGMENT_DENSITY_MAP);
+   const bgfx::FrameBufferHandle fb = bgfx::createFrameBuffer(n, attachments.data());
+   if (!bgfx::isValid(fb))
+   {
+      PLOGE << "Failed to create the frame buffer of " << m_name << " with a fragment density map; foveated rendering disabled for it";
+      m_fdmFramebuffers[map.idx] = m_plainFramebuffer;
+      m_framebuffer = m_plainFramebuffer;
+      return;
+   }
+   bgfx::setName(fb, (m_name + " (foveated)").c_str());
+   PLOGI << "Fragment density map attached to " << m_name << " (" << m_width << 'x' << m_height << ", " << m_nLayers << " layers)";
+   m_fdmFramebuffers[map.idx] = fb;
+   m_framebuffer = fb;
+}
+
+void RenderTarget::SetFragmentDensityMapOffsets(const int32_t* offsetsXY, int nLayers)
+{
+   if (bgfx::isValid(m_framebuffer) && m_framebuffer.idx != m_plainFramebuffer.idx)
+      bgfx::setFragmentDensityMapOffsets(m_framebuffer, offsetsXY, static_cast<uint8_t>(min(nLayers, m_nLayers)));
+}
+#endif
+
 RenderTarget::~RenderTarget()
 {
+   #if defined(ENABLE_BGFX) && defined(BGFX_RESOLVE_FRAGMENT_DENSITY_MAP)
+   for (const auto& [idx, fb] : m_fdmFramebuffers)
+      if (bgfx::isValid(fb) && fb.idx != m_plainFramebuffer.idx)
+         bgfx::destroy(fb);
+   m_fdmFramebuffers.clear();
+   if (bgfx::isValid(m_plainFramebuffer))
+      m_framebuffer = m_plainFramebuffer;
+   #endif
 #if defined(ENABLE_BGFX)
    if (bgfx::isValid(m_framebuffer))
       bgfx::destroy(m_framebuffer);
@@ -760,9 +815,8 @@ void RenderTarget::Activate(const int layer)
 
    #if defined(ENABLE_BGFX)
    m_rd->NextView();
-   #ifdef _DEBUG
-   bgfx::setViewName(m_rd->m_activeViewId, m_name.c_str());
-   #endif
+   if (m_rd->m_nameViews)
+      m_rd->SetViewName(m_rd->m_activeViewId, m_name);
    // Either bind all layers for instanced rendering or the only requested one for normal rendering (one pass per layer)
    bgfx::setViewFrameBuffer(m_rd->m_activeViewId, (layer == -1 || m_nLayers == 1) ? m_framebuffer : m_framebuffer_layers[layer]);
    bgfx::setViewRect(m_rd->m_activeViewId, 0, 0, m_width, m_height);
@@ -808,7 +862,8 @@ void RenderTarget::ResolveMSAADepth()
    current_render_target = nullptr;
    current_render_layer = -1;
    m_rd->NextView();
-   bgfx::setViewName(m_rd->m_activeViewId, (m_name + ".Resolve").c_str());
+   if (m_rd->m_nameViews)
+      m_rd->SetViewName(m_rd->m_activeViewId, m_name + ".Resolve");
    bgfx::setViewFrameBuffer(m_rd->m_activeViewId, m_msaaDepthResolveFramebuffer);
    bgfx::setViewRect(m_rd->m_activeViewId, 0, 0, m_width, m_height);
 

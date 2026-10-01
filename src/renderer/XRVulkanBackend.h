@@ -7,6 +7,8 @@
 #ifdef XR_USE_GRAPHICS_API_VULKAN
 
 #include <vulkan/vulkan.h>
+#include <algorithm>
+#include <cstring>
 
 #ifdef XR_USE_PLATFORM_ANDROID
 #include <vulkan/vulkan_android.h>
@@ -238,11 +240,60 @@ public:
       deviceExtensions.push_back(VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME);
       //deviceExtensions.push_back(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
       //deviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME); // For preview swapchain
+
+      // Foveated rendering: fragment density maps (and one map layer per eye on a layered frame buffer) when the driver has them and bgfx can attach them
+      VkPhysicalDeviceFragmentDensityMapFeaturesEXT fdmFeatures { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT };
+      VkPhysicalDeviceFragmentDensityMapLayeredFeaturesVALVE fdmLayeredFeatures { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_LAYERED_FEATURES_VALVE };
+      VkPhysicalDeviceFragmentDensityMapOffsetFeaturesEXT fdmOffsetFeatures { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_OFFSET_FEATURES_EXT };
+      void* deviceInfoNext = nullptr;
+      #ifdef BGFX_TEXTURE_FRAGMENT_DENSITY_MAP
+      {
+         const PFN_vkEnumerateDeviceExtensionProperties enumerateDeviceExtensions
+            = (PFN_vkEnumerateDeviceExtensionProperties)m_vulkan._vkGetInstanceProcAddr(m_instance, "vkEnumerateDeviceExtensionProperties");
+         uint32_t count = 0;
+         if (enumerateDeviceExtensions && enumerateDeviceExtensions(m_physicalDevice, nullptr, &count, nullptr) == VK_SUCCESS && count > 0)
+         {
+            std::vector<VkExtensionProperties> available(count);
+            enumerateDeviceExtensions(m_physicalDevice, nullptr, &count, available.data());
+            const auto has = [&](const char* name) { return std::any_of(available.begin(), available.end(), [name](const VkExtensionProperties& p) { return strcmp(p.extensionName, name) == 0; }); };
+            if (has(VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME))
+            {
+               m_fdmSupported = true;
+               deviceExtensions.push_back(VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME);
+               fdmFeatures.fragmentDensityMap = VK_TRUE;
+               fdmFeatures.pNext = deviceInfoNext;
+               deviceInfoNext = &fdmFeatures;
+               if (has(VK_VALVE_FRAGMENT_DENSITY_MAP_LAYERED_EXTENSION_NAME))
+               {
+                  m_fdmLayeredSupported = true;
+                  deviceExtensions.push_back(VK_VALVE_FRAGMENT_DENSITY_MAP_LAYERED_EXTENSION_NAME);
+                  fdmLayeredFeatures.fragmentDensityMapLayered = VK_TRUE;
+                  fdmLayeredFeatures.pNext = deviceInfoNext;
+                  deviceInfoNext = &fdmLayeredFeatures;
+               }
+               // Offsets move the map's high density area to where the eyes look, at the end of each render pass (vkCmdEndRenderPass2)
+               if (has(VK_EXT_FRAGMENT_DENSITY_MAP_OFFSET_EXTENSION_NAME) && has(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME))
+               {
+                  m_fdmOffsetSupported = true;
+                  deviceExtensions.push_back(VK_EXT_FRAGMENT_DENSITY_MAP_OFFSET_EXTENSION_NAME);
+                  deviceExtensions.push_back(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
+                  fdmOffsetFeatures.fragmentDensityMapOffset = VK_TRUE;
+                  fdmOffsetFeatures.pNext = deviceInfoNext;
+                  deviceInfoNext = &fdmOffsetFeatures;
+               }
+            }
+         }
+         PLOGI << "Fragment density maps: " << (m_fdmSupported ? "supported" : "not supported by the driver") << (m_fdmLayeredSupported ? ", one layer per eye" : "")
+               << (m_fdmOffsetSupported ? ", with offsets" : "");
+      }
+      #endif
+
       PLOGI << "Requested device extensions: ";
       for (auto ext : deviceExtensions)
          PLOGI << "\t" << ext;
 
       VkDeviceCreateInfo deviceInfo { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
+      deviceInfo.pNext = deviceInfoNext;
       deviceInfo.queueCreateInfoCount = 1;
       deviceInfo.pQueueCreateInfos = &dcqi;
       deviceInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
@@ -329,6 +380,14 @@ public:
    XrSwapchainImageBaseHeader* AllocateSwapchainImageData(XrSwapchain swapchain, VRDevice::SwapchainType type, uint32_t count) override
    {
       m_swapchainImages[swapchain].resize(count, { XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR });
+      if (m_requestFoveationImages && type == VRDevice::SwapchainType::COLOR)
+      {
+         // The runtime fills in its fragment density map for each image (XR_FB_foveation_vulkan)
+         auto& foveationImages = m_swapchainFoveationImages[swapchain];
+         foveationImages.resize(count, { XR_TYPE_SWAPCHAIN_IMAGE_FOVEATION_VULKAN_FB });
+         for (uint32_t i = 0; i < count; i++)
+            m_swapchainImages[swapchain][i].next = &foveationImages[i];
+      }
       return reinterpret_cast<XrSwapchainImageBaseHeader*>(m_swapchainImages[swapchain].data());
    }
 
@@ -336,6 +395,45 @@ public:
    {
       m_swapchainImages[swapchain].clear();
       m_swapchainImages.erase(swapchain);
+      m_swapchainFoveationImages.erase(swapchain);
+   }
+
+   void RequestFoveationImages(bool request) override { m_requestFoveationImages = request && m_fdmSupported; }
+   bool IsFragmentDensityMapSupported() const override { return m_fdmSupported; }
+   bool IsFragmentDensityMapOffsetSupported() const override { return m_fdmOffsetSupported; }
+
+   // Wrap the runtime's density map images as textures (external images: bgfx neither allocates nor transitions them), so the scene render target can attach them
+   bool CreateFoveationTextures(VRDevice::SwapchainInfo& swapchain) override
+   {
+      #ifdef BGFX_TEXTURE_FRAGMENT_DENSITY_MAP
+      const auto it = m_swapchainFoveationImages.find(swapchain.swapchain);
+      if (!m_fdmSupported || it == m_swapchainFoveationImages.end())
+         return false;
+      swapchain.foveationTextures.clear();
+      std::map<VkImage, bgfx::TextureHandle> created; // The runtime may hand the same map for several images
+      for (const XrSwapchainImageFoveationVulkanFB& foveation : it->second)
+      {
+         bgfx::TextureHandle handle = BGFX_INVALID_HANDLE;
+         if (foveation.image != VK_NULL_HANDLE && foveation.width > 0 && foveation.height > 0)
+         {
+            const auto known = created.find(foveation.image);
+            if (known != created.end())
+               handle = known->second;
+            else
+            {
+               handle = bgfx::createTexture2D(static_cast<uint16_t>(foveation.width), static_cast<uint16_t>(foveation.height), false, static_cast<uint16_t>(swapchain.arraySize),
+                  bgfx::TextureFormat::RG8, BGFX_TEXTURE_FRAGMENT_DENSITY_MAP, nullptr, reinterpret_cast<uintptr_t>(foveation.image));
+               created[foveation.image] = handle;
+               swapchain.foveationWidth = foveation.width;
+               swapchain.foveationHeight = foveation.height;
+            }
+         }
+         swapchain.foveationTextures.push_back(handle);
+      }
+      return !created.empty();
+      #else
+      return false;
+      #endif
    }
 
    void* GetSwapchainImage(XrSwapchain swapchain, uint32_t index) override { return (void*)(uintptr_t)m_swapchainImages[swapchain][index].image; }
@@ -354,6 +452,11 @@ private:
    uint32_t m_queueFamilyIndex = 0;
    XrGraphicsBindingVulkanKHR m_graphicsBinding {};
    std::map<XrSwapchain, std::vector<XrSwapchainImageVulkanKHR>> m_swapchainImages;
+   std::map<XrSwapchain, std::vector<XrSwapchainImageFoveationVulkanFB>> m_swapchainFoveationImages;
+   bool m_fdmSupported = false;
+   bool m_fdmLayeredSupported = false;
+   bool m_fdmOffsetSupported = false;
+   bool m_requestFoveationImages = false;
 };
 
 #endif

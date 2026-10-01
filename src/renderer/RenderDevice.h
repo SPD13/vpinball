@@ -291,6 +291,14 @@ public:
    bgfx::VertexLayout* m_pVertexTexelDeclaration = nullptr;
    bgfx::VertexLayout* m_pVertexNormalTexelDeclaration = nullptr;
    bgfx::ViewId m_activeViewId = 0;
+   // The names given to the views, kept here because bgfx drops them in release builds and the profiler reports views by id (see VRDevice::LogRuntimeStatus)
+   std::array<string, 256> m_viewNames;
+   bool m_nameViews = false; // Naming costs a string per pass and frame: only in debug builds or when profiling (VPX_GPU_PROFILE)
+   void SetViewName(bgfx::ViewId id, const string& name)
+   {
+      m_viewNames[id] = name;
+      bgfx::setViewName(id, name.c_str());
+   }
    uint64_t m_bgfxState = 0;
 
    bool m_frameNoPresent = false; // Flag set when the next frame should be submitted without VBlank sync disabled

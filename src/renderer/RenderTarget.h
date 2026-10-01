@@ -49,6 +49,12 @@ public:
    bgfx::FrameBufferHandle GetCoreFrameBuffer() const { return m_framebuffer; }
    bgfx::TextureFormat::Enum GetCoreColorFormat() const { return m_colorFormat; }
    void ResolveMSAADepth();
+   #ifdef BGFX_RESOLVE_FRAGMENT_DENSITY_MAP
+   // Foveated rendering: render through a frame buffer that carries this fragment density map (an invalid handle restores the plain one). The
+   // variants are cached since the runtime hands a different map for each of its swapchain images.
+   void SetFragmentDensityMap(bgfx::TextureHandle map);
+   void SetFragmentDensityMapOffsets(const int32_t* offsetsXY, int nLayers); // For the current frame, on the foveated frame buffer in use
+   #endif
    static void OnFrameFlushed() { current_render_target = nullptr; current_render_layer = 0; }
 #elif defined(ENABLE_OPENGL)
    GLuint GetCoreFrameBuffer() const { return m_framebuffer; }
@@ -89,6 +95,10 @@ private:
    bgfx::FrameBufferHandle m_framebuffer_layers[6] { BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE };
    bgfx::FrameBufferHandle m_framebuffer = BGFX_INVALID_HANDLE;
    bool m_needResolve = false;
+   #ifdef BGFX_RESOLVE_FRAGMENT_DENSITY_MAP
+   bgfx::FrameBufferHandle m_plainFramebuffer = BGFX_INVALID_HANDLE; // m_framebuffer without a fragment density map
+   std::map<uint16_t, bgfx::FrameBufferHandle> m_fdmFramebuffers; // Variants of m_plainFramebuffer, keyed by the density map texture
+   #endif
 #elif defined(ENABLE_OPENGL)
    GLuint m_framebuffer = 0;
    GLenum m_texTarget = 0;

@@ -237,6 +237,13 @@ private:
 public:
    int GetDisplayRefreshRateMode() const { return m_displayRefreshRateMode; }
    void SetDisplayRefreshRateMode(int mode);
+   // Foveated rendering (see the private members below): level 0 to 3, eye-tracked when the headset allows it
+   int GetFoveationMode() const { return m_foveationMode; }
+   void SetFoveationMode(int mode);
+   bool IsFoveationEyeTracked() const { return m_foveationEyeTracked; }
+   void SetFoveationEyeTracked(bool eyeTracked);
+   // One line for the settings page: "not supported", "fixed", "eye-tracked", ...
+   string GetFoveationStatus() const;
    bool IsOpenXRReady() const { return m_xrInstance != XR_NULL_HANDLE; }
    void SetupHMD();
    bool IsOpenXRHMDReady() const { return m_systemID != XR_NULL_SYSTEM_ID; }
@@ -258,6 +265,39 @@ public:
    void EnableControllerViewCentering(bool enable) { m_controllerViewCentering = enable; }
    bool IsControllerViewCenteringEnabled() const { return m_controllerViewCentering; }
 
+   // Models of the controllers the player holds, as the system shows them (XR_EXT_render_model with XR_EXT_interaction_render_model): the runtime gives
+   // their glTF asset, places them and animates their parts (buttons, triggers, thumbsticks). Updated by the render thread before each frame is
+   // prepared, so they are read while preparing a frame. A model that is not located (not tracked, hidden by the setting, table capture) is not drawn.
+   struct ControllerModel
+   {
+      struct NodeState
+      {
+         XrPosef pose; // Relative to the parent node
+         bool visible;
+      };
+      uint64_t id = 0; // Runtime render model id: a model with the same id keeps the same asset
+      std::shared_ptr<const vector<uint8_t>> asset; // glTF binary (GLB)
+      vector<string> animatableNodes; // Names of the glTF nodes moved by the runtime, in the order of nodeStates
+      vector<NodeState> nodeStates;
+      bool located = false;
+      Matrix3D modelToReference; // glTF model space to the reference space, both in meters
+   };
+   const vector<ControllerModel>& GetControllerModels() const { return m_controllerModels; }
+   // Reference space (meters) to the room space reference of the scene (VPU)
+   const Matrix3D& GetReferenceToRoom() const { return m_referenceToRoom; }
+   bool IsShowControllers() const { return m_showControllers; }
+   void SetShowControllers(bool show) { m_showControllers = show; }
+   // Transform from the space of a pose to the space it is given in (rotation then translation, for row vectors)
+   static Matrix3D PoseToMatrix(const XrPosef& pose)
+   {
+      const float x = pose.orientation.x, y = pose.orientation.y, z = pose.orientation.z, w = pose.orientation.w;
+      return Matrix3D(
+         1.f - 2.f * (y * y + z * z), 2.f * (x * y + z * w), 2.f * (x * z - y * w), 0.f,
+         2.f * (x * y - z * w), 1.f - 2.f * (x * x + z * z), 2.f * (y * z + x * w), 0.f,
+         2.f * (x * z + y * w), 2.f * (y * z - x * w), 1.f - 2.f * (x * x + y * y), 0.f,
+         pose.position.x, pose.position.y, pose.position.z, 1.f);
+   }
+
    enum class SwapchainType : uint8_t
    {
       COLOR,
@@ -267,6 +307,10 @@ public:
    struct SwapchainInfo
    {
       XrSwapchain swapchain = XR_NULL_HANDLE;
+      // Fragment density maps of the runtime (XR_FB_foveation_vulkan), one per swapchain image (invalid handle when the runtime gave none), see CreateFoveationTextures
+      vector<bgfx::TextureHandle> foveationTextures;
+      uint32_t foveationWidth = 0;
+      uint32_t foveationHeight = 0;
       uint32_t width = 0;
       uint32_t height = 0;
       uint32_t arraySize = 0;
@@ -353,11 +397,81 @@ private:
    int m_displayRefreshRateMode = 0;
    void ApplyDisplayRefreshRate();
 
+   // Foveated rendering through the runtime (XR_FB_foveation and XR_META_foveation_eye_tracked, see Settings PlayerVR/Foveation). The runtime builds the
+   // fragment density maps and applies them to the color swapchain; which render passes of ours benefit is up to the runtime (on the Steam Frame, Valve's
+   // FDM injection layer does it), so the result is checked with the performance counters below rather than assumed.
+   bool m_foveationExtensionSupported = false;
+   bool m_foveationEyeTrackedExtensionSupported = false;
+   bool m_foveationEyeTrackedSystemSupported = false;
+   PFN_xrCreateFoveationProfileFB m_xrCreateFoveationProfileFB = nullptr;
+   PFN_xrDestroyFoveationProfileFB m_xrDestroyFoveationProfileFB = nullptr;
+   PFN_xrUpdateSwapchainFB m_xrUpdateSwapchainFB = nullptr;
+   PFN_xrGetFoveationEyeTrackedStateMETA m_xrGetFoveationEyeTrackedStateMETA = nullptr;
+   int m_foveationMode = 0;
+   bool m_foveationEyeTracked = true;
+   bool m_foveationApplied = false; // The profile below is what the color swapchain currently uses
+   bool m_foveationEyeTrackedActive = false; // Last state reported by the runtime
+   bool m_foveationFlipX = false;
+   bool m_foveationFlipY = true;
+   XrVector2f m_foveationCenter[2] = { { 0.f, 0.f }, { 0.f, 0.f } }; // Last gaze reported by the runtime, normalized (-1..1), per eye
+   XrFoveationProfileFB m_foveationProfile = XR_NULL_HANDLE;
+   void ApplyFoveation();
+   void UpdateFoveationState();
+   // Our own density map, one layer per eye, with the high density area in the middle and moved to the gaze with offsets. Needed because
+   // the driver only honors offsets on maps created for them, which the runtime's maps are not; the runtime's profile is still applied
+   // to the swapchain, it is what turns the eye tracking on.
+   bgfx::TextureHandle m_ownFoveationMap = BGFX_INVALID_HANDLE;
+   uint32_t m_ownFoveationMapWidth = 0;
+   uint32_t m_ownFoveationMapHeight = 0;
+   void CreateOwnFoveationMap();
+   void FillOwnFoveationMap();
+
+   // Performance counters of the runtime (XR_META_performance_metrics), logged periodically to compare settings on the device
+   bool m_performanceMetricsExtensionSupported = false;
+   PFN_xrEnumeratePerformanceMetricsCounterPathsMETA m_xrEnumeratePerformanceMetricsCounterPathsMETA = nullptr;
+   PFN_xrSetPerformanceMetricsStateMETA m_xrSetPerformanceMetricsStateMETA = nullptr;
+   PFN_xrQueryPerformanceMetricsCounterMETA m_xrQueryPerformanceMetricsCounterMETA = nullptr;
+   vector<std::pair<string, XrPath>> m_performanceCounters;
+   double m_nextStatusLogTime = 0.;
+   void LogRuntimeStatus();
+
    Matrix3D m_nextProj[2];
 
    bool m_debugUtilsExtensionSupported = false;
    XrDebugUtilsMessengerEXT m_debugUtilsMessenger = XR_NULL_HANDLE;
    static XrBool32 OpenXRMessageCallbackFunction(XrDebugUtilsMessageSeverityFlagsEXT messageSeverity, XrDebugUtilsMessageTypeFlagsEXT messageType, const XrDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData);
+
+   // Controller models (see GetControllerModels), with the runtime objects of each model at the same index
+   bool m_renderModelExtensionSupported = false;
+   std::atomic<bool> m_showControllers = true; // Set by the settings page while the render thread reads it
+   bool m_controllerModelsDirty = true; // The list of models must be asked again to the runtime
+   double m_controllerModelsRetryTime = 0.; // When the list is asked again after an asset was not available
+   vector<ControllerModel> m_controllerModels;
+   struct RenderModelHandles
+   {
+      #ifdef XR_EXT_render_model
+      XrRenderModelEXT renderModel = XR_NULL_HANDLE;
+      #endif
+      XrSpace space = XR_NULL_HANDLE;
+   };
+   vector<RenderModelHandles> m_renderModelHandles;
+   Matrix3D m_referenceToRoom;
+   void UpdateControllerModels();
+   void LocateControllerModels(XrTime time);
+   void DestroyControllerModels();
+   #if defined(XR_EXT_render_model) && defined(XR_EXT_interaction_render_model)
+   PFN_xrCreateRenderModelEXT m_xrCreateRenderModelEXT = nullptr;
+   PFN_xrDestroyRenderModelEXT m_xrDestroyRenderModelEXT = nullptr;
+   PFN_xrGetRenderModelPropertiesEXT m_xrGetRenderModelPropertiesEXT = nullptr;
+   PFN_xrCreateRenderModelSpaceEXT m_xrCreateRenderModelSpaceEXT = nullptr;
+   PFN_xrCreateRenderModelAssetEXT m_xrCreateRenderModelAssetEXT = nullptr;
+   PFN_xrDestroyRenderModelAssetEXT m_xrDestroyRenderModelAssetEXT = nullptr;
+   PFN_xrGetRenderModelAssetDataEXT m_xrGetRenderModelAssetDataEXT = nullptr;
+   PFN_xrGetRenderModelAssetPropertiesEXT m_xrGetRenderModelAssetPropertiesEXT = nullptr;
+   PFN_xrGetRenderModelStateEXT m_xrGetRenderModelStateEXT = nullptr;
+   PFN_xrEnumerateInteractionRenderModelIdsEXT m_xrEnumerateInteractionRenderModelIdsEXT = nullptr;
+   vector<XrRenderModelNodeStateEXT> m_renderModelNodeStates; // Scratch buffer for LocateControllerModels
+   #endif
 
    bool m_visibilityMaskExtensionSupported = false;
    PFN_xrGetVisibilityMaskKHR xrGetVisibilityMaskKHR = nullptr;

@@ -131,7 +131,7 @@ fi
 # build bgfx
 #
 
-BGFX_EXPECTED_SHA="${BGFX_CMAKE_VERSION}-${BGFX_PATCH_SHA}-turnip2" # -turnip2: bgfx-turnip-descriptor-pool.patch applied below
+BGFX_EXPECTED_SHA="${BGFX_CMAKE_VERSION}-${BGFX_PATCH_SHA}-turnip3" # -turnip3: the two bgfx patches applied below
 BGFX_FOUND_SHA="$([ -f bgfx/cache.txt ] && cat bgfx/cache.txt || echo "")"
 
 if [ "${BGFX_EXPECTED_SHA}" != "${BGFX_FOUND_SHA}" ]; then
@@ -148,8 +148,9 @@ if [ "${BGFX_EXPECTED_SHA}" != "${BGFX_FOUND_SHA}" ]; then
    cd bgfx.cmake
    rm -rf bgfx
    mv ../bgfx-${BGFX_PATCH_SHA} bgfx
-   # Work around the descriptor pool bug of the Steam Frame's Vulkan driver (see the patch)
+   # Work around the descriptor pool bug of the Steam Frame's Vulkan driver, and add fragment density map attachments for foveated rendering (see the patches)
    patch -p1 < ../../../../../platforms/linux-aarch64/bgfx-turnip-descriptor-pool.patch
+   patch -p1 < ../../../../../platforms/linux-aarch64/bgfx-fragment-density-map.patch
    cmake -S. \
       -DBGFX_LIBRARY_TYPE=SHARED \
       -DBGFX_BUILD_TOOLS=OFF \
