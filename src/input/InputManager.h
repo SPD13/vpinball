@@ -88,6 +88,7 @@ public:
    };
    uint16_t RegisterDevice(const string& settingsId, DeviceType type, const string& name);
    void SetDeviceDefaultMapping(uint16_t deviceId, const std::function<void(MappingSetupHandler&)>& mapper);
+   void SetDeviceIsVRVirtualGamepad(uint16_t deviceId) { m_inputDevices[deviceId].m_isVRVirtualGamepad = true; } // Gamepad emulated from the VR controllers (e.g. Steam Input), already handled through OpenXR
    void RegisterElementName(uint16_t deviceId, bool isAxis, uint16_t buttonOrAxisId, const string& name);
    void UnregisterDevice(uint16_t deviceId);
    void ClearDeviceMappings(uint16_t deviceId);
@@ -260,6 +261,7 @@ private:
       ankerl::unordered_dense::map<uint16_t, ElementDef> m_buttonOrAxisNames;
 
       bool m_hasPendingLayoutApply = false;
+      bool m_isVRVirtualGamepad = false;
       std::function<void(MappingSetupHandler&)> m_defaultMapping;
    };
    vector<DeviceDef> m_inputDevices;
