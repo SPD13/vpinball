@@ -479,6 +479,16 @@ void RenderDevice::RenderThread(RenderDevice* rd, bgfx::Init init)
 
    PLOGI << "BGFX initialized using " << bgfx::getRendererName(bgfx::getRendererType()) << " backend (" << init.resolution.width << 'x' << init.resolution.height << " "
          << bimg::getName(bimg::TextureFormat::Enum(init.resolution.formatColor)) << ')';
+   #ifdef _DEBUG
+   rd->m_nameViews = true;
+   #endif
+   if (getenv("VPX_GPU_PROFILE") != nullptr)
+   {
+      // Per view GPU timings in bgfx::getStats(), logged by the VR device with the runtime's counters
+      bgfx::setDebug(BGFX_DEBUG_PROFILER);
+      rd->m_nameViews = true;
+      PLOGI << "BGFX profiler enabled (VPX_GPU_PROFILE)";
+   }
 
    const uint16_t vendorId = bgfx::getCaps()->vendorId;
    string vendorString;

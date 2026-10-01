@@ -17,6 +17,7 @@
 #include "renderer/Shader.h"
 #include "renderer/RenderCommand.h"
 #include "renderer/RenderDevice.h"
+#include "renderer/VRControllerModels.h"
 #include "renderer/VRDevice.h"
 #include "renderer/trace.h"
 #include "ui/live/LiveUI.h"
@@ -182,6 +183,10 @@ Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncM
 
    // Second render target to swap, allowing to read previous frame render for ball reflection and motion blur
    m_pOffscreenBackBufferTexture2 = m_pOffscreenBackBufferTexture1->Duplicate("BackBuffer2"s, false);
+   #if defined(ENABLE_BGFX) && defined(BGFX_RESOLVE_FRAGMENT_DENSITY_MAP)
+   if (m_stereo3D == STEREO_VR)
+      PLOGI << "Foveated rendering: scene buffer " << renderWidthAA << 'x' << renderHeightAA << " accepts a fragment density map";
+   #endif
 
    // Initialize shaders
    m_renderDevice->m_basicShader->SetVector(ShaderUniform::w_h_height, (float)(1.0 / (double)GetMSAABackBufferTexture()->GetWidth()), (float)(1.0 / (double)GetMSAABackBufferTexture()->GetHeight()), 0.0f, 0.0f);
@@ -355,6 +360,9 @@ Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncM
 Renderer::~Renderer()
 {
    m_gpu_profiler.Shutdown();
+   #if defined(ENABLE_XR)
+   m_vrControllerModels = nullptr; // Releases its textures from the render device
+   #endif
    m_ballMeshBuffer = nullptr;
    #ifdef DEBUG_BALL_SPIN
    m_ballDebugPoints = nullptr;
@@ -459,6 +467,25 @@ bool Renderer::IsBallLightingDisabled() const
 {
    return m_renderDevice->m_ballShader->GetVector(ShaderUniform::w_h_disableLighting).z != 0.f;
 }
+
+#if defined(ENABLE_BGFX) && defined(BGFX_RESOLVE_FRAGMENT_DENSITY_MAP)
+void Renderer::SetFragmentDensityMap(bgfx::TextureHandle map)
+{
+   // Both scene buffers: they are swapped every frame (previous frame kept for reflections and motion blur)
+   if (m_pOffscreenBackBufferTexture1)
+      m_pOffscreenBackBufferTexture1->SetFragmentDensityMap(map);
+   if (m_pOffscreenBackBufferTexture2)
+      m_pOffscreenBackBufferTexture2->SetFragmentDensityMap(map);
+}
+
+void Renderer::SetFragmentDensityMapOffsets(const int32_t* offsetsXY, int nLayers)
+{
+   if (m_pOffscreenBackBufferTexture1)
+      m_pOffscreenBackBufferTexture1->SetFragmentDensityMapOffsets(offsetsXY, nLayers);
+   if (m_pOffscreenBackBufferTexture2)
+      m_pOffscreenBackBufferTexture2->SetFragmentDensityMapOffsets(offsetsXY, nLayers);
+}
+#endif
 
 void Renderer::DisableBallLighting(bool disableLightingForBalls)
 {
@@ -1991,6 +2018,17 @@ void Renderer::RenderDynamics()
       for (auto renderable : g_pplayer->m_ptable->GetParts())
          RenderItem(renderable, isNoBackdrop);
       m_render_mask = mask;
+
+      #if defined(ENABLE_XR)
+      // The controllers the player holds, as the headset system shows them, in the real world (room space reference)
+      if (m_stereo3D == STEREO_VR && g_pplayer->m_vrDevice && (m_render_mask & Renderer::REFLECTION_PASS) == 0)
+      {
+         if (m_vrControllerModels == nullptr)
+            m_vrControllerModels = std::make_unique<VRControllerModels>(m_renderDevice);
+         SetSpaceReference(PartGroupData::SpaceReference::SR_ROOM, false);
+         m_vrControllerModels->Render(this, *g_pplayer->m_vrDevice);
+      }
+      #endif
    }
    else
    {

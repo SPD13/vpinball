@@ -30,7 +30,9 @@ extern marker_series series;
       #undef _near
    #endif
    #include "bx/math.h"
+   #include "renderer/Renderer.h"
    #include <map>
+   #include <set>
    #include <vector>
    #include <time.h>
 
@@ -241,7 +243,33 @@ VRDevice::VRDevice(const Settings& settings)
       m_displayRefreshRateExtensionSupported = EnableExtensionIfSupported(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
       // Needed to bind the Valve Frame controller interaction profile (without it, the runtime emulates an Oculus Touch controller which lacks the d-pad, view and bumper inputs)
       EnableExtensionIfSupported("XR_VALVE_frame_controller_interaction");
+      // Controller models of the runtime (see GetControllerModels). XR_EXT_render_model needs XR_EXT_uuid since the instance asks for OpenXR 1.0
+      #if defined(XR_EXT_render_model) && defined(XR_EXT_interaction_render_model)
+      {
+         bool supported = false;
+         for (uint32_t i = 0; i < extensionCount; i++)
+            if (strcmp(extensionProperties[i].extensionName, XR_EXT_INTERACTION_RENDER_MODEL_EXTENSION_NAME) == 0)
+               supported = true;
+         m_renderModelExtensionSupported = supported && EnableExtensionIfSupported(XR_EXT_UUID_EXTENSION_NAME) && EnableExtensionIfSupported(XR_EXT_RENDER_MODEL_EXTENSION_NAME)
+            && EnableExtensionIfSupported(XR_EXT_INTERACTION_RENDER_MODEL_EXTENSION_NAME);
+      }
+      #endif
+      m_showControllers = settings.GetPlayerVR_ShowControllers();
       m_displayRefreshRateMode = settings.GetPlayerVR_DisplayRefreshRate();
+      // Foveated rendering by the runtime: the profile needs XR_FB_foveation and XR_FB_foveation_configuration, applying it to the swapchain needs
+      // XR_FB_swapchain_update_state, and the runtime only builds Vulkan density maps with XR_FB_foveation_vulkan
+      m_foveationExtensionSupported = EnableExtensionIfSupported(XR_FB_FOVEATION_EXTENSION_NAME) && EnableExtensionIfSupported(XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME)
+         && EnableExtensionIfSupported(XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME);
+      #ifdef XR_USE_GRAPHICS_API_VULKAN
+      if (m_rendererType == bgfx::RendererType::Enum::Vulkan)
+         m_foveationExtensionSupported = EnableExtensionIfSupported(XR_FB_FOVEATION_VULKAN_EXTENSION_NAME) && m_foveationExtensionSupported;
+      #endif
+      m_foveationEyeTrackedExtensionSupported = m_foveationExtensionSupported && EnableExtensionIfSupported(XR_META_FOVEATION_EYE_TRACKED_EXTENSION_NAME);
+      m_foveationMode = settings.GetPlayerVR_Foveation();
+      m_foveationEyeTracked = settings.GetPlayerVR_FoveationEyeTracked();
+      m_foveationFlipX = settings.GetPlayerVR_FoveationFlipX();
+      m_foveationFlipY = settings.GetPlayerVR_FoveationFlipY();
+      m_performanceMetricsExtensionSupported = EnableExtensionIfSupported(XR_META_PERFORMANCE_METRICS_EXTENSION_NAME);
       #ifdef DEBUG
          m_debugUtilsExtensionSupported = EnableExtensionIfSupported(XR_EXT_DEBUG_UTILS_EXTENSION_NAME);
       #endif
@@ -284,6 +312,48 @@ VRDevice::VRDevice(const Settings& settings)
       {
          OPENXR_CHECK(xrGetInstanceProcAddr(m_xrInstance, "xrGetVisibilityMaskKHR", (PFN_xrVoidFunction*)&xrGetVisibilityMaskKHR), "Failed to get xrGetVisibilityMaskKHR.");
       }
+      if (m_foveationExtensionSupported)
+      {
+         OPENXR_CHECK(xrGetInstanceProcAddr(m_xrInstance, "xrCreateFoveationProfileFB", (PFN_xrVoidFunction*)&m_xrCreateFoveationProfileFB), "Failed to get xrCreateFoveationProfileFB.");
+         OPENXR_CHECK(xrGetInstanceProcAddr(m_xrInstance, "xrDestroyFoveationProfileFB", (PFN_xrVoidFunction*)&m_xrDestroyFoveationProfileFB), "Failed to get xrDestroyFoveationProfileFB.");
+         OPENXR_CHECK(xrGetInstanceProcAddr(m_xrInstance, "xrUpdateSwapchainFB", (PFN_xrVoidFunction*)&m_xrUpdateSwapchainFB), "Failed to get xrUpdateSwapchainFB.");
+      }
+      if (m_foveationEyeTrackedExtensionSupported)
+      {
+         OPENXR_CHECK(xrGetInstanceProcAddr(m_xrInstance, "xrGetFoveationEyeTrackedStateMETA", (PFN_xrVoidFunction*)&m_xrGetFoveationEyeTrackedStateMETA), "Failed to get xrGetFoveationEyeTrackedStateMETA.");
+      }
+      if (m_performanceMetricsExtensionSupported)
+      {
+         OPENXR_CHECK(xrGetInstanceProcAddr(m_xrInstance, "xrEnumeratePerformanceMetricsCounterPathsMETA", (PFN_xrVoidFunction*)&m_xrEnumeratePerformanceMetricsCounterPathsMETA), "Failed to get xrEnumeratePerformanceMetricsCounterPathsMETA.");
+         OPENXR_CHECK(xrGetInstanceProcAddr(m_xrInstance, "xrSetPerformanceMetricsStateMETA", (PFN_xrVoidFunction*)&m_xrSetPerformanceMetricsStateMETA), "Failed to get xrSetPerformanceMetricsStateMETA.");
+         OPENXR_CHECK(xrGetInstanceProcAddr(m_xrInstance, "xrQueryPerformanceMetricsCounterMETA", (PFN_xrVoidFunction*)&m_xrQueryPerformanceMetricsCounterMETA), "Failed to get xrQueryPerformanceMetricsCounterMETA.");
+      }
+      #if defined(XR_EXT_render_model) && defined(XR_EXT_interaction_render_model)
+      if (m_renderModelExtensionSupported)
+      {
+         const auto getProc = [this](const char* name, auto& fn)
+         {
+            if (!XR_SUCCEEDED(xrGetInstanceProcAddr(m_xrInstance, name, reinterpret_cast<PFN_xrVoidFunction*>(&fn))) || fn == nullptr)
+            {
+               PLOGE << "OpenXR: failed to get " << name;
+               m_renderModelExtensionSupported = false;
+            }
+         };
+         getProc("xrCreateRenderModelEXT", m_xrCreateRenderModelEXT);
+         getProc("xrDestroyRenderModelEXT", m_xrDestroyRenderModelEXT);
+         getProc("xrGetRenderModelPropertiesEXT", m_xrGetRenderModelPropertiesEXT);
+         getProc("xrCreateRenderModelSpaceEXT", m_xrCreateRenderModelSpaceEXT);
+         getProc("xrCreateRenderModelAssetEXT", m_xrCreateRenderModelAssetEXT);
+         getProc("xrDestroyRenderModelAssetEXT", m_xrDestroyRenderModelAssetEXT);
+         getProc("xrGetRenderModelAssetDataEXT", m_xrGetRenderModelAssetDataEXT);
+         getProc("xrGetRenderModelAssetPropertiesEXT", m_xrGetRenderModelAssetPropertiesEXT);
+         getProc("xrGetRenderModelStateEXT", m_xrGetRenderModelStateEXT);
+         getProc("xrEnumerateInteractionRenderModelIdsEXT", m_xrEnumerateInteractionRenderModelIdsEXT);
+      }
+      #endif
+      PLOGI << "OpenXR controller models: " << (m_renderModelExtensionSupported ? "supported by the runtime" : "not supported by the runtime");
+      PLOGI << "OpenXR foveated rendering: " << (m_foveationExtensionSupported ? "supported by the runtime" : "not supported by the runtime") << ", eye-tracked: "
+            << (m_foveationEyeTrackedExtensionSupported ? "extension present" : "no extension") << ", setting: " << m_foveationMode << (m_foveationEyeTracked ? " (eye-tracked)" : " (fixed)");
       if (m_debugUtilsExtensionSupported)
       {
          // Fill out a XrDebugUtilsMessengerCreateInfoEXT structure specifying all severities and types.
@@ -315,6 +385,7 @@ VRDevice::VRDevice(const Settings& settings)
 VRDevice::~VRDevice()
 {
    #if defined(ENABLE_XR)
+      DestroyControllerModels();
       if (m_leftControllerSpace != XR_NULL_HANDLE)
          OPENXR_CHECK(xrDestroySpace(m_leftControllerSpace), "Failed to destroy Left Controller Space.")
       if (m_rightControllerSpace != XR_NULL_HANDLE)
@@ -462,9 +533,23 @@ void VRDevice::SetupHMD()
 
    // Get the System's properties for some general information about the hardware and the vendor.
    XrSystemColorSpacePropertiesFB colorSpaceProperties { XR_TYPE_SYSTEM_COLOR_SPACE_PROPERTIES_FB };
+   XrSystemFoveationEyeTrackedPropertiesMETA foveationEyeTrackedProperties { XR_TYPE_SYSTEM_FOVEATION_EYE_TRACKED_PROPERTIES_META };
+   void** next = &m_systemProperties.next;
    if (m_colorSpaceExtensionSupported)
-      m_systemProperties.next = &colorSpaceProperties;
+   {
+      *next = &colorSpaceProperties;
+      next = &colorSpaceProperties.next;
+   }
+   if (m_foveationEyeTrackedExtensionSupported)
+   {
+      *next = &foveationEyeTrackedProperties;
+      next = &foveationEyeTrackedProperties.next;
+   }
    OPENXR_CHECK(xrGetSystemProperties(m_xrInstance, m_systemID, &m_systemProperties), "Failed to get SystemProperties.");
+   m_systemProperties.next = nullptr;
+   m_foveationEyeTrackedSystemSupported = m_foveationEyeTrackedExtensionSupported && foveationEyeTrackedProperties.supportsFoveationEyeTracked;
+   if (m_foveationEyeTrackedExtensionSupported)
+      PLOGI << "Eye-tracked foveation " << (m_foveationEyeTrackedSystemSupported ? "supported" : "not supported") << " by this headset";
    if (m_colorSpaceExtensionSupported)
    {
       PLOGI << "Native XR device colorspace: " << colorSpaceProperties.colorSpace;
@@ -633,6 +718,209 @@ void VRDevice::ApplyDisplayRefreshRate()
    }
 }
 
+void VRDevice::SetFoveationMode(int mode)
+{
+   m_foveationMode = clamp(mode, 0, 3);
+   ApplyFoveation();
+   FillOwnFoveationMap();
+}
+
+void VRDevice::SetFoveationEyeTracked(bool eyeTracked)
+{
+   m_foveationEyeTracked = eyeTracked;
+   ApplyFoveation();
+}
+
+// Build the foveation profile for the current settings and apply it to the color swapchain. The runtime keeps the profile in use until the next update,
+// so the previous one can be destroyed right after. Called when the swapchain is created and whenever the settings change.
+void VRDevice::ApplyFoveation()
+{
+   if (!m_foveationExtensionSupported || m_colorSwapchainInfo.swapchain == XR_NULL_HANDLE)
+      return;
+
+   static constexpr XrFoveationLevelFB levels[] = { XR_FOVEATION_LEVEL_NONE_FB, XR_FOVEATION_LEVEL_LOW_FB, XR_FOVEATION_LEVEL_MEDIUM_FB, XR_FOVEATION_LEVEL_HIGH_FB };
+   const bool eyeTracked = m_foveationEyeTracked && m_foveationEyeTrackedSystemSupported && m_foveationMode != 0;
+
+   XrFoveationEyeTrackedProfileCreateInfoMETA eyeTrackedInfo { XR_TYPE_FOVEATION_EYE_TRACKED_PROFILE_CREATE_INFO_META };
+   eyeTrackedInfo.flags = 0;
+   XrFoveationLevelProfileCreateInfoFB levelInfo { XR_TYPE_FOVEATION_LEVEL_PROFILE_CREATE_INFO_FB };
+   levelInfo.level = levels[clamp(m_foveationMode, 0, 3)];
+   levelInfo.verticalOffset = 0.f;
+   levelInfo.dynamic = XR_FOVEATION_DYNAMIC_DISABLED_FB;
+   if (eyeTracked)
+      levelInfo.next = &eyeTrackedInfo;
+   XrFoveationProfileCreateInfoFB createInfo { XR_TYPE_FOVEATION_PROFILE_CREATE_INFO_FB };
+   createInfo.next = &levelInfo;
+
+   XrFoveationProfileFB profile = XR_NULL_HANDLE;
+   if (const XrResult result = m_xrCreateFoveationProfileFB(m_session, &createInfo, &profile); !XR_SUCCEEDED(result))
+   {
+      PLOGW << "Foveation profile refused by the runtime (result: " << result << ')';
+      return;
+   }
+   XrSwapchainStateFoveationFB state { XR_TYPE_SWAPCHAIN_STATE_FOVEATION_FB };
+   state.flags = 0;
+   state.profile = profile;
+   if (const XrResult result = m_xrUpdateSwapchainFB(m_colorSwapchainInfo.swapchain, reinterpret_cast<const XrSwapchainStateBaseHeaderFB*>(&state)); !XR_SUCCEEDED(result))
+   {
+      PLOGW << "Foveation profile not applied to the swapchain (result: " << result << ')';
+      OPENXR_CHECK(m_xrDestroyFoveationProfileFB(profile), "Failed to destroy foveation profile");
+      return;
+   }
+   if (m_foveationProfile != XR_NULL_HANDLE)
+      OPENXR_CHECK(m_xrDestroyFoveationProfileFB(m_foveationProfile), "Failed to destroy foveation profile");
+   m_foveationProfile = profile;
+   m_foveationApplied = true;
+   PLOGI << "Foveated rendering applied: level " << m_foveationMode << (eyeTracked ? ", eye-tracked" : ", fixed");
+   UpdateFoveationState();
+}
+
+// A map of 32 pixel texels (the minimum of the driver) covering the eye image, 8-bit density in R (x) and G (y) identical on both eyes.
+// The hardware uses 1, 1/2 or 1/4 shading rate per axis, so the rings are flat values; the gaze offsets translate the whole map.
+void VRDevice::CreateOwnFoveationMap()
+{
+   #ifdef BGFX_TEXTURE_FRAGMENT_DENSITY_MAP
+   if (bgfx::isValid(m_ownFoveationMap) || !m_backend->IsFragmentDensityMapSupported() || !m_backend->IsFragmentDensityMapOffsetSupported())
+      return;
+   constexpr uint32_t texel = 32;
+   m_ownFoveationMapWidth = (m_eyeWidth + texel - 1) / texel;
+   m_ownFoveationMapHeight = (m_eyeHeight + texel - 1) / texel;
+   const uint32_t layers = static_cast<uint32_t>(m_viewConfigurationViews.size());
+   const bgfx::Memory* mem = bgfx::alloc(m_ownFoveationMapWidth * m_ownFoveationMapHeight * 2 * layers);
+   memset(mem->data, 255, mem->size);
+   m_ownFoveationMap = bgfx::createTexture2D(static_cast<uint16_t>(m_ownFoveationMapWidth), static_cast<uint16_t>(m_ownFoveationMapHeight), false, static_cast<uint16_t>(layers),
+      bgfx::TextureFormat::RG8, BGFX_TEXTURE_FRAGMENT_DENSITY_MAP, mem);
+   if (!bgfx::isValid(m_ownFoveationMap))
+   {
+      PLOGW << "Foveated rendering: failed to create the density map";
+      return;
+   }
+   bgfx::setName(m_ownFoveationMap, "Foveation density map");
+   PLOGI << "Foveated rendering: own density map of " << m_ownFoveationMapWidth << 'x' << m_ownFoveationMapHeight << ", " << layers << " layers, with gaze offsets";
+   FillOwnFoveationMap();
+   #endif
+}
+
+void VRDevice::FillOwnFoveationMap()
+{
+   #ifdef BGFX_TEXTURE_FRAGMENT_DENSITY_MAP
+   if (!bgfx::isValid(m_ownFoveationMap))
+      return;
+   // Radius of the full density area and of the half density ring, as a fraction of the half width (about 55 degrees of field of view on the
+   // Steam Frame, so 0.2 is 11 degrees around the gaze, which eye tracking affords); beyond is quarter density. With the map moved to the
+   // gaze, a tighter profile costs nothing in what is looked at: the levels differ by how much of the periphery is coarse.
+   static constexpr float fullRadius[] = { 1.f, 0.45f, 0.30f, 0.20f };
+   static constexpr float halfRadius[] = { 1.f, 0.80f, 0.55f, 0.38f };
+   static constexpr uint8_t outerDensity[] = { 255, 64, 64, 64 };
+   const int level = clamp(m_foveationMode, 0, 3);
+   const float cx = 0.5f * static_cast<float>(m_ownFoveationMapWidth), cy = 0.5f * static_cast<float>(m_ownFoveationMapHeight);
+   const uint32_t layers = static_cast<uint32_t>(m_viewConfigurationViews.size());
+   for (uint32_t layer = 0; layer < layers; layer++)
+   {
+      const bgfx::Memory* mem = bgfx::alloc(m_ownFoveationMapWidth * m_ownFoveationMapHeight * 2);
+      for (uint32_t y = 0; y < m_ownFoveationMapHeight; y++)
+         for (uint32_t x = 0; x < m_ownFoveationMapWidth; x++)
+         {
+            const float dx = (static_cast<float>(x) + 0.5f - cx) / cx, dy = (static_cast<float>(y) + 0.5f - cy) / cy;
+            const float r = sqrtf(dx * dx + dy * dy);
+            const uint8_t density = r < fullRadius[level] ? 255 : r < halfRadius[level] ? 128 : outerDensity[level];
+            mem->data[(y * m_ownFoveationMapWidth + x) * 2 + 0] = density;
+            mem->data[(y * m_ownFoveationMapWidth + x) * 2 + 1] = density;
+         }
+      bgfx::updateTexture2D(m_ownFoveationMap, static_cast<uint16_t>(layer), 0, 0, 0, static_cast<uint16_t>(m_ownFoveationMapWidth), static_cast<uint16_t>(m_ownFoveationMapHeight), mem);
+   }
+   #endif
+}
+
+void VRDevice::UpdateFoveationState()
+{
+   if (!m_foveationEyeTrackedExtensionSupported || m_session == XR_NULL_HANDLE)
+      return;
+   XrFoveationEyeTrackedStateMETA state { XR_TYPE_FOVEATION_EYE_TRACKED_STATE_META };
+   if (XR_SUCCEEDED(m_xrGetFoveationEyeTrackedStateMETA(m_session, &state)))
+      m_foveationEyeTrackedActive = (state.flags & XR_FOVEATION_EYE_TRACKED_STATE_VALID_BIT_META) != 0;
+}
+
+string VRDevice::GetFoveationStatus() const
+{
+   if (!m_foveationExtensionSupported)
+      return "Not supported by the runtime"s;
+   if (m_foveationMode == 0 || !m_foveationApplied)
+      return "Off"s;
+   if (!m_foveationEyeTracked)
+      return "Fixed at the center"s;
+   if (!m_foveationEyeTrackedSystemSupported)
+      return "Fixed: no eye tracking on this headset"s;
+   return m_foveationEyeTrackedActive ? "Eye-tracked"s : "Fixed: eye tracking not active (enable it in the headset settings)"s;
+}
+
+// Every few seconds: the eye-tracked state and the runtime's performance counters (the ones in milliseconds and percents), so settings can be
+// compared from the log on the device
+void VRDevice::LogRuntimeStatus()
+{
+   const double now = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()) / 1000.;
+   if (now < m_nextStatusLogTime)
+      return;
+   m_nextStatusLogTime = now + 5.;
+   UpdateFoveationState();
+   string status = "Foveation: " + GetFoveationStatus();
+   if (m_foveationEyeTrackedActive)
+      status += std::format(" (gaze L {:.2f},{:.2f} R {:.2f},{:.2f})", m_foveationCenter[0].x, m_foveationCenter[0].y, m_foveationCenter[1].x, m_foveationCenter[1].y);
+   for (const auto& counter : m_performanceCounters)
+   {
+      XrPerformanceMetricsCounterMETA value { XR_TYPE_PERFORMANCE_METRICS_COUNTER_META };
+      if (!XR_SUCCEEDED(m_xrQueryPerformanceMetricsCounterMETA(m_session, counter.second, &value)) || !(value.counterFlags & XR_PERFORMANCE_METRICS_COUNTER_ANY_VALUE_VALID_BIT_META))
+         continue;
+      if (value.counterUnit != XR_PERFORMANCE_METRICS_COUNTER_UNIT_MILLISECONDS_META && value.counterUnit != XR_PERFORMANCE_METRICS_COUNTER_UNIT_PERCENTAGE_META
+         && value.counterUnit != XR_PERFORMANCE_METRICS_COUNTER_UNIT_HERTZ_META)
+         continue;
+      const string name = counter.first.rfind('/') == string::npos ? counter.first : counter.first.substr(counter.first.rfind('/') + 1);
+      const char* unit = value.counterUnit == XR_PERFORMANCE_METRICS_COUNTER_UNIT_MILLISECONDS_META ? " ms" : value.counterUnit == XR_PERFORMANCE_METRICS_COUNTER_UNIT_PERCENTAGE_META ? " %" : " Hz";
+      status += ", " + name + ' ';
+      if (value.counterFlags & XR_PERFORMANCE_METRICS_COUNTER_FLOAT_VALUE_VALID_BIT_META)
+         status += std::format("{:.2f}", value.floatValue);
+      else
+         status += std::to_string(value.uintValue);
+      status += unit;
+   }
+   // With VPX_GPU_PROFILE set in the environment (bgfx profiler enabled by the render device), the GPU time of the last frame per render target
+   if (getenv("VPX_GPU_PROFILE") != nullptr)
+   {
+      const bgfx::Stats* const stats = bgfx::getStats();
+      if (stats->gpuTimerFreq > 0 && stats->numViews > 0)
+      {
+         std::map<string, double> perTarget;
+         std::map<string, int> viewsPerTarget;
+         double total = 0.;
+         for (uint16_t i = 0; i < stats->numViews; i++)
+         {
+            const bgfx::ViewStats& vs = stats->viewStats[i];
+            if (vs.gpuTimeEnd <= vs.gpuTimeBegin)
+               continue;
+            const double ms = static_cast<double>(vs.gpuTimeEnd - vs.gpuTimeBegin) * 1000. / static_cast<double>(stats->gpuTimerFreq);
+            string key = (g_pplayer->m_renderer && vs.view < g_pplayer->m_renderer->m_renderDevice->m_viewNames.size()) ? g_pplayer->m_renderer->m_renderDevice->m_viewNames[vs.view] : string(vs.name);
+            const size_t rt = key.find("[RT=");
+            if (rt != string::npos)
+            {
+               key = key.substr(rt + 4);
+               const size_t end = key.find_first_of(" ]");
+               if (end != string::npos)
+                  key = key.substr(0, end);
+            }
+            perTarget[key] += ms;
+            viewsPerTarget[key]++;
+            total += ms;
+         }
+         status += std::format(" | GPU by target ({:.2f} ms, {} views):", total, stats->numViews);
+         vector<std::pair<string, double>> sorted(perTarget.begin(), perTarget.end());
+         std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+         for (size_t i = 0; i < sorted.size() && i < 8; i++)
+            status += std::format(" {} {:.2f} ({} views)", sorted[i].first, sorted[i].second, viewsPerTarget[sorted[i].first]);
+      }
+   }
+   PLOGI << status;
+}
+
 void VRDevice::CreateSession()
 {
    assert(m_xrInstance != XR_NULL_HANDLE);
@@ -749,15 +1037,54 @@ void VRDevice::CreateSession()
       swapchainCreateInfo.createFlags = 0;
       swapchainCreateInfo.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT
          | (i == 0 ? (XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_SRC_BIT) : (XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT));
+      // Let the runtime attach fragment density maps to the color swapchain: the foveation profile is applied to it in ApplyFoveation
+      XrSwapchainCreateInfoFoveationFB foveationCreateInfo { XR_TYPE_SWAPCHAIN_CREATE_INFO_FOVEATION_FB };
+      foveationCreateInfo.flags = XR_SWAPCHAIN_CREATE_FOVEATION_FRAGMENT_DENSITY_MAP_BIT_FB;
+      if (i == 0 && m_foveationExtensionSupported)
+         swapchainCreateInfo.next = &foveationCreateInfo;
       OPENXR_CHECK(xrCreateSwapchain(m_session, &swapchainCreateInfo, &swapchain.swapchain), "Failed to create Swapchain");
 
       uint32_t swapchainImageCount;
       OPENXR_CHECK(xrEnumerateSwapchainImages(swapchain.swapchain, 0, &swapchainImageCount, nullptr), "Failed to enumerate Swapchain Images.");
+      m_backend->RequestFoveationImages(i == 0 && m_foveationExtensionSupported);
       XrSwapchainImageBaseHeader* swapchainImages = m_backend->AllocateSwapchainImageData(swapchain.swapchain, i == 0 ? SwapchainType::COLOR : SwapchainType::DEPTH, swapchainImageCount);
       OPENXR_CHECK(xrEnumerateSwapchainImages(swapchain.swapchain, swapchainImageCount, &swapchainImageCount, swapchainImages), "Failed to enumerate Swapchain Images.");
       m_backend->CreateImageViews(swapchain);
+      if (i == 0 && m_foveationExtensionSupported)
+      {
+         if (m_backend->CreateFoveationTextures(swapchain))
+            PLOGI << "Foveated rendering: " << swapchain.foveationTextures.size() << " density maps of " << swapchain.foveationWidth << 'x' << swapchain.foveationHeight << " received from the runtime";
+         else
+            PLOGI << "Foveated rendering: no density map from the runtime" << (m_backend->IsFragmentDensityMapSupported() ? "" : " (fragment density maps not supported by this build or driver)");
+      }
    }
    m_swapchainRenderTargets.resize(m_colorSwapchainInfo.imageViews.size() * m_depthSwapchainInfo.imageViews.size());
+   ApplyFoveation();
+   if (m_foveationExtensionSupported)
+      CreateOwnFoveationMap();
+
+   if (m_performanceMetricsExtensionSupported)
+   {
+      uint32_t count = 0;
+      OPENXR_CHECK(m_xrEnumeratePerformanceMetricsCounterPathsMETA(m_xrInstance, 0, &count, nullptr), "Failed to enumerate performance counters.");
+      vector<XrPath> paths(count);
+      OPENXR_CHECK(m_xrEnumeratePerformanceMetricsCounterPathsMETA(m_xrInstance, count, &count, paths.data()), "Failed to enumerate performance counters.");
+      m_performanceCounters.clear();
+      for (uint32_t i = 0; i < count; i++)
+      {
+         char name[XR_MAX_PATH_LENGTH];
+         uint32_t length = 0;
+         if (XR_SUCCEEDED(xrPathToString(m_xrInstance, paths[i], sizeof(name), &length, name)))
+            m_performanceCounters.emplace_back(name, paths[i]);
+      }
+      XrPerformanceMetricsStateMETA state { XR_TYPE_PERFORMANCE_METRICS_STATE_META };
+      state.enabled = XR_TRUE;
+      OPENXR_CHECK(m_xrSetPerformanceMetricsStateMETA(m_session, &state), "Failed to enable performance counters.");
+      string names;
+      for (const auto& counter : m_performanceCounters)
+         names += ' ' + counter.first;
+      PLOGI << "OpenXR performance counters enabled (" << m_performanceCounters.size() << "):" << names;
+   }
 
    auto inputHandler = std::make_unique<XRInputHandler>(g_pplayer->m_pininput, m_xrInstance, m_session);
    XrAction leftPoseAction = inputHandler->GetAction("/user/hand/left/input/grip/pose");
@@ -1060,6 +1387,172 @@ bool VRDevice::GetUIPanelTransforms(float width, float height, Matrix3D (&pixelT
    return true;
 }
 
+// Asks the runtime which controller models to show (the devices the player holds), keeping the models already loaded and loading the new ones.
+// The list is empty until the runtime has bound the controllers, and changes are signaled with XR_TYPE_EVENT_DATA_INTERACTION_RENDER_MODELS_CHANGED_EXT.
+void VRDevice::UpdateControllerModels()
+{
+   m_controllerModelsDirty = false;
+   m_controllerModelsRetryTime = 0.;
+   #if defined(XR_EXT_render_model) && defined(XR_EXT_interaction_render_model)
+   if (!m_renderModelExtensionSupported || m_session == XR_NULL_HANDLE || m_xrInputHandler == nullptr) // The input handler attaches the action sets, which the enumeration needs
+      return;
+
+   XrInteractionRenderModelIdsEnumerateInfoEXT enumerateInfo { XR_TYPE_INTERACTION_RENDER_MODEL_IDS_ENUMERATE_INFO_EXT };
+   uint32_t count = 0;
+   if (const XrResult res = m_xrEnumerateInteractionRenderModelIdsEXT(m_session, &enumerateInfo, 0, &count, nullptr); !XR_SUCCEEDED(res))
+   {
+      PLOGE << "OpenXR: failed to enumerate controller models: " << GetXRErrorString(m_xrInstance, res);
+      return;
+   }
+   vector<XrRenderModelIdEXT> ids(count);
+   if (count > 0 && !XR_SUCCEEDED(m_xrEnumerateInteractionRenderModelIdsEXT(m_session, &enumerateInfo, count, &count, ids.data())))
+      return;
+   ids.resize(count);
+   if (ids.empty()) // Controllers not bound yet: the runtime should signal the change, but ask again later in case it does not
+      m_controllerModelsRetryTime = static_cast<double>(usec()) * 1e-6 + 2.;
+
+   vector<ControllerModel> models;
+   vector<RenderModelHandles> handles;
+   for (const XrRenderModelIdEXT id : ids)
+   {
+      // Already loaded
+      if (const auto it = std::ranges::find_if(m_controllerModels, [id](const ControllerModel& model) { return model.id == static_cast<uint64_t>(id); }); it != m_controllerModels.end())
+      {
+         const size_t index = it - m_controllerModels.begin();
+         models.push_back(std::move(*it));
+         handles.push_back(m_renderModelHandles[index]);
+         m_renderModelHandles[index] = {};
+         it->id = 0;
+         continue;
+      }
+
+      // glTF extensions the asset may require: our loader (VRControllerModels) reads quantized attributes, nothing else
+      static const char* const gltfExtensions[] = { "KHR_mesh_quantization" };
+      XrRenderModelCreateInfoEXT createInfo { XR_TYPE_RENDER_MODEL_CREATE_INFO_EXT };
+      createInfo.renderModelId = id;
+      createInfo.gltfExtensionCount = static_cast<uint32_t>(std::size(gltfExtensions));
+      createInfo.gltfExtensions = gltfExtensions;
+      RenderModelHandles handle;
+      if (const XrResult res = m_xrCreateRenderModelEXT(m_session, &createInfo, &handle.renderModel); !XR_SUCCEEDED(res))
+      {
+         PLOGE << "OpenXR: failed to create controller model " << static_cast<uint64_t>(id) << ": " << GetXRErrorString(m_xrInstance, res);
+         continue;
+      }
+      XrRenderModelPropertiesGetInfoEXT propertiesInfo { XR_TYPE_RENDER_MODEL_PROPERTIES_GET_INFO_EXT };
+      XrRenderModelPropertiesEXT properties { XR_TYPE_RENDER_MODEL_PROPERTIES_EXT };
+      XrRenderModelSpaceCreateInfoEXT spaceInfo { XR_TYPE_RENDER_MODEL_SPACE_CREATE_INFO_EXT };
+      spaceInfo.renderModel = handle.renderModel;
+      XrRenderModelAssetCreateInfoEXT assetInfo { XR_TYPE_RENDER_MODEL_ASSET_CREATE_INFO_EXT };
+      XrRenderModelAssetEXT asset = XR_NULL_HANDLE;
+      XrResult res = m_xrGetRenderModelPropertiesEXT(handle.renderModel, &propertiesInfo, &properties);
+      if (XR_SUCCEEDED(res))
+         res = m_xrCreateRenderModelSpaceEXT(m_session, &spaceInfo, &handle.space);
+      if (XR_SUCCEEDED(res))
+      {
+         assetInfo.cacheId = properties.cacheId;
+         res = m_xrCreateRenderModelAssetEXT(m_session, &assetInfo, &asset);
+      }
+      ControllerModel model;
+      model.id = static_cast<uint64_t>(id);
+      if (XR_SUCCEEDED(res))
+      {
+         // The glTF binary, then the names of the animatable nodes, which are given in the order of the node states
+         XrRenderModelAssetDataGetInfoEXT dataInfo { XR_TYPE_RENDER_MODEL_ASSET_DATA_GET_INFO_EXT };
+         XrRenderModelAssetDataEXT data { XR_TYPE_RENDER_MODEL_ASSET_DATA_EXT };
+         res = m_xrGetRenderModelAssetDataEXT(asset, &dataInfo, &data);
+         auto glb = std::make_shared<vector<uint8_t>>(data.bufferCountOutput);
+         data.bufferCapacityInput = static_cast<uint32_t>(glb->size());
+         data.buffer = glb->data();
+         if (XR_SUCCEEDED(res))
+            res = m_xrGetRenderModelAssetDataEXT(asset, &dataInfo, &data);
+         model.asset = glb;
+         vector<XrRenderModelAssetNodePropertiesEXT> nodes(properties.animatableNodeCount);
+         XrRenderModelAssetPropertiesGetInfoEXT assetPropertiesInfo { XR_TYPE_RENDER_MODEL_ASSET_PROPERTIES_GET_INFO_EXT };
+         XrRenderModelAssetPropertiesEXT assetProperties { XR_TYPE_RENDER_MODEL_ASSET_PROPERTIES_EXT };
+         assetProperties.nodePropertyCount = properties.animatableNodeCount;
+         assetProperties.nodeProperties = nodes.data();
+         if (XR_SUCCEEDED(res))
+            res = m_xrGetRenderModelAssetPropertiesEXT(asset, &assetPropertiesInfo, &assetProperties);
+         for (const auto& node : nodes)
+            model.animatableNodes.emplace_back(node.uniqueName, strnlen(node.uniqueName, XR_MAX_RENDER_MODEL_ASSET_NODE_NAME_SIZE_EXT));
+         model.nodeStates.resize(properties.animatableNodeCount, { { { 0.f, 0.f, 0.f, 1.f }, { 0.f, 0.f, 0.f } }, true });
+         m_xrDestroyRenderModelAssetEXT(asset);
+      }
+      if (!XR_SUCCEEDED(res))
+      {
+         // The asset may not be available yet (XR_ERROR_RENDER_MODEL_ASSET_UNAVAILABLE_EXT): try again a bit later
+         PLOGE << "OpenXR: failed to load controller model " << model.id << ": " << GetXRErrorString(m_xrInstance, res);
+         if (handle.space != XR_NULL_HANDLE)
+            xrDestroySpace(handle.space);
+         m_xrDestroyRenderModelEXT(handle.renderModel);
+         m_controllerModelsRetryTime = static_cast<double>(usec()) * 1e-6 + 2.;
+         continue;
+      }
+      PLOGI << "OpenXR controller model " << model.id << " loaded: " << model.asset->size() / 1024 << " KB, " << model.animatableNodes.size() << " animatable nodes";
+      models.push_back(std::move(model));
+      handles.push_back(handle);
+   }
+
+   // Models no longer listed
+   for (const RenderModelHandles& handle : m_renderModelHandles)
+   {
+      if (handle.space != XR_NULL_HANDLE)
+         xrDestroySpace(handle.space);
+      if (handle.renderModel != XR_NULL_HANDLE)
+         m_xrDestroyRenderModelEXT(handle.renderModel);
+   }
+   m_controllerModels = std::move(models);
+   m_renderModelHandles = std::move(handles);
+   #endif
+}
+
+void VRDevice::LocateControllerModels(XrTime time)
+{
+   #if defined(XR_EXT_render_model) && defined(XR_EXT_interaction_render_model)
+   const bool show = m_showControllers && m_tableCaptureView == TableCaptureView::None;
+   for (size_t i = 0; i < m_controllerModels.size(); i++)
+   {
+      ControllerModel& model = m_controllerModels[i];
+      model.located = false;
+      if (!show)
+         continue;
+      XrSpaceLocation location { XR_TYPE_SPACE_LOCATION };
+      if (xrLocateSpace(m_renderModelHandles[i].space, m_referenceSpace, time, &location) != XR_SUCCESS)
+         continue;
+      if ((location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) == 0 || (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) == 0)
+         continue;
+      model.located = true;
+      model.modelToReference = PoseToMatrix(location.pose);
+      if (model.nodeStates.empty())
+         continue;
+      m_renderModelNodeStates.resize(model.nodeStates.size());
+      XrRenderModelStateGetInfoEXT stateInfo { XR_TYPE_RENDER_MODEL_STATE_GET_INFO_EXT };
+      stateInfo.displayTime = time;
+      XrRenderModelStateEXT state { XR_TYPE_RENDER_MODEL_STATE_EXT };
+      state.nodeStateCount = static_cast<uint32_t>(m_renderModelNodeStates.size());
+      state.nodeStates = m_renderModelNodeStates.data();
+      if (XR_SUCCEEDED(m_xrGetRenderModelStateEXT(m_renderModelHandles[i].renderModel, &stateInfo, &state)))
+         for (size_t j = 0; j < model.nodeStates.size(); j++)
+            model.nodeStates[j] = { m_renderModelNodeStates[j].nodePose, m_renderModelNodeStates[j].isVisible == XR_TRUE };
+   }
+   #endif
+}
+
+void VRDevice::DestroyControllerModels()
+{
+   #if defined(XR_EXT_render_model) && defined(XR_EXT_interaction_render_model)
+   for (const RenderModelHandles& handle : m_renderModelHandles)
+   {
+      if (handle.space != XR_NULL_HANDLE)
+         xrDestroySpace(handle.space);
+      if (handle.renderModel != XR_NULL_HANDLE)
+         m_xrDestroyRenderModelEXT(handle.renderModel);
+   }
+   #endif
+   m_renderModelHandles.clear();
+   m_controllerModels.clear();
+}
+
 void VRDevice::ReleaseSession()
 {
    assert(m_session);
@@ -1069,6 +1562,19 @@ void VRDevice::ReleaseSession()
 
    // Destroy the swapchian render targets, and color/depth image views
    m_swapchainRenderTargets.clear();
+   {
+      // The density map textures (the same handle may serve several images)
+      std::set<uint16_t> destroyed;
+      for (const auto& texture : m_colorSwapchainInfo.foveationTextures)
+         if (bgfx::isValid(texture) && destroyed.insert(texture.idx).second)
+            bgfx::destroy(texture);
+      m_colorSwapchainInfo.foveationTextures.clear();
+      if (bgfx::isValid(m_ownFoveationMap))
+      {
+         bgfx::destroy(m_ownFoveationMap);
+         m_ownFoveationMap = BGFX_INVALID_HANDLE;
+      }
+   }
    for (const auto& imageView : m_colorSwapchainInfo.imageViews)
       bgfx::destroy(imageView);
    for (const auto& imageView : m_depthSwapchainInfo.imageViews)
@@ -1080,7 +1586,13 @@ void VRDevice::ReleaseSession()
    if (m_depthSwapchainInfo.swapchain)
       m_backend->FreeSwapchainImageData(m_depthSwapchainInfo.swapchain);
 
-   // Destroy the swapchains.
+   // Destroy the foveation profile, then the swapchains.
+   if (m_foveationProfile != XR_NULL_HANDLE)
+   {
+      OPENXR_CHECK(m_xrDestroyFoveationProfileFB(m_foveationProfile), "Failed to destroy foveation profile");
+      m_foveationProfile = XR_NULL_HANDLE;
+      m_foveationApplied = false;
+   }
    if (m_colorSwapchainInfo.swapchain)
       OPENXR_CHECK(xrDestroySwapchain(m_colorSwapchainInfo.swapchain), "Failed to destroy Color Swapchain");
    if (m_depthSwapchainInfo.swapchain)
@@ -1131,8 +1643,17 @@ void VRDevice::PollEvents()
             PLOGI << "XrEventDataInteractionProfileChanged for unknown Session";
             break;
          }
+         m_controllerModelsDirty = true;
          break;
       }
+      #ifdef XR_EXT_interaction_render_model
+      // The devices the player holds changed: ask again which controller models to show
+      case XR_TYPE_EVENT_DATA_INTERACTION_RENDER_MODELS_CHANGED_EXT:
+      {
+         m_controllerModelsDirty = true;
+         break;
+      }
+      #endif
       // Log that there's a reference space change pending.
       case XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING:
       {
@@ -1290,6 +1811,7 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
       submitFrame(nullptr);
       return;
    }
+   LogRuntimeStatus();
 
    // Let OpenXR throttle frame submission and get the XrFrameState for timing and rendering info.
    #ifdef MSVC_CONCURRENCY_VIEWER
@@ -1361,7 +1883,12 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
          rendered = false;
       }
       if (rendered)
+      {
          UpdateUIPanel(views, renderLayerInfo.predictedDisplayTime);
+         if (m_controllerModelsDirty || (m_controllerModelsRetryTime > 0. && static_cast<double>(usec()) * 1e-6 > m_controllerModelsRetryTime))
+            UpdateControllerModels();
+         LocateControllerModels(renderLayerInfo.predictedDisplayTime);
+      }
       if (rendered)
       {
          // The steps that leads to the matrix stack implemented below are the followings, with first matrix being view, 
@@ -1561,6 +2088,9 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
                    CMTOVPU(m_tablePos.z))
                * viewOrientation; // Reapply view orientation
             m_roomWorld.m_toWorld = invSceneScale * m_pfWorld.m_toWorld * pfToRoom;
+
+            // The eye views place the room with (room VPU) * m_roomWorld.m_toWorld * (VPU to meters) * (eye view in meters), see below
+            m_referenceToRoom = Matrix3D::MatrixScale(1.f / vpuToWorldScale) * Matrix3D::MatrixInverse(m_roomWorld.m_toWorld);
          }
 
          // As we only have one view matrix for shading, each eye view is integrated in the projection matrix, by reverting the 'shading' view matrix then
@@ -1602,6 +2132,40 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
          constexpr XrSwapchainImageAcquireInfo acquireInfo { XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO, nullptr };
          OPENXR_CHECK(xrAcquireSwapchainImage(m_colorSwapchainInfo.swapchain, &acquireInfo, &colorImageIndex), "Failed to acquire Image from the Color Swapchian");
          OPENXR_CHECK(xrAcquireSwapchainImage(m_depthSwapchainInfo.swapchain, &acquireInfo, &depthImageIndex), "Failed to acquire Image from the Depth Swapchian");
+         #if defined(ENABLE_BGFX) && defined(BGFX_RESOLVE_FRAGMENT_DENSITY_MAP)
+         // Foveated rendering: the scene is rendered with the density map the runtime keeps for the acquired image (eye-tracked when the headset allows it)
+         if (g_pplayer->m_renderer)
+         {
+            // Our own map when offsets are available (the runtime's maps cannot take them), else the runtime's map of the acquired image
+            bgfx::TextureHandle map = BGFX_INVALID_HANDLE;
+            if (m_foveationMode != 0)
+            {
+               if (bgfx::isValid(m_ownFoveationMap))
+                  map = m_ownFoveationMap;
+               else if (colorImageIndex < m_colorSwapchainInfo.foveationTextures.size())
+                  map = m_colorSwapchainInfo.foveationTextures[colorImageIndex];
+            }
+            g_pplayer->m_renderer->SetFragmentDensityMap(map);
+            // The map has its high density area in the middle: the gaze moves it through offsets, in pixels of the scene buffer
+            int32_t offsets[4] = { 0, 0, 0, 0 };
+            if (bgfx::isValid(map) && map.idx == m_ownFoveationMap.idx && m_foveationEyeTrackedExtensionSupported && m_backend->IsFragmentDensityMapOffsetSupported())
+            {
+               XrFoveationEyeTrackedStateMETA state { XR_TYPE_FOVEATION_EYE_TRACKED_STATE_META };
+               if (XR_SUCCEEDED(m_xrGetFoveationEyeTrackedStateMETA(m_session, &state)) && (state.flags & XR_FOVEATION_EYE_TRACKED_STATE_VALID_BIT_META))
+               {
+                  const RenderTarget* const scene = g_pplayer->m_renderer->GetBackBufferTexture();
+                  const float halfW = 0.5f * static_cast<float>(scene->GetWidth()), halfH = 0.5f * static_cast<float>(scene->GetHeight());
+                  for (int eye = 0; eye < 2; eye++)
+                  {
+                     m_foveationCenter[eye] = state.foveationCenter[eye];
+                     offsets[eye * 2 + 0] = static_cast<int32_t>(lroundf((m_foveationFlipX ? -1.f : 1.f) * state.foveationCenter[eye].x * halfW));
+                     offsets[eye * 2 + 1] = static_cast<int32_t>(lroundf((m_foveationFlipY ? -1.f : 1.f) * state.foveationCenter[eye].y * halfH));
+                  }
+               }
+            }
+            g_pplayer->m_renderer->SetFragmentDensityMapOffsets(offsets, 2);
+         }
+         #endif
 
          XrSwapchainImageWaitInfo waitInfo = { XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
          waitInfo.timeout = XR_INFINITE_DURATION;

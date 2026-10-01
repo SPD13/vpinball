@@ -19,6 +19,13 @@ public:
 
    virtual void CreateImageViews(VRDevice::SwapchainInfo& swapchain) = 0;
 
+   // Foveated rendering: ask the runtime for its fragment density maps when enumerating the next swapchain's images (XR_FB_foveation_vulkan), then
+   // wrap them as textures usable as frame buffer attachments. Only the Vulkan backend with a bgfx that has fragment density map support does it.
+   virtual void RequestFoveationImages(bool request) { }
+   virtual bool CreateFoveationTextures(VRDevice::SwapchainInfo& swapchain) { return false; }
+   virtual bool IsFragmentDensityMapSupported() const { return false; }
+   virtual bool IsFragmentDensityMapOffsetSupported() const { return false; }
+
    virtual const std::vector<int64_t> GetSupportedColorSwapchainFormats() = 0;
    virtual const std::vector<int64_t> GetSupportedDepthSwapchainFormats() = 0;
 

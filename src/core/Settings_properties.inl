@@ -253,6 +253,18 @@ PropEnum(PlayerVR, AskToTurnOn, "Enable VR"s, "Ask to turn on VR"s, int, 1, "Ena
 #else
 PropEnum(PlayerVR, AskToTurnOn, "Enable VR"s, "Ask to turn on VR"s, int, 2, "Enabled"s, "Autodetect"s, "Disabled"s);
 #endif
+// Foveated rendering: full shading only around the point the eyes look at, requested from the OpenXR runtime (XR_FB_foveation; on the Steam Frame the
+// runtime generates eye-tracked density maps when XR_META_foveation_eye_tracked is available and eye tracking is enabled in the headset settings).
+// The default is on for the standalone OpenXR builds, where native resolution is only affordable with it; it is inert where the runtime lacks the extension
+#if defined(__STANDALONE__) && defined(ENABLE_XR)
+PropEnum(PlayerVR, Foveation, "Foveated rendering"s, "Reduce the shading quality away from the point the eyes look at, to render at a higher resolution or with heavier settings. Needs runtime support (Steam Frame); eye-tracked when the headset allows it, otherwise fixed at the center"s, int, 2, "Off"s, "Low"s, "Medium"s, "High"s);
+#else
+PropEnum(PlayerVR, Foveation, "Foveated rendering"s, "Reduce the shading quality away from the point the eyes look at, to render at a higher resolution or with heavier settings. Needs runtime support (Steam Frame); eye-tracked when the headset allows it, otherwise fixed at the center"s, int, 0, "Off"s, "Low"s, "Medium"s, "High"s);
+#endif
+// Sign conventions of the gaze offsets applied to the density map (the runtime reports the gaze in normalized coordinates, Vulkan images have y down); kept as settings to be tuned on the device
+PropBool(PlayerVR, FoveationFlipX, "Foveation offset: flip X"s, "Mirror the horizontal gaze offset of the foveated rendering"s, false);
+PropBool(PlayerVR, FoveationFlipY, "Foveation offset: flip Y"s, "Mirror the vertical gaze offset of the foveated rendering"s, true);
+PropBool(PlayerVR, FoveationEyeTracked, "Eye-tracked foveation"s, "Follow the eyes with the foveated rendering when the runtime supports it (XR_META_foveation_eye_tracked) and eye tracking is enabled in the headset settings; otherwise the full quality area is fixed at the center of the view"s, true);
 PropEnum(PlayerVR, DisplayRefreshRate, "Headset Refresh Rate"s, "Refresh rate requested from the headset when supported. Lower rates give the renderer more time per frame and avoid reprojected frames on standalone headsets"s, int, 0, "Runtime default"s, "72 Hz"s, "80 Hz"s, "90 Hz"s, "120 Hz"s);
 PropFloatDyn(PlayerVR, Orientation, "View orientation"s, "VR view orientation"s, -180.f, 180.f, 0.f);
 PropFloatDyn(PlayerVR, TableX, "View Offset X"s, "VR view X offset"s, -100.f, 100.f, 0.f);
@@ -266,6 +278,7 @@ PropBool(PlayerVR, AddBackglass, "Add Backglass"s, "Add a default backglass disp
 PropFloatDyn(PlayerVR, ControllerCabYOffset, "Cabinet Y Offset"s, "Y offset to apply when using controller view centering"s, -150.f, 50.f, 0.f);
 PropFloatDyn(PlayerVR, ControllerLockbarScale, "Lockbar size ratio"s, "Lockbar size ratio to apply when using controller view centering"s, 0.5f, 2.0f, 1.f);
 PropFloatUnbounded(PlayerVR, ResFactor, "ResFactor"s, ""s, -1.f);
+PropBool(PlayerVR, ShowControllers, "Show controllers"s, "Show the controllers in the scene, as the headset system shows them, with their buttons moving when pressed (needs runtime support: XR_EXT_render_model)"s, true);
 PropBool(PlayerVR, LockFeetToGround, "Lock Feet to Ground"s, "Lock cabinet feet to ground. This usually feels more natural (avoid floating cabinet) but may be deactivated for example for playing mini flipper seated at a desk."s, true);
 
 // Physics override profiles

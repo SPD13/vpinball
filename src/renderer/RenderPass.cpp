@@ -242,9 +242,8 @@ bool RenderPass::Execute(const bool log)
       #if defined(ENABLE_BGFX)
       if (m_areaOfInterest.x != FLT_MAX)
          bgfx::setViewScissor(m_rt->GetRenderDevice()->m_activeViewId, left, m_rt->GetHeight() - top, right - left, top - bottom);
-      #if defined(_DEBUG)
-      bgfx::setViewName(m_rt->GetRenderDevice()->m_activeViewId, m_name.append(" [RT=").append(m_rt->m_name).append(1,']').c_str());
-      #endif
+      if (m_rt->GetRenderDevice()->m_nameViews)
+         m_rt->GetRenderDevice()->SetViewName(m_rt->GetRenderDevice()->m_activeViewId, m_name + " [RT=" + m_rt->m_name + ']');
       #endif
       for (RenderCommand* cmd : m_commands)
          cmd->Execute(m_rt->m_nLayers, log);
@@ -256,9 +255,8 @@ bool RenderPass::Execute(const bool log)
       #if defined(ENABLE_BGFX)
       if (m_areaOfInterest.x != FLT_MAX)
          bgfx::setViewScissor(m_rt->GetRenderDevice()->m_activeViewId, left, m_rt->GetHeight() - top, right - left, top - bottom);
-      #if defined(_DEBUG)
-      bgfx::setViewName(m_rt->GetRenderDevice()->m_activeViewId, m_name.append(" [RT=").append(m_rt->m_name).append(" / Layer=").append(std::to_string(m_singleLayerRendering)).append(1,']').c_str());
-      #endif
+      if (m_rt->GetRenderDevice()->m_nameViews)
+         m_rt->GetRenderDevice()->SetViewName(m_rt->GetRenderDevice()->m_activeViewId, m_name + " [RT=" + m_rt->m_name + " / Layer=" + std::to_string(m_singleLayerRendering) + ']');
       #endif
       for (RenderCommand* cmd : m_commands)
          cmd->Execute(1, log);
@@ -271,9 +269,8 @@ bool RenderPass::Execute(const bool log)
          #if defined(ENABLE_BGFX)
          if (m_areaOfInterest.x != FLT_MAX)
             bgfx::setViewScissor(m_rt->GetRenderDevice()->m_activeViewId, left, m_rt->GetHeight() - top, right - left, top - bottom);
-         #if defined(_DEBUG)
-         bgfx::setViewName(m_rt->GetRenderDevice()->m_activeViewId, m_name.append(" [RT=").append(m_rt->m_name).append(" / Layer=").append(std::to_string(layer)).append(1,']').c_str());
-         #endif
+         if (m_rt->GetRenderDevice()->m_nameViews)
+            m_rt->GetRenderDevice()->SetViewName(m_rt->GetRenderDevice()->m_activeViewId, m_name + " [RT=" + m_rt->m_name + " / Layer=" + std::to_string(layer) + ']');
          #endif
          for (RenderCommand* cmd : m_commands)
             cmd->Execute(1, log);

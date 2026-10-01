@@ -19,6 +19,7 @@ Changes a player sees, in the standalone builds (details in the numbered section
 - **Web upload**: add tables and ROMs from a browser on the local network, with a pairing code, missing ROMs listed, and a link to the ROM folder (sections 5 and 8).
 - **Missing ROM message** naming the files to add and where (section 8).
 - **VR**: the menu on a panel standing in the room, in the table's direction, at an adjustable distance, used with the controllers' pointer; notifications above the menu (sections 7 and 8).
+- **Eye-tracked foveated rendering, exclusive to this branch and to the Steam Frame build**: full shading only around the point the eyes look at, following the headset's eye tracker, so native 2160×2160 per eye stays affordable; a "Foveated rendering" level (Off / Low / Medium / High), an "Eye-tracked" switch and a status line in the VR settings page. Not in upstream Visual Pinball, and inert on Windows and macOS, whose builds lack the Vulkan driver support and the bgfx patch (section 9, and `Doc/foveated-rendering.md` for the full technical reference).
 
 ## Status
 
@@ -26,6 +27,7 @@ Changes a player sees, in the standalone builds (details in the numbered section
 |---|---|
 | Table library, table picker, launcher mode, web upload, shared ROM folder | Built and run on macOS arm64. Checked through automated tests, scripted runs with frame captures of the real application, and `curl` for the web server. On Windows, the table picker was tested by hand (tabs, thumbnail grid, favorite stars, pager arrows, search box); other parts are not yet driven by a person for every feature (see each section). On the Steam Frame (2026-10-01), the lobby, the Wi-Fi upload and uploaded tables were used in the headset. |
 | OpenXR, Valve Frame controller profile, Vulkan extension filter, VR menu panel and pointer | **Run in VR on Windows with a PSVR2** (SteamVR 2.17), in the `windows-mingw` build with `ENABLE_XR=ON` (2026-09-27), which is standalone + OpenXR + Vulkan like the Frame build. Linux ARM64: rebuilt with everything on 2026-09-28 and **run in the headset on the Steam Frame on 2026-10-01** after the driver workaround of section 7: OpenXR runtime found, Frame controller profile accepted with its 32 bindings, lobby and tables displayed (details in `Doc/steam-frame-port-plan.md`, section 6). Not yet checked there: launch from the Steam library, pointer and buttons, performance. |
+| Eye-tracked foveated rendering (Steam Frame only) | **Works in the headset on the Steam Frame (2026-10-01)**: the sharp zone follows the eyes on both axes, confirmed with the head moving while the eyes stay on an object. Open: the measured gain is nil so far on a heavy table (scene pass ≈ 9.8 ms at 2160×2160 whatever the level); the tiled-GPU analysis and the device experiments are in `Doc/foveated-rendering.md`, section 7. |
 | Windows | `windows-mingw` (with or without `ENABLE_XR`): built and used with GCC 16 (MSYS2 UCRT64), Debug. Visual Studio build: built and run in VR in Debug with Vulkan, without the launcher (see "Build variants"). |
 | iOS / Android library builds | Not compiled. Shared files they use were changed (`WebServer`, `InGameUIPage`, `VPApp`, `player`); see "Effects on existing builds". |
 
@@ -33,13 +35,13 @@ Changes a player sees, in the standalone builds (details in the numbered section
 
 The launcher lives in the in-game menu and is compiled only in *standalone* builds (`__STANDALONE__`).
 
-| Build | Table picker and launcher | Web upload | OpenXR |
-|---|---|---|---|
-| macOS | yes | yes | no (no macOS branch in `VRDevice`) |
-| Linux x64 / aarch64 | yes | yes (RAR/7z when `external.sh` built libarchive) | yes, with `-DENABLE_XR=ON` (new) |
-| windows-mingw | yes | yes | yes, with `-DENABLE_XR=ON` (new, Vulkan only) |
-| Windows, Visual Studio | no | no | yes (as upstream) |
-| iOS / Android library | hidden (they have a native launcher) | yes (as upstream) | Android as upstream |
+| Build | Table picker and launcher | Web upload | OpenXR | Foveated rendering |
+|---|---|---|---|---|
+| macOS | yes | yes | no (no macOS branch in `VRDevice`) | no |
+| Linux x64 / aarch64 | yes | yes (RAR/7z when `external.sh` built libarchive) | yes, with `-DENABLE_XR=ON` (new) | **aarch64 only** (Steam Frame: bgfx patch applied by `platforms/linux-aarch64/external.sh`, Turnip driver) |
+| windows-mingw | yes | yes | yes, with `-DENABLE_XR=ON` (new, Vulkan only) | no (compiled out: unpatched bgfx; the OpenXR part is inert without the FB/META extensions) |
+| Windows, Visual Studio | no | no | yes (as upstream) | no |
+| iOS / Android library | hidden (they have a native launcher) | yes (as upstream) | Android as upstream | no |
 
 ## 1. Table library
 
@@ -151,6 +153,31 @@ Used in the headset in the `windows-mingw` build with `ENABLE_XR`. Not compiled 
 - **Notifications** in VR are stacked just above the menu window (`NotificationOverlay`).
 - **Web server on Windows** (network address through `GetAdaptersAddresses`, `std::filesystem` listing on all platforms, UTF-8 paths), and an upload progress banner on the web page.
 
+## 9. Eye-tracked foveated rendering (branch `foveated-rendering`, 2026-10-01)
+
+Files: `src/core/Settings_properties.inl`, `src/renderer/VRDevice.h/.cpp`, `src/renderer/XRVulkanBackend.h`, `src/renderer/XRGraphicBackend.h`, `src/renderer/RenderTarget.h/.cpp`, `src/renderer/Renderer.h/.cpp`, `src/renderer/RenderPass.cpp`, `src/renderer/RenderDevice.h/.cpp`, `src/ui/live/ingameui/VRSettingsPage.cpp`, `platforms/linux-aarch64/bgfx-fragment-density-map.patch`, `platforms/linux-aarch64/external.sh`.
+
+Full shading only around the point the eyes look at, through a Vulkan fragment density map on the scene buffer. **Exclusive to this branch, and only built for the Steam Frame** (Linux aarch64 package: the bgfx patch is applied there alone, and the rest is under `#ifdef` on its macros, so Windows and macOS builds compile it out). Evaluation and plan in `Doc/foveated-rendering-plan.md`, full technical reference (mechanism, every layer of the implementation, verification, measurements, open performance analysis) in `Doc/foveated-rendering.md`; everything below was built and checked on the Steam Frame.
+
+- **Settings** (`PlayerVR`): `Foveation` (Off / Low / Medium / High, default Medium on standalone OpenXR builds, Off elsewhere), `FoveationEyeTracked` (default on), and the sign conventions of the gaze offsets `FoveationFlipX` (off) / `FoveationFlipY` (on), which were settled on the device. The VR settings page has the first two and a status line ("Eye-tracked", "Fixed: eye tracking not active (enable it in the headset settings)", "Not supported by the runtime", …). Changes apply live.
+- **Runtime side** (`VRDevice`): the color swapchain is created with `XrSwapchainCreateInfoFoveationFB`, a profile (`XrFoveationLevelProfileCreateInfoFB` + `XrFoveationEyeTrackedProfileCreateInfoMETA`) is applied with `xrUpdateSwapchainFB`, the eye-tracked state and gaze come from `xrGetFoveationEyeTrackedStateMETA`. On the Frame this is what turns the eye tracking on (SteamVR/OpenXR 2.17.10; the user must have calibrated eye tracking in the headset settings). The runtime also hands density maps for its swapchain images (`XrSwapchainImageFoveationVulkanFB`, 68×68, one layer per eye), wrapped as bgfx textures by `XRVulkanBackend::CreateFoveationTextures`; they are kept as a fallback only, see below.
+- **Why the app builds its own map**: the gaze is applied through fragment density map *offsets* (`VK_EXT_fragment_density_map_offset`, passed at the end of the render pass), and Turnip only honors offsets on density map images created with `VK_IMAGE_CREATE_FRAGMENT_DENSITY_MAP_OFFSET_BIT` (`tu_enable_fdm_offset` in `tu_cmd_buffer.cc`), which the runtime's maps are not. So `VRDevice::CreateOwnFoveationMap` makes a 68×68 (eye size / 32, the driver's minimum texel), two-layer RG8 map, filled by `FillOwnFoveationMap` with flat rings per level (full density radius 0.45 / 0.30 / 0.20 of the half width, half density up to 0.80 / 0.55 / 0.38, quarter beyond), and every frame the gaze (normalized, y up) becomes pixel offsets (`x · W/2`, `−y · H/2`) for both eyes.
+- **Vulkan device** (`XRVulkanBackend.h`): enables `VK_EXT_fragment_density_map` (+ feature), `VK_VALVE_fragment_density_map_layered` (one map layer per eye on our layered scene buffer, Valve's extension, in upstream Mesa), `VK_EXT_fragment_density_map_offset` and `VK_KHR_create_renderpass2`, all when the driver has them; logs "Fragment density maps: supported, one layer per eye, with offsets".
+- **bgfx patch** `bgfx-fragment-density-map.patch` (Linux only, applied after the descriptor pool one, cache tag `-turnip3`): `BGFX_RESOLVE_FRAGMENT_DENSITY_MAP` tags a frame buffer attachment as the density map (kept out of the color/depth lists, `VkRenderPassFragmentDensityMapCreateInfoEXT` on the v1 render pass, extra attachment in the `VkFramebuffer`, layout barriers); `BGFX_TEXTURE_FRAGMENT_DENSITY_MAP` for textures that are maps (usage, offset-capable, kept in the density map layout; external images are taken as is); `VkPipelineFragmentDensityMapLayeredCreateInfoVALVE` on pipelines rendering into a layered map; render targets created offset-capable; `bgfx::setFragmentDensityMapOffsets(frameBuffer, offsetsXY, layers)` stored per frame and applied with `vkCmdEndRenderPass2KHR` (offsets rounded to the device granularity); `BGFX_CAPS_FRAGMENT_DENSITY_MAP`. Unpatched bgfx does not define these macros, so all the VPX code is under `#ifdef` and inert on Windows and macOS.
+- **Scene buffer** (`RenderTarget::SetFragmentDensityMap/Offsets`, `Renderer::SetFragmentDensityMap/Offsets`): `BackBuffer1` and `BackBuffer2` get a cached frame buffer variant carrying the map; `VRDevice::RenderFrame` selects it right after acquiring the swapchain image and sets the offsets of the frame. Post passes sample the resolved full-resolution image unchanged (non-subsampled image), so bloom, AA, tonemap and the preview need nothing.
+- **Measurement**: the runtime's counter `/perfmetrics_meta/app/gpu_frametime` (`XR_META_performance_metrics`) and, with `VPX_GPU_PROFILE=1` in the environment, bgfx's per-view GPU timings grouped by render target (`VRDevice::LogRuntimeStatus`, every 5 s, needs the view names, which release builds now set when profiling — `RenderDevice::m_nameViews`).
+
+## 10. Controller models (2026-10-01, not yet run in the headset)
+
+Files: `src/renderer/VRControllerModels.h/.cpp` (new), `third-party/include/cgltf/cgltf.h` (new, cgltf 1.15, MIT, copied from bgfx's `3rdparty`; `third-party/` is ignored by git, so it needs `git add -f`), `src/renderer/VRDevice.h/.cpp`, `src/renderer/Renderer.h/.cpp`, `src/core/Settings_properties.inl`, `src/ui/live/ingameui/VRSettingsPage.cpp`, `make/CMakeLists_sources.txt`, `make/vpx-core.vcxitems(.filters)`.
+
+The controllers the player holds are drawn in the scene as the headset system shows them, with their buttons, triggers and thumbsticks moving, so the button layout can be seen in VR. The meshes come from the runtime, not from files of ours (Valve's recommendation for the Steam Frame), so any headset whose runtime has the extensions gets its own controllers.
+
+- **Runtime side** (`VRDevice`): enables `XR_EXT_render_model`, `XR_EXT_interaction_render_model` and `XR_EXT_uuid` (needed as the instance asks for OpenXR 1.0) when the runtime has them; the log says "OpenXR controller models: supported by the runtime". `UpdateControllerModels` asks for the models of the devices held (`xrEnumerateInteractionRenderModelIdsEXT`, again on `XR_TYPE_EVENT_DATA_INTERACTION_RENDER_MODELS_CHANGED_EXT`, on interaction profile changes, and every 2 s while the list is empty or an asset was unavailable), creates each model, its space and its asset, and keeps the glTF binary and the names of its animatable nodes ("OpenXR controller model N loaded: … KB, … animatable nodes"). Only `KHR_mesh_quantization` is declared as a supported glTF extension. Every frame, `LocateControllerModels` locates each model space in the reference space and reads the node poses (`xrGetRenderModelStateEXT`) at the predicted display time. Both run on the render thread before the frame is requested, like the menu panel; the logic thread reads the result while preparing the frame.
+- **Drawing** (`VRControllerModels`, owned by `Renderer`, called at the end of `RenderDynamics` in VR, outside reflection passes): the asset is parsed with cgltf once per model (triangle meshes, base color factor and texture, alpha mask and blend, node hierarchy; PNG/JPEG images through `BaseTexture::CreateFromData`), then each node is drawn with the basic shader in the room space reference: reference space to room VPU is `VRDevice::GetReferenceToRoom()`. An animated node takes the pose given by the runtime as its local transform (relative to its parent), keeping its own scale. Materials: metallic-roughness factors to a VPX material (the metallic-roughness texture is ignored, a mesh which has one is shaded as a non metal), half lit / half unlit (`controllerUnlitPart`) so the controllers stay readable on dark tables, both sides drawn (the room space is mirrored compared to glTF).
+- **Setting** `PlayerVR/ShowControllers` (default on), in the VR settings page, applied live. The models are also hidden during the table image capture.
+- **To check on the device**: that SteamVR lists the Frame controllers once they are bound, their placement against the real controllers, the direction of the texture coordinates, that the animated parts move the right way (the pose is taken as relative to the parent node), and the cost.
+
 ## Effects on existing builds
 
 - `-Play`, the editor and the Visual Studio build behave as before, except for the OpenXR changes that apply everywhere: the Vulkan extension filter, the extra controller inputs and default mappings, the menu panel and pointer, and the upstream VR fixes of section 8.
@@ -170,6 +197,9 @@ src/ui/live/ingameui/TablePickerPage.cpp
 src/ui/live/ingameui/MessagePage.h
 src/ui/live/ingameui/MessagePage.cpp
 tests/test-table-library.cpp
+src/renderer/VRControllerModels.h
+src/renderer/VRControllerModels.cpp
+third-party/include/cgltf/cgltf.h
 docs/Steam Frame Branch.md
 ```
 
@@ -182,6 +212,7 @@ make/CMakeLists_sources.txt             new sources, VPX_WEBSERVER_SOURCES
 make/CMakeLists_app.txt                 web server, zip, ENABLE_XR and loader on macOS/Linux
 platforms/linux-aarch64/external.sh     OpenXR loader, xz + libarchive, bgfx patch for the Frame's driver
 platforms/linux-aarch64/bgfx-turnip-descriptor-pool.patch   descriptor pools without the free-set flag (section 7)
+platforms/linux-aarch64/bgfx-fragment-density-map.patch     fragment density map attachments and offsets (section 9)
 platforms/linux-x64/external.sh         OpenXR loader
 lib/src/WebServer.h, WebServer.cpp      desktop use, pairing, staged uploads
 src/assets/web/app.js, vpx.html         pairing prompt, Upload Folder, missing ROMs, ROM folder link
@@ -193,7 +224,8 @@ src/core/Settings_properties.inl        Standalone settings, VR autodetect defau
 src/core/player.h, player.cpp           table image on close
 src/input/InputManager.cpp              quit action captures the image in launcher mode
 src/input/XRInputHandler.h              Frame controller, aim poses, analog read
-src/renderer/VRDevice.h, VRDevice.cpp   Linux, Frame extension, pointer
+src/renderer/VRDevice.h, VRDevice.cpp   Linux, Frame extension, pointer, controller models
+src/renderer/Renderer.h, Renderer.cpp   controller models drawn in VR
 src/renderer/XRVulkanBackend.h          run-time libvulkan on Linux, extension filter
 src/ui/live/LiveUI.h, LiveUI.cpp        pointer fed to ImGui, menu rendered while closing for the table image
 src/ui/live/ingameui/HomePage.cpp       "Tables" entry
