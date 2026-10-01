@@ -23,6 +23,14 @@ void HomePage::BuildPage()
    constexpr bool isTouch = g_isAndroid || g_isIOS;
 
 #if defined(__STANDALONE__) && !defined(__LIBVPINBALL__)
+   // Same as the quit action of the table picker menu: leave the launcher instead of getting back to the lobby
+   AddItem(std::make_unique<InGameUIItem>("Quit Visual Pinball"s, ""s,
+      [this]()
+      {
+         g_app->m_launcherMode = false;
+         m_player->SetCloseState(Player::CS_CLOSE_CAPTURE_SCREENSHOT);
+      }));
+
    // Mobile builds select tables in their native launcher
    AddItem(std::make_unique<InGameUIItem>("Tables"s, "Play another table"s, "tables/picker"s));
 #endif
