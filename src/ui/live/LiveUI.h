@@ -41,6 +41,11 @@ public:
    
    void ShowTouchOverlay(bool show) { m_showTouchOverlay = show; }
 
+   // Loading screen shown while switching tables (see Player::RenderLoadingFrame): a message with a spinner, drawn instead of the rest of the UI
+   // while the text is not empty
+   void SetLoadingText(const string& text) { m_loadingText = text; }
+   bool IsLoadingScreenShown() const { return !m_loadingText.empty(); }
+
    unsigned int PushNotification(const string &message, const int lengthMs, const unsigned int reuseId = 0) { return m_notificationOverlay.PushNotification(message, lengthMs, reuseId); }
 
    // Messages that the player must acknowledge, shown one at a time in the in-game UI (which pauses the game). Lines starting with '!' are
@@ -71,6 +76,9 @@ public:
    void HandleSDLEvent(SDL_Event &e) const;
 
 private:
+   string m_loadingText;
+   void RenderLoadingScreen();
+
    std::mutex m_messageMutex;
    std::deque<std::pair<string, string>> m_pendingMessages; // Title and text
    string m_messageTitle, m_messageText; // Displayed by the 'misc/message' page

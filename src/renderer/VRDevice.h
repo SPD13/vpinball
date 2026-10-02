@@ -146,11 +146,17 @@
 
 class MeshBuffer;
 
+// The VR device lives as long as the OpenXR instance: when tables are played one after another, the application keeps it from one table
+// to the next (see VPApp::AcquireVRDevice), so the runtime does not see the application quit and start again. Each table creates its own
+// session (CreateSession / ReleaseSession, from the render thread) and applies its settings (ApplyTableSettings).
 class VRDevice final
 {
 public:
    VRDevice(const Settings& settings);
    ~VRDevice();
+
+   // Settings that a table may override (scene placement, foveation, resolution, ...), applied each time a table is played with this device
+   void ApplyTableSettings(const Settings& settings);
 
    unsigned int GetEyeWidth() const { return m_eyeWidth; }
    unsigned int GetEyeHeight() const { return m_eyeHeight; }
@@ -247,8 +253,13 @@ public:
    bool IsOpenXRReady() const { return m_xrInstance != XR_NULL_HANDLE; }
    void SetupHMD();
    bool IsOpenXRHMDReady() const { return m_systemID != XR_NULL_SYSTEM_ID; }
+   // Graphics backend the device was created for, and the one the settings ask for (the device must be created again if they differ)
+   bgfx::RendererType::Enum GetRendererType() const { return m_rendererType; }
+   static bgfx::RendererType::Enum SelectRendererType(const Settings& settings);
+   // The runtime lost the session or the instance: the device can't be used anymore and must be created again
+   bool IsLost() const { return m_lost; }
    void CreateSession();
-   void ReleaseSession();
+   void ReleaseSession(); // Ends the session (letting the runtime stop it) then destroys it and all its objects, the instance is kept
    void* GetGraphicContext() const;
    bgfx::RendererType::Enum GetGraphicContextType() const;
    void PollEvents();
@@ -332,8 +343,12 @@ private:
 
    XrSession m_session = {};
    XrSessionState m_sessionState = XR_SESSION_STATE_UNKNOWN;
-   bool m_applicationRunning = true;
    bool m_sessionRunning = false;
+   bool m_exitRequested = false; // We asked the runtime to stop the session (see EndSession), so its EXITING state is expected
+   std::atomic<bool> m_lost = false;
+   void EndSession();
+   void DrainEvents();
+   void UpdateEyeResolution(const Settings& settings);
 
    std::vector<XrViewConfigurationType> m_applicationViewConfigurations = { XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_MONO };
    std::vector<XrViewConfigurationType> m_viewConfigurations;

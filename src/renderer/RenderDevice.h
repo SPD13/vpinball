@@ -334,6 +334,7 @@ private:
    std::atomic<bool> m_renderDeviceAlive;
    std::thread m_renderThread;
    vector<std::shared_ptr<Sampler>> m_pendingTextureUploads;
+   std::mutex m_pendingTextureUploadsMutex; // The render thread processes them when flipping a frame, outside of the frame mutex, while texture loading threads may add some
    std::unique_ptr<ShaderState> m_uniformState = nullptr;
 
    class tBGFXCallback : public bgfx::CallbackI

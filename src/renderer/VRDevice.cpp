@@ -117,14 +117,43 @@ inline static void XrPosef_ToMatrix3D(Matrix3D* result, const XrPosef* pose)
 
 
 
-VRDevice::VRDevice(const Settings& settings)
+#if defined(ENABLE_XR)
+bgfx::RendererType::Enum VRDevice::SelectRendererType(const Settings& settings)
 {
-      // Scene offset (vertical rotation and horizontal shift)
-      m_orientation = settings.GetPlayerVR_Orientation();
-      m_tablePos.x = settings.GetPlayerVR_TableX();
-      m_tablePos.y = settings.GetPlayerVR_TableY();
-      // Offset of the playfield from the room ground is defined as an offset from the lockbar, minus bottom glass height and custom adjustment
-      m_tablePos.z = settings.GetPlayerVR_TableZ();
+   // VRDevice is created before bgfx initialization (since it creates the graphic context expected by OpenXR), so bgfx::getRendererType() is not defined at this point.
+   // Renderer is determined at compile time based on platform: D3D11 for Windows, Vulkan for Android.
+   #if BX_PLATFORM_WINDOWS && !defined(__STANDALONE__)
+      const string gfxBackend = settings.GetPlayer_GfxBackend();
+      if (gfxBackend == "Vulkan"sv)
+      #ifdef _DEBUG
+         return bgfx::RendererType::Enum::Vulkan;
+      #else
+      {
+         PLOGI << "Renderer backend enforced to Direct3D11 as Vulkan is still experimental and not enabled in release builds";
+         return bgfx::RendererType::Enum::Direct3D11;
+      }
+      #endif
+      else if (gfxBackend == "Direct3D12"sv)
+         return bgfx::RendererType::Enum::Direct3D12;
+      else
+         return bgfx::RendererType::Enum::Direct3D11; // Default to Direct3D 11
+   #elif BX_PLATFORM_ANDROID || BX_PLATFORM_LINUX || BX_PLATFORM_WINDOWS // Standalone Windows build included, to render like the headsets
+      return bgfx::RendererType::Enum::Vulkan;
+   #else
+      #error "Unsupported platform for OpenXR"
+   #endif
+}
+#endif
+
+void VRDevice::ApplyTableSettings(const Settings& settings)
+{
+   // Scene offset (vertical rotation and horizontal shift)
+   m_orientation = settings.GetPlayerVR_Orientation();
+   m_tablePos.x = settings.GetPlayerVR_TableX();
+   m_tablePos.y = settings.GetPlayerVR_TableY();
+   // Offset of the playfield from the room ground is defined as an offset from the lockbar, minus bottom glass height and custom adjustment
+   m_tablePos.z = settings.GetPlayerVR_TableZ();
+   m_worldDirty = true;
 
    #if defined(ENABLE_XR)
       // Relative scale factor and positioning
@@ -132,6 +161,28 @@ VRDevice::VRDevice(const Settings& settings)
       m_lockbarHeight = settings.GetPlayer_LockbarHeight();
       m_lockFeetToGround = settings.GetPlayerVR_LockFeetToGround();
 
+      m_showControllers = settings.GetPlayerVR_ShowControllers();
+      m_displayRefreshRateMode = settings.GetPlayerVR_DisplayRefreshRate();
+      m_foveationMode = settings.GetPlayerVR_Foveation();
+      m_foveationEyeTracked = settings.GetPlayerVR_FoveationEyeTracked();
+      m_foveationFlipX = settings.GetPlayerVR_FoveationFlipX();
+      m_foveationFlipY = settings.GetPlayerVR_FoveationFlipY();
+
+      // State of the previous table
+      m_headsetViewCentering = false;
+      m_controllerViewCentering = false;
+      m_uiPanelPlaced = false;
+      m_tableCaptureView = TableCaptureView::None;
+      m_tableCaptureBounds.clear();
+
+      if (IsOpenXRHMDReady())
+         UpdateEyeResolution(settings);
+   #endif
+}
+
+VRDevice::VRDevice(const Settings& settings)
+{
+   #if defined(ENABLE_XR)
       // Fill out an XrApplicationInfo structure detailing the names and OpenXR version.
       // The application/engine name and version are user-defined. These may help IHVs or runtimes.
       XrApplicationInfo AI;
@@ -189,28 +240,7 @@ VRDevice::VRDevice(const Settings& settings)
          }
          return false;
       };
-      // VRDevice is created before bgfx initialization (since it creates the graphic context expected by OpenXR), so bgfx::getRendererType() is not defined at this point.
-      // Renderer is determined at compile time based on platform: D3D11 for Windows, Vulkan for Android.
-      #if BX_PLATFORM_WINDOWS && !defined(__STANDALONE__)
-         const string gfxBackend = g_pplayer->m_ptable->m_settings.GetPlayer_GfxBackend();
-         if (gfxBackend == "Vulkan"sv)
-         #ifdef _DEBUG
-            m_rendererType = bgfx::RendererType::Enum::Vulkan;
-         #else
-         {
-            PLOGI << "Renderer backend enforced to Direct3D11 as Vulkan is still experimental and not enabled in release builds";
-            m_rendererType = bgfx::RendererType::Enum::Direct3D11;
-         }
-         #endif
-         else if (gfxBackend == "Direct3D12"sv)
-            m_rendererType = bgfx::RendererType::Enum::Direct3D12;
-         else
-            m_rendererType = bgfx::RendererType::Enum::Direct3D11; // Default to Direct3D 11
-      #elif BX_PLATFORM_ANDROID || BX_PLATFORM_LINUX || BX_PLATFORM_WINDOWS // Standalone Windows build included, to render like the headsets
-         m_rendererType = bgfx::RendererType::Enum::Vulkan;
-      #else
-         #error "Unsupported platform for OpenXR"
-      #endif
+      m_rendererType = SelectRendererType(settings);
       bool hasGraphicBackend = false;
       switch (m_rendererType)
       {
@@ -254,8 +284,6 @@ VRDevice::VRDevice(const Settings& settings)
             && EnableExtensionIfSupported(XR_EXT_INTERACTION_RENDER_MODEL_EXTENSION_NAME);
       }
       #endif
-      m_showControllers = settings.GetPlayerVR_ShowControllers();
-      m_displayRefreshRateMode = settings.GetPlayerVR_DisplayRefreshRate();
       // Foveated rendering by the runtime: the profile needs XR_FB_foveation and XR_FB_foveation_configuration, applying it to the swapchain needs
       // XR_FB_swapchain_update_state, and the runtime only builds Vulkan density maps with XR_FB_foveation_vulkan
       m_foveationExtensionSupported = EnableExtensionIfSupported(XR_FB_FOVEATION_EXTENSION_NAME) && EnableExtensionIfSupported(XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME)
@@ -265,10 +293,6 @@ VRDevice::VRDevice(const Settings& settings)
          m_foveationExtensionSupported = EnableExtensionIfSupported(XR_FB_FOVEATION_VULKAN_EXTENSION_NAME) && m_foveationExtensionSupported;
       #endif
       m_foveationEyeTrackedExtensionSupported = m_foveationExtensionSupported && EnableExtensionIfSupported(XR_META_FOVEATION_EYE_TRACKED_EXTENSION_NAME);
-      m_foveationMode = settings.GetPlayerVR_Foveation();
-      m_foveationEyeTracked = settings.GetPlayerVR_FoveationEyeTracked();
-      m_foveationFlipX = settings.GetPlayerVR_FoveationFlipX();
-      m_foveationFlipY = settings.GetPlayerVR_FoveationFlipY();
       m_performanceMetricsExtensionSupported = EnableExtensionIfSupported(XR_META_PERFORMANCE_METRICS_EXTENSION_NAME);
       #ifdef DEBUG
          m_debugUtilsExtensionSupported = EnableExtensionIfSupported(XR_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -353,7 +377,7 @@ VRDevice::VRDevice(const Settings& settings)
       #endif
       PLOGI << "OpenXR controller models: " << (m_renderModelExtensionSupported ? "supported by the runtime" : "not supported by the runtime");
       PLOGI << "OpenXR foveated rendering: " << (m_foveationExtensionSupported ? "supported by the runtime" : "not supported by the runtime") << ", eye-tracked: "
-            << (m_foveationEyeTrackedExtensionSupported ? "extension present" : "no extension") << ", setting: " << m_foveationMode << (m_foveationEyeTracked ? " (eye-tracked)" : " (fixed)");
+            << (m_foveationEyeTrackedExtensionSupported ? "extension present" : "no extension");
       if (m_debugUtilsExtensionSupported)
       {
          // Fill out a XrDebugUtilsMessengerCreateInfoEXT structure specifying all severities and types.
@@ -385,37 +409,15 @@ VRDevice::VRDevice(const Settings& settings)
 VRDevice::~VRDevice()
 {
    #if defined(ENABLE_XR)
-      DestroyControllerModels();
-      if (m_leftControllerSpace != XR_NULL_HANDLE)
-         OPENXR_CHECK(xrDestroySpace(m_leftControllerSpace), "Failed to destroy Left Controller Space.")
-      if (m_rightControllerSpace != XR_NULL_HANDLE)
-         OPENXR_CHECK(xrDestroySpace(m_rightControllerSpace), "Failed to destroy Right Controller Space.")
-      if (m_leftAimSpace != XR_NULL_HANDLE)
-         OPENXR_CHECK(xrDestroySpace(m_leftAimSpace), "Failed to destroy Left Aim Space.")
-      if (m_rightAimSpace != XR_NULL_HANDLE)
-         OPENXR_CHECK(xrDestroySpace(m_rightAimSpace), "Failed to destroy Right Aim Space.")
-      // Destroy the reference XrSpace.
-      OPENXR_CHECK(xrDestroySpace(m_referenceSpace), "Failed to destroy Space.")
-
-      if (m_passthroughLayer != XR_NULL_HANDLE)
+      // The session is released by the render thread before BGFX is shut down (see ReleaseSession), and the device is only destroyed after it
+      if (m_session != XR_NULL_HANDLE)
       {
-         PFN_xrDestroyPassthroughLayerFB xrDestroyPassthroughLayerFB;
-         OPENXR_CHECK(xrGetInstanceProcAddr(m_xrInstance, "xrDestroyPassthroughLayerFB", (PFN_xrVoidFunction*)&xrDestroyPassthroughLayerFB), "Failed to get xrDestroyPassthroughLayerFB.");
-         OPENXR_CHECK(xrDestroyPassthroughLayerFB(m_passthroughLayer), "Failed to destroy passthrough layer.");
-         m_passthroughLayer = XR_NULL_HANDLE;
+         PLOGE << "OpenXR session still alive when destroying the VR device";
+         OPENXR_CHECK(xrDestroySession(m_session), "Failed to destroy Session.");
+         m_session = XR_NULL_HANDLE;
       }
 
-      if (m_passthrough != XR_NULL_HANDLE)
-      {
-         PFN_xrDestroyPassthroughFB xrDestroyPassthroughFB;
-         OPENXR_CHECK(xrGetInstanceProcAddr(m_xrInstance, "xrDestroyPassthroughFB", (PFN_xrVoidFunction*)&xrDestroyPassthroughFB), "Failed to get xrDestroyPassthroughFB.");
-         OPENXR_CHECK(xrDestroyPassthroughFB(m_passthrough), "Failed to destroy passthrough.");
-         m_passthrough = XR_NULL_HANDLE;
-      }
-
-      // Destroy the XrSession.
-      OPENXR_CHECK(xrDestroySession(m_session), "Failed to destroy Session.");
-
+      // The graphics device (given to BGFX, which never destroys a device it did not create) is destroyed with the backend
       m_backend = nullptr;
 
       if (m_debugUtilsExtensionSupported)
@@ -633,42 +635,8 @@ void VRDevice::SetupHMD()
    assert(m_viewConfigurationViews[0].recommendedImageRectHeight == m_viewConfigurationViews[1].recommendedImageRectHeight);
    assert(m_viewConfigurationViews[0].recommendedSwapchainSampleCount == m_viewConfigurationViews[1].recommendedSwapchainSampleCount);
 
-   // Let the user choose the down/super sampling
-   const float resFactor = g_pplayer ? g_pplayer->m_ptable->m_settings.GetPlayerVR_ResFactor() : -1.f;
-   if (resFactor <= 0.1f || resFactor > 10.f)
-   {
-      m_eyeWidth = m_viewConfigurationViews[0].recommendedImageRectWidth;
-      m_eyeHeight = m_viewConfigurationViews[0].recommendedImageRectHeight;
-   }
-   else
-   {
-      m_eyeWidth = static_cast<unsigned int>((float)m_viewConfigurationViews[0].maxImageRectWidth * resFactor);
-      m_eyeHeight = static_cast<unsigned int>((float)m_viewConfigurationViews[0].maxImageRectHeight * resFactor);
-   }
-
-   // Limit to OpenXR declared limits
-   const uint32_t maxWidth = std::min(m_viewConfigurationViews[0].maxImageRectWidth, m_systemProperties.graphicsProperties.maxSwapchainImageWidth);
-   const uint32_t maxHeight = std::min(m_viewConfigurationViews[0].maxImageRectHeight, m_systemProperties.graphicsProperties.maxSwapchainImageHeight);
-   if (m_eyeWidth == 0 || m_eyeHeight == 0 || m_eyeWidth > maxWidth || m_eyeHeight > maxHeight)
-   {
-      PLOGI << "Requested resolution exceeds OpenXR swapchain limits, defaulting to headset recommended resolution";
-      m_eyeWidth = m_viewConfigurationViews[0].recommendedImageRectWidth;
-      m_eyeHeight = m_viewConfigurationViews[0].recommendedImageRectHeight;
-   }
-
-   // Limit to a resolution, under the maximum texture size supported by the GPU
-   // This is called before BGFX is initialized (the graphics backend is created below, then given to BGFX), and the caps are all zero until then
-   const bgfx::Caps* caps = bgfx::getCaps();
-   if (caps->limits.maxTextureSize != 0 && ((static_cast<uint32_t>(m_eyeWidth) >= caps->limits.maxTextureSize) || (static_cast<uint32_t>(m_eyeHeight) >= caps->limits.maxTextureSize)))
-   {
-      PLOGI << "Requested resolution exceed the GPU capability, defaulting to headset recommended resolution";
-      m_eyeWidth = std::min(m_viewConfigurationViews[0].recommendedImageRectWidth, caps->limits.maxTextureSize);
-      m_eyeHeight = std::min(m_viewConfigurationViews[0].recommendedImageRectHeight, caps->limits.maxTextureSize);
-   }
-
    PLOGI << "Headset recommended resolution: " << m_viewConfigurationViews[0].recommendedImageRectWidth << 'x' << m_viewConfigurationViews[0].recommendedImageRectHeight;
    PLOGI << "Headset maximum resolution: " << m_viewConfigurationViews[0].maxImageRectWidth << 'x' << m_viewConfigurationViews[0].maxImageRectHeight;
-   PLOGI << "Selected resolution: " << m_eyeWidth << 'x' << m_eyeHeight;
 
    // Create graphics backend early so GetGraphicContext() can provide Vulkan handles to BGFX
    #if BX_PLATFORM_WINDOWS || BX_PLATFORM_ANDROID || BX_PLATFORM_LINUX
@@ -692,6 +660,48 @@ void VRDevice::SetupHMD()
    #endif
 
    assert(m_backend != nullptr);
+}
+
+// Resolution of the eye images (and of the swapchains, created with each session), from the resolution factor of the table settings
+void VRDevice::UpdateEyeResolution(const Settings& settings)
+{
+   assert(IsOpenXRHMDReady() && !m_viewConfigurationViews.empty());
+
+   // Let the user choose the down/super sampling
+   const float resFactor = settings.GetPlayerVR_ResFactor();
+   if (resFactor <= 0.1f || resFactor > 10.f)
+   {
+      m_eyeWidth = m_viewConfigurationViews[0].recommendedImageRectWidth;
+      m_eyeHeight = m_viewConfigurationViews[0].recommendedImageRectHeight;
+   }
+   else
+   {
+      m_eyeWidth = static_cast<unsigned int>((float)m_viewConfigurationViews[0].maxImageRectWidth * resFactor);
+      m_eyeHeight = static_cast<unsigned int>((float)m_viewConfigurationViews[0].maxImageRectHeight * resFactor);
+   }
+
+   // Limit to OpenXR declared limits
+   const uint32_t maxWidth = std::min(m_viewConfigurationViews[0].maxImageRectWidth, m_systemProperties.graphicsProperties.maxSwapchainImageWidth);
+   const uint32_t maxHeight = std::min(m_viewConfigurationViews[0].maxImageRectHeight, m_systemProperties.graphicsProperties.maxSwapchainImageHeight);
+   if (m_eyeWidth == 0 || m_eyeHeight == 0 || m_eyeWidth > maxWidth || m_eyeHeight > maxHeight)
+   {
+      PLOGI << "Requested resolution exceeds OpenXR swapchain limits, defaulting to headset recommended resolution";
+      m_eyeWidth = m_viewConfigurationViews[0].recommendedImageRectWidth;
+      m_eyeHeight = m_viewConfigurationViews[0].recommendedImageRectHeight;
+   }
+
+   // Limit to a resolution, under the maximum texture size supported by the GPU
+   // This is called before BGFX is initialized (the graphics backend is given to BGFX when it is initialized), so the caps are all zero for the
+   // first table, then they are the ones of the last BGFX initialization (same graphics device)
+   const bgfx::Caps* caps = bgfx::getCaps();
+   if (caps->limits.maxTextureSize != 0 && ((static_cast<uint32_t>(m_eyeWidth) >= caps->limits.maxTextureSize) || (static_cast<uint32_t>(m_eyeHeight) >= caps->limits.maxTextureSize)))
+   {
+      PLOGI << "Requested resolution exceed the GPU capability, defaulting to headset recommended resolution";
+      m_eyeWidth = std::min(m_viewConfigurationViews[0].recommendedImageRectWidth, caps->limits.maxTextureSize);
+      m_eyeHeight = std::min(m_viewConfigurationViews[0].recommendedImageRectHeight, caps->limits.maxTextureSize);
+   }
+
+   PLOGI << "Selected resolution: " << m_eyeWidth << 'x' << m_eyeHeight;
 }
 
 void VRDevice::SetDisplayRefreshRateMode(int mode)
@@ -927,6 +937,12 @@ void VRDevice::CreateSession()
    assert(m_systemID != XR_NULL_SYSTEM_ID);
    assert(m_session == XR_NULL_HANDLE);
    assert(m_backend != nullptr);
+
+   // Events left by the session of the previous table must not be taken for events of the new one (a new handle may have the same value)
+   DrainEvents();
+   m_exitRequested = false;
+   m_sessionState = XR_SESSION_STATE_UNKNOWN;
+   m_sessionRunning = false;
 
    m_visibilityMaskDirty = true;
 
@@ -1553,10 +1569,81 @@ void VRDevice::DestroyControllerModels()
    m_controllerModels.clear();
 }
 
+// Stop the session the way OpenXR expects it: ask the runtime to stop it and keep the frame loop running (without any layer) until it does,
+// then end it. Destroying a running session works too, but some runtimes then consider that the application crashed or quit.
+void VRDevice::EndSession()
+{
+   if (!m_sessionRunning)
+      return;
+   m_exitRequested = true;
+   OPENXR_CHECK(xrRequestExitSession(m_session), "Failed to request the end of the session.");
+   const uint64_t start = usec();
+   constexpr uint64_t timeout = 2000000; // 2s
+   while (usec() - start < timeout)
+   {
+      PollEvents(); // Ends the session (xrEndSession) when the runtime reports it as stopping
+      if (!m_sessionRunning)
+         break;
+      XrFrameState frameState { XR_TYPE_FRAME_STATE };
+      constexpr XrFrameWaitInfo frameWaitInfo { XR_TYPE_FRAME_WAIT_INFO, nullptr };
+      if (!XR_SUCCEEDED(xrWaitFrame(m_session, &frameWaitInfo, &frameState)))
+         break;
+      constexpr XrFrameBeginInfo frameBeginInfo { XR_TYPE_FRAME_BEGIN_INFO, nullptr };
+      if (!XR_SUCCEEDED(xrBeginFrame(m_session, &frameBeginInfo)))
+         break;
+      XrFrameEndInfo frameEndInfo { XR_TYPE_FRAME_END_INFO };
+      frameEndInfo.displayTime = frameState.predictedDisplayTime;
+      frameEndInfo.environmentBlendMode = m_environmentBlendMode;
+      frameEndInfo.layerCount = 0;
+      frameEndInfo.layers = nullptr;
+      OPENXR_CHECK(xrEndFrame(m_session, &frameEndInfo), "Failed to end the XR frame while stopping the session.");
+   }
+   if (m_sessionRunning)
+   {
+      PLOGW << "OpenXR session was not stopped by the runtime in time, it is destroyed while running";
+      return;
+   }
+   // Let the runtime report the following states of this session (idle, then exiting since we asked for it) while it still exists
+   while (usec() - start < timeout && m_sessionState != XR_SESSION_STATE_IDLE && m_sessionState != XR_SESSION_STATE_EXITING)
+   {
+      PollEvents();
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+   }
+   PLOGI << "OpenXR session stopped in " << ((usec() - start) / 1000) << "ms";
+}
+
+// Polls the events of the instance which are not related to the current session (between sessions, or before creating one)
+void VRDevice::DrainEvents()
+{
+   XrEventDataBuffer eventData { XR_TYPE_EVENT_DATA_BUFFER };
+   while (xrPollEvent(m_xrInstance, &eventData) == XR_SUCCESS)
+   {
+      if (eventData.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING)
+      {
+         PLOGW << "OPENXR: Instance Loss Pending";
+         m_lost = true;
+      }
+      else if (eventData.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED)
+      {
+         PLOGI << "OPENXR: State " << reinterpret_cast<const XrEventDataSessionStateChanged*>(&eventData)->state << " of a previous session ignored";
+      }
+      eventData = { XR_TYPE_EVENT_DATA_BUFFER };
+   }
+}
+
 void VRDevice::ReleaseSession()
 {
    assert(m_session);
 
+   EndSession();
+
+   // The action spaces of the controllers, then the input handler which owns their actions
+   for (XrSpace* space : { &m_leftControllerSpace, &m_rightControllerSpace, &m_leftAimSpace, &m_rightAimSpace })
+   {
+      if (*space != XR_NULL_HANDLE)
+         OPENXR_CHECK(xrDestroySpace(*space), "Failed to destroy Controller Space.");
+      *space = XR_NULL_HANDLE;
+   }
    g_pplayer->m_pininput.RemoveInputHandler(m_xrInputHandler);
    m_xrInputHandler = nullptr;
 
@@ -1597,8 +1684,51 @@ void VRDevice::ReleaseSession()
       OPENXR_CHECK(xrDestroySwapchain(m_colorSwapchainInfo.swapchain), "Failed to destroy Color Swapchain");
    if (m_depthSwapchainInfo.swapchain)
       OPENXR_CHECK(xrDestroySwapchain(m_depthSwapchainInfo.swapchain), "Failed to destroy Depth Swapchain");
+   m_colorSwapchainInfo = {};
+   m_depthSwapchainInfo = {};
 
    DiscardVisibilityMask();
+
+   // The objects created with the session: controller models, reference space, passthrough
+   DestroyControllerModels();
+   m_controllerModelsDirty = true;
+   m_controllerModelsRetryTime = 0.;
+   if (m_referenceSpace != XR_NULL_HANDLE)
+      OPENXR_CHECK(xrDestroySpace(m_referenceSpace), "Failed to destroy Space.");
+   m_referenceSpace = XR_NULL_HANDLE;
+   if (m_passthroughLayer != XR_NULL_HANDLE)
+   {
+      PFN_xrDestroyPassthroughLayerFB xrDestroyPassthroughLayerFB;
+      OPENXR_CHECK(xrGetInstanceProcAddr(m_xrInstance, "xrDestroyPassthroughLayerFB", (PFN_xrVoidFunction*)&xrDestroyPassthroughLayerFB), "Failed to get xrDestroyPassthroughLayerFB.");
+      OPENXR_CHECK(xrDestroyPassthroughLayerFB(m_passthroughLayer), "Failed to destroy passthrough layer.");
+      m_passthroughLayer = XR_NULL_HANDLE;
+   }
+   if (m_passthrough != XR_NULL_HANDLE)
+   {
+      PFN_xrDestroyPassthroughFB xrDestroyPassthroughFB;
+      OPENXR_CHECK(xrGetInstanceProcAddr(m_xrInstance, "xrDestroyPassthroughFB", (PFN_xrVoidFunction*)&xrDestroyPassthroughFB), "Failed to get xrDestroyPassthroughFB.");
+      OPENXR_CHECK(xrDestroyPassthroughFB(m_passthrough), "Failed to destroy passthrough.");
+      m_passthrough = XR_NULL_HANDLE;
+   }
+   m_passthroughEnabled = false;
+
+   OPENXR_CHECK(xrDestroySession(m_session), "Failed to destroy Session.");
+   m_session = XR_NULL_HANDLE;
+   m_sessionState = XR_SESSION_STATE_UNKNOWN;
+   m_sessionRunning = false;
+   m_uiPanelPlaced = false;
+}
+
+// The runtime stopped the VR experience: close the table (without capturing its image, which needs the session). When it asks the application
+// to exit, also leave the launcher instead of getting back to the lobby.
+static void CloseTableOnRuntimeRequest(bool exitApplication)
+{
+   #ifdef __STANDALONE__
+   if (exitApplication)
+      g_app->m_launcherMode = false;
+   #endif
+   if (g_pplayer)
+      g_pplayer->SetCloseState(Player::CS_CLOSE_APP);
 }
 
 void VRDevice::PollEvents()
@@ -1628,9 +1758,10 @@ void VRDevice::PollEvents()
       case XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING:
       {
          XrEventDataInstanceLossPending* instanceLossPending = reinterpret_cast<XrEventDataInstanceLossPending*>(&eventData);
-         PLOGI << "OPENXR: Instance Loss Pending at: " << instanceLossPending->lossTime;
+         PLOGW << "OPENXR: Instance Loss Pending at: " << instanceLossPending->lossTime;
          m_sessionRunning = false;
-         m_applicationRunning = false;
+         m_lost = true;
+         CloseTableOnRuntimeRequest(false);
          break;
       }
       // Log that the interaction profile has changed.
@@ -1701,16 +1832,22 @@ void VRDevice::PollEvents()
          }
          if (sessionStateChanged->state == XR_SESSION_STATE_EXITING)
          {
-            // SessionState is exiting. Exit the application.
+            // SessionState is exiting: expected after we asked to stop the session (see EndSession), otherwise the runtime asks the
+            // application to quit (for example from the dashboard of the headset), so close the table and the application.
             m_sessionRunning = false;
-            m_applicationRunning = false;
+            if (!m_exitRequested)
+            {
+               PLOGI << "OPENXR: The runtime asked the application to exit";
+               CloseTableOnRuntimeRequest(true);
+            }
          }
          if (sessionStateChanged->state == XR_SESSION_STATE_LOSS_PENDING)
          {
-            // SessionState is loss pending. Exit the application.
-            // It's possible to try a reestablish an XrInstance and XrSession, but we will simply exit here.
+            // SessionState is loss pending: close the table, the VR device will be created again for the next one (see VPApp::AcquireVRDevice)
+            PLOGW << "OPENXR: Session Loss Pending";
             m_sessionRunning = false;
-            m_applicationRunning = false;
+            m_lost = true;
+            CloseTableOnRuntimeRequest(false);
          }
          // Store state for reference across the application.
          m_sessionState = sessionStateChanged->state;

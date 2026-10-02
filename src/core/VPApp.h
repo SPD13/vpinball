@@ -7,6 +7,8 @@
 
 namespace VPinballLib { class TableLibrary; }
 class WebServer; // Only with VPX_TABLE_WEBSERVER, defined by the macOS, Linux and windows-mingw builds (mobile builds have their own instance)
+namespace VPX { class Window; }
+class VRDevice;
 
 
 class VPApp final
@@ -37,6 +39,21 @@ public:
 
    // Script security level
    int m_securitylevel;
+
+   // Display resources kept from one table to the next when tables are played one after another (m_keepDisplayBetweenTables), so that
+   // switching tables neither closes the window nor makes the VR runtime see the application quit and start again. They are released
+   // when the application closes. Otherwise, they are released when the table which used them is closed (editor, mobile builds).
+   bool m_keepDisplayBetweenTables = false;
+   // Window kept from the previous table if it was created with the same settings, otherwise a new one
+   VPX::Window* AcquireWindow(int windowId, const string& title, const Settings& settings);
+   void ReleaseWindow(VPX::Window* wnd);
+#ifdef ENABLE_XR
+   // VR device (OpenXR instance) kept from the previous table, or a new one (which may not be ready, see VRDevice::IsOpenXRReady)
+   VRDevice* AcquireVRDevice(const Settings& settings);
+   void ReleaseVRDevice(bool discard); // discard: destroy it even if devices are kept, for example when the headset was not found
+#endif
+   void ReleaseDisplayResources();
+   uint64_t m_lastTableCloseTime = 0; // When the last table started to close (steady clock, in microseconds), to log how long switching tables takes
 
 #ifndef __STANDALONE__
    static CComModule m_module;
@@ -94,9 +111,24 @@ public:
    static string GetTableImageFocusLabel();
    static void NextTableImageFocus();
    bool m_reloadLobby = false; // Load the lobby again when it closes, for example to apply a new room
+
+   // Message of the loading screen shown while switching tables (see LiveUI::SetLoadingText): for a table (its name in the library), or for what follows
+   // the table being closed (the next table, or the lobby in launcher mode; empty when the application quits)
+   string GetLoadingText(const std::filesystem::path& tablePath, bool lobby);
+   string GetNextLoadingText(bool playingLobby);
 #endif
 
 private:
+   struct KeptWindow
+   {
+      VPX::Window* window;
+      int windowId;
+      string config; // Settings the window was created with (see VPX::Window::GetConfigKey)
+   };
+   vector<KeptWindow> m_keptWindows; // Windows not used by the current table, kept for the next one
+   vector<KeptWindow> m_usedWindows; // Windows acquired by the current table
+   VRDevice* m_vrDevice = nullptr;
+
 #ifdef __STANDALONE__
    std::unique_ptr<VPinballLib::TableLibrary> m_tableLibrary;
    bool m_isSharedPinMAMEFolderApplied = false;

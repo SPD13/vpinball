@@ -321,6 +321,10 @@ static void PlaySelectedTables()
 
 void PlayTableCommand::Execute()
 {
+#ifdef __STANDALONE__
+   // Another table may be picked from the in-game table picker: keep the window and the VR device for it (see VPApp::m_keepDisplayBetweenTables)
+   g_app->m_keepDisplayBetweenTables = true;
+#endif
    Play();
 #ifdef __STANDALONE__
    PlaySelectedTables();
@@ -337,6 +341,8 @@ void LauncherCommand::Execute()
 {
    // Closing a table gets back to the lobby, closing the lobby without selecting a table quits
    g_app->m_launcherMode = true;
+   // Switching between the lobby and the tables keeps the window and the VR device (see VPApp::m_keepDisplayBetweenTables)
+   g_app->m_keepDisplayBetweenTables = true;
    while (g_app->m_launcherMode)
    {
       // The room of a table replaces the default lobby room while that table is available
