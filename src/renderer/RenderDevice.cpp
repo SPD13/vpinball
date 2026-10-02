@@ -586,7 +586,23 @@ void RenderDevice::BGFXOpenXRRenderLoop(const bgfx::Init& init)
             g_pplayer->m_renderProfiler->EnterProfileSection(FrameProfiler::PROFILE_RENDER_WAIT);
             m_outputWnd[0]->SetBackBuffer(vrRenderTarget, false);
             m_framePending = false;
-            m_frameReadySem.acquire();
+            while (true)
+            {
+               m_frameReadySem.acquire();
+               // A frame with nothing to present (texture uploads submitted by the loading threads, see SubmitRenderFrame) is processed now,
+               // keeping the swapchain image for the frame that draws into it. Giving the image back to the runtime as it is would display
+               // its stale content, a frame from a few frames back at the head pose of that time: the loading screen appeared doubled, moving
+               // and ghosting in the headset while a table loaded.
+               if (!m_framePending || !m_frameNoPresent)
+                  break;
+               {
+                  std::lock_guard lock(m_frameMutex);
+                  SubmitRenderFrame();
+               }
+               m_frameNoPresent = false;
+               m_framePending = false;
+               SubmitAndFlipFrame(false);
+            }
             m_outputWnd[0]->SetBackBuffer(nullptr, false); // as the vrRenderTarget is not valid outside of this scope
             g_pplayer->m_renderProfiler->ExitProfileSection();
             END_SPAN(tagSpanFF)
