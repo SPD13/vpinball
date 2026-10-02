@@ -251,6 +251,16 @@ public:
    void SetFoveationEyeTracked(bool eyeTracked);
    // One line for the settings page: "not supported", "fixed", "eye-tracked", ...
    string GetFoveationStatus() const;
+   // Dynamic resolution (see the private members below): the render scale follows the GPU time of the frames reported by the runtime
+   bool IsDynamicResolution() const { return m_dynamicResolution; }
+   void SetDynamicResolution(bool enabled);
+   float GetDynamicResolutionTarget() const { return m_dynamicResolutionTarget; }
+   void SetDynamicResolutionTarget(float target) { m_dynamicResolutionTarget = clamp(target, 0.5f, 1.f); }
+   float GetDynamicResolutionMinScale() const { return m_dynamicResolutionMinScale; }
+   void SetDynamicResolutionMinScale(float minScale) { m_dynamicResolutionMinScale = clamp(minScale, 0.5f, 1.f); }
+   float GetDynamicRenderScale() const { return m_dynamicRenderScale; } // Scale the next frame renders at (1 when disabled)
+   // One line for the settings page: "not supported", "off", or the current size, scale, GPU time and budget
+   string GetDynamicResolutionStatus() const;
    bool IsOpenXRReady() const { return m_xrInstance != XR_NULL_HANDLE; }
    void SetupHMD();
    bool IsOpenXRHMDReady() const { return m_systemID != XR_NULL_SYSTEM_ID; }
@@ -449,6 +459,21 @@ private:
    PFN_xrQueryPerformanceMetricsCounterMETA m_xrQueryPerformanceMetricsCounterMETA = nullptr;
    vector<std::pair<string, XrPath>> m_performanceCounters;
    bool m_performanceCountersEnabled = false; // Enabled on the current session (see CreateSession and ReleaseSession)
+   void EnablePerformanceCounters(); // On the current session, if the runtime has them and they are not enabled yet
+   XrPath m_gpuFrameTimePath = XR_NULL_PATH; // Counter of the application's GPU time per frame (/perfmetrics_meta/app/gpu_frametime), if listed
+
+   // Dynamic resolution (Settings PlayerVR/DynamicResolution): the scene is rendered into a part of its buffers (RenderDevice::BeginScaledRendering)
+   // and the runtime is told which part of the swapchain image was drawn, so the resolution follows the cost of the table without a restart.
+   // The render thread adjusts the scale every frame from the application's GPU time reported by the runtime (XR_META_performance_metrics)
+   // against the target fraction of the frame period: down at once when the frame is over it, up slowly when it is well under; between
+   // the runtime's recommended size and the size of the swapchain (the table's ResFactor)
+   std::atomic<bool> m_dynamicResolution = false; // Set by the settings page while the render thread reads it
+   std::atomic<float> m_dynamicResolutionTarget = 0.85f; // GPU time target, as a fraction of the frame period
+   std::atomic<float> m_dynamicResolutionMinScale = 0.7f; // Lowest scale, as a fraction of the swapchain size
+   std::atomic<float> m_dynamicRenderScale = 1.f; // Scale given to the renderer for the next frame
+   std::atomic<float> m_lastGpuFrameTimeMs = 0.f; // Last reading of the counter, for the status
+   std::atomic<float> m_frameBudgetMs = 0.f; // Frame period of the display: the shortest predicted display period of the session (see UpdateDynamicResolution)
+   void UpdateDynamicResolution(const XrDuration predictedDisplayPeriod); // Render thread, once per frame before the frame is prepared
    double m_nextStatusLogTime = 0.;
    void LogRuntimeStatus();
 

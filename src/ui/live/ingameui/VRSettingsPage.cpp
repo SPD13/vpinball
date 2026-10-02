@@ -133,6 +133,26 @@ void VRSettingsPage::BuildPage()
          ImGui::AlignTextToFramePadding();
          ImGui::TextUnformatted(("Foveation status: " + m_player->m_vrDevice->GetFoveationStatus()).c_str());
       }));
+
+   // Dynamic resolution, applied live; the status line shows the current size and the GPU time it follows
+   AddItem(std::make_unique<InGameUIItem>( //
+      Settings::m_propPlayerVR_DynamicResolution, //
+      [this]() { return m_player->m_vrDevice->IsDynamicResolution(); }, //
+      [this](bool v) { m_player->m_vrDevice->SetDynamicResolution(v); }));
+   AddItem(std::make_unique<InGameUIItem>( //
+      Settings::m_propPlayerVR_DynamicResolutionTarget, 100.f, "%4.0f %%"s, //
+      [this]() { return m_player->m_vrDevice->GetDynamicResolutionTarget(); }, //
+      [this](float, float v) { m_player->m_vrDevice->SetDynamicResolutionTarget(v); }));
+   AddItem(std::make_unique<InGameUIItem>( //
+      Settings::m_propPlayerVR_DynamicResolutionMinScale, 100.f, "%4.0f %%"s, //
+      [this]() { return m_player->m_vrDevice->GetDynamicResolutionMinScale(); }, //
+      [this](float, float v) { m_player->m_vrDevice->SetDynamicResolutionMinScale(v); }));
+   AddItem(std::make_unique<InGameUIItem>("Dynamic resolution status"s, "Current rendering size, and the GPU time per frame against the frame budget"s,
+      [this](int, const InGameUIItem*)
+      {
+         ImGui::AlignTextToFramePadding();
+         ImGui::TextUnformatted(("Dynamic resolution: " + m_player->m_vrDevice->GetDynamicResolutionStatus()).c_str());
+      }));
 #endif
 
    AddItem(std::make_unique<InGameUIItem>( //

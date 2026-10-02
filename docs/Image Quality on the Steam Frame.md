@@ -54,7 +54,7 @@ that is still exactly one sample per panel pixel. Two consequences:
 
 ## 4. Cost of the anti-aliasing options on the Frame
 
-Method: `/tmp/aa-experiments.sh` on the headset (the commands are reproduced in section 8). Each variant edits the ini, plays the
+Method: `/tmp/aa-experiments.sh` on the headset (the commands are reproduced in section 9). Each variant edits the ini, plays the
 Ghostbusters VR room table, waits for frames (the counter reads 0.18 ms until the headset is worn), measures 40 s of the runtime's app
 GPU time (`XR_META_performance_metrics`, enabled with `VPX_XR_METRICS=1`), then restores the defaults. Values are the mean of six
 5-second samples; the budget at 72 Hz is 13.9 ms. The seven launches ran back-to-back and heated the device (section 6.3): the later
@@ -190,7 +190,66 @@ swapchain 1.4–1.5 ms, bloom 0.2 ms.
 A caution for measurements: VPX writes the ini back when a table closes, with the values it had loaded. An ini edited while a table
 is running is overwritten at that table's exit (this reverted an `FXAA = 0` edit once, and the next runs measured FXAA on).
 
-## 8. Reproduction
+## 8. Dynamic resolution (2026-10-02)
+
+Files: `src/renderer/RenderTarget.h/.cpp`, `RenderPass.h/.cpp`, `RenderFrame.h/.cpp`, `RenderDevice.h/.cpp`, `Renderer.cpp`, `RenderProbe.cpp`,
+`Sampler.cpp`, `VRDevice.h/.cpp`, `src/core/Settings_properties.inl`, `src/ui/live/ingameui/VRSettingsPage.cpp`, `src/shaders/bgfx/fs_basic.sc`,
+`fs_ball.sc` (headers regenerated).
+
+The per-table knobs of section 7 are what a player would have to find by trial, and a table's cost changes with the view and with the heat
+of the device (the same frame costs 2–3 ms more after ten minutes), so the resolution now follows the measured GPU time automatically.
+
+### 8.1 How it works
+
+- **Scaled rendering into the existing buffers.** The scene buffers keep their allocated size; a frame renders into their top left part at
+  a scale `s` (`RenderDevice::BeginScaledRendering`): every render pass created in the frame carries the scale (`RenderPass::m_renderScale`),
+  and `RenderTarget::Activate` sets the view rect (and the scissor of the area-of-interest passes) to `s × size` for the targets flagged
+  `m_dynamicResolution` — scene buffers, post-process, bloom, AO, SSR, motion blur, the reflection and refraction probes, and the headset
+  swapchain. Other targets (textures, ancillary windows, the irradiance precompute) are untouched. Nothing is reallocated, so the scale can
+  change every frame.
+- **Sampling the rendered part.** Full-screen passes read the source through `v_texcoord` 0..1: `DrawFullscreenTexturedQuad` and the two
+  explicit quads (tonemap, bloom cut-off) use 0..`s` instead. The material shaders sample screen-space buffers with `gl_FragCoord × 1/size`,
+  which maps to the rendered part by itself; the two lookups derived from clip space (refraction probe in `fs_basic.sc`, the ball's reflection
+  of the previous frame in `fs_ball.sc`) are multiplied by the scale, passed in the free components `w_h_height.z` and
+  `w_h_disableLighting.w`. The depth copy to the swapchain copies the rendered part.
+- **Presentation.** After the frame is executed, the VR device reads the scale it was rendered with (`RenderFrame::m_outputRenderScale` →
+  `RenderDevice::GetExecutedRenderScale`) and submits the projection layer (and its depth) with `imageRect` = the rendered part, so the
+  compositor samples only that part of the swapchain image. The UI panel, the loading screen and captures are drawn after
+  `EndScaledRendering` and keep the full size.
+- **Controller** (`VRDevice::UpdateDynamicResolution`, render thread, once per frame after `xrWaitFrame`): reads the runtime's
+  `/perfmetrics_meta/app/gpu_frametime` counter (`XR_META_performance_metrics`, now enabled whenever dynamic resolution is on) and compares
+  it with the target, a fraction of the display's frame period. Over the target: the scale drops at once (2 % per frame, more when further
+  over). Under 90 % of the target: it climbs by 0.3 % per frame (a second or two from the floor to full size). Clamped between the
+  minimum setting and 100 %. A reading under 1 ms (nothing rendered, headset not worn) is ignored.
+- **Budget**: the *shortest* predicted display period of the session, not the current one. SteamVR doubles the predicted period when it
+  throttles an application to half rate after missed frames (27.8 ms reported at 72 Hz on the Frame): taken as the budget, it made the
+  controller raise the resolution again and the application stayed throttled.
+
+### 8.2 Settings (VR settings page, applied live, per table)
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `PlayerVR/DynamicResolution` | On (headset builds), Off elsewhere | The switch; Off renders at the table's `ResFactor` size |
+| `PlayerVR/DynamicResolutionTarget` | 85 % | GPU time target as a fraction of the frame period (11.8 ms at 72 Hz) |
+| `PlayerVR/DynamicResolutionMinScale` | 70 % | Lowest scale, per axis, of the table's resolution (1512² at 2160²; the Frame's recommended size is 80 %) |
+
+A status line on the page and in the log every 5 s: `Dynamic resolution: 1728x1728 (80 %), GPU 11.2 ms of 13.9 ms (target 85 %)`.
+
+### 8.3 First run on the Frame (Addams Family, FXAA + specular AA on)
+
+The scale went from 100 % to the floor (then 80 %, the recommended size) within the first seconds and the GPU time settled at 10.8–11.5 ms
+against the 11.8 ms target — the judder of section 7 gone at the start of the session. Ten minutes in, the same scale measured 13.2–14.7 ms
+(heat), over the budget with no room left below the floor: hence the configurable minimum, defaulting to 70 %. Then the runtime throttled
+the application to half rate, the predicted period doubled and the controller climbed back to 100 % (18 ms frames): hence the budget fix
+above. Both are in the build; the run after them is reported below.
+
+**Second run** (floor 70 %, budget fix), same table, GPU still warm from the first run, head moved as before: the scale went to the floor
+(1518², 11.4 ms) in the first seconds, then climbed as the frame fell to 10.0 ms and settled in a **78–82 % band (1700–1780²) at
+10.5–11.2 ms** for the rest of the run, with no step larger than 3 % between two status lines. The compositor's tally for the session:
+7855 presents, **318 reprojected (4.0 %)**, against 24 % at a fixed 2160² and 10 % at a fixed 1720² (section 7). The budget stayed
+13.9 ms throughout (no throttling this time).
+
+## 9. Reproduction
 
 On the headset (`ssh steamos@<frame>`), with the build deployed in `~/devkit-game/vpx_frame`:
 

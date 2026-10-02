@@ -22,6 +22,7 @@ Changes a player sees, in the standalone builds (details in the numbered section
 - **No "controller detected" prompt for the VR controllers**: Steam Input also presents the Frame controllers as an Xbox gamepad; in VR, VPX no longer asks to set up a layout for it, since the controllers already work through OpenXR (section 7).
 - **Eye-tracked foveated rendering, exclusive to this branch and to the Steam Frame build**: full shading only around the point the eyes look at, following the headset's eye tracker, so native 2160×2160 per eye stays affordable; a "Foveated rendering" level (Off / Low / Medium / High), an "Eye-tracked" switch and a status line in the VR settings page. Not in upstream Visual Pinball, and inert on Windows and macOS, whose builds lack the Vulkan driver support and the bgfx patch (section 9, and `Doc/foveated-rendering.md` for the full technical reference).
 - **Steadier chrome, smoother edges**: specular anti-aliasing in the material shader stops the shiny parts from sparkling when the image is resampled every frame, on every platform; the headset builds also default to Standard FXAA, the only anti-aliasing within the Frame's budget at native resolution (section 12, `docs/Image Quality on the Steam Frame.md`).
+- **Dynamic resolution in the headset**: the rendering resolution follows the GPU time of the frames, between a minimum and the table's resolution, so heavy tables and a hot headset keep their frame rate instead of judder on head movements, and light tables keep the full sharpness; a switch, a target and a minimum in the VR settings page, with a status line (section 13).
 
 ## Status
 
@@ -203,9 +204,18 @@ Compared with a PSVR2 on a PC, the Frame showed stair-stepped diagonals and chro
 - **Standard FXAA by default** in the headset builds (`__STANDALONE__ && ENABLE_XR`), the only option within the budget; it fixes the edges, not the sparkle.
 - **Specular anti-aliasing** in the material shader (Kaplanyan 2016, Tokuyoshi & Kaplanyan 2019): the variance of the normal over the pixel, from its screen-space derivatives, widens the glossy lobe (point lights and glossy environment lookup, through the Blinn-Phong exponent ↔ alpha² = 2 / (n + 2) conversion), and the mirror lookup of the specular layer reads the environment map at the mip matching the footprint of the reflection instead of mip 0. Flat surfaces are unchanged. This applies to every backend; the shader headers were regenerated on macOS for SPIR-V, Metal, GLSL and GLSL ES, **the DirectX 11/12 blobs are the previous ones** (bgfx's shaderc needs the Windows HLSL compiler): run `src/shaders/bgfx/shaders.sh` on Windows before relying on it with the Direct3D backends.
 
+## 13. Dynamic resolution in the headset (2026-10-02)
+
+Files: `src/renderer/RenderTarget.h/.cpp`, `RenderPass.h/.cpp`, `RenderFrame.h/.cpp`, `RenderDevice.h/.cpp`, `Renderer.cpp`, `RenderProbe.cpp`, `Sampler.cpp`, `VRDevice.h/.cpp`, `src/core/Settings_properties.inl`, `src/ui/live/ingameui/VRSettingsPage.cpp`, `src/shaders/bgfx/fs_basic.sc`, `fs_ball.sc` (headers regenerated); the design, the controller and the runs in `docs/Image Quality on the Steam Frame.md`, section 8.
+
+Addams Family at 2160×2160 costs 13.5–17 ms on the Frame, over the 13.9 ms period of 72 Hz, and judders on head movements (the compositor reprojects a quarter of the frames). Instead of per-table resolution settings found by trial, the resolution follows the measured GPU time: each frame renders into the top left part of the existing scene buffers at a scale (`RenderDevice::BeginScaledRendering`; the view rect of the flagged targets, the texture coordinates of the full-screen passes and the two clip-space lookups of the shaders follow it), and the runtime is told which part of the swapchain image was drawn (`imageRect`). Nothing is reallocated, so the scale changes every frame without a hitch. The VR device reads the runtime's `gpu_frametime` counter (`XR_META_performance_metrics`) each frame and moves the scale against a target fraction of the display's frame period: down at once when over, up slowly when well under, between a minimum and the table's `ResFactor` size. Settings in the VR page, applied live: `DynamicResolution` (on by default in the headset builds), `DynamicResolutionTarget` (85 %), `DynamicResolutionMinScale` (70 %), plus a status line (size, scale, GPU time against the budget), also logged every 5 s.
+
+Found on the first run: the runtime's recommended size (80 %) is not a low enough floor for Addams on a hot GPU (hence the minimum setting), and SteamVR doubles the predicted display period when it throttles the application to half rate after missed frames, which must not be taken as the budget (the shortest period of the session is).
+
 ## Effects on existing builds
 
 - `-Play`, the editor and the Visual Studio build behave as before, except for the OpenXR changes that apply everywhere: the Vulkan extension filter, the extra controller inputs and default mappings, the menu panel and pointer, and the upstream VR fixes of section 8.
+- The dynamic resolution plumbing (render scale on passes and targets) is inert outside VR: the scale stays 1 and every view rect and texture coordinate is what it was.
 - Every build with the bgfx renderer gets the specular anti-aliasing of the material shader (section 12), except through Direct3D 11/12 until the shader headers are regenerated on Windows.
 - Standalone desktop builds get a "Tables" entry at the top of the in-game menu. When a table starts they create `VPinballX/Tables/pinmame/roms` in the documents folder, unless a PinMAME folder is already defined or `~/.pinmame/roms` exists (section 6).
 - iOS/Android library builds: uploads are staged in `.upload`; `InGameUIPage` has the tile code; no other intended change.
@@ -250,7 +260,15 @@ src/core/main.cpp                       launcher counts as play mode
 src/core/VPApp.h, VPApp.cpp             table library, web server, ROM folder, lobby path
 src/core/Settings_properties.inl        Standalone settings, VR autodetect and Standard FXAA defaults on standalone OpenXR builds
 src/shaders/bgfx/material.sh, fs_ball.sc   specular anti-aliasing (section 12)
+src/shaders/bgfx/fs_basic.sc, fs_ball.sc   clip-space lookups scaled for the dynamic resolution (section 13)
 src/shaders/bgfx_basic.h, bgfx_ball.h   regenerated (DirectX blobs carried over)
+src/renderer/RenderTarget.h, .cpp       dynamic resolution flag and scaled view rect
+src/renderer/RenderPass.h, .cpp         render scale per pass, scaled scissor
+src/renderer/RenderFrame.h, .cpp        scale of the frame for the presentation
+src/renderer/RenderDevice.h, .cpp       Begin/EndScaledRendering, scaled full-screen quad
+src/renderer/Renderer.cpp               scaled frame, flagged targets, scale uniforms, depth copy
+src/renderer/RenderProbe.cpp, Sampler.cpp   flagged probe targets, re-activation with the scale
+src/ui/live/ingameui/VRSettingsPage.cpp foveation and dynamic resolution items
 src/core/player.h, player.cpp           table image on close
 src/input/InputManager.h, .cpp          quit action captures the image in launcher mode, no layout prompt for the VR virtual gamepad
 src/input/SDLInputHandler.h             VR virtual gamepad detection, joystick vendor/product ids logged

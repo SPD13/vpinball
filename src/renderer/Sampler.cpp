@@ -286,9 +286,11 @@ bgfx::TextureHandle Sampler::GetCoreTexture(bool withMipmaps)
 
          // Get back to the rendering view
          RenderTarget* activeRT = RenderTarget::GetCurrentRenderTarget();
+         const int activeLayer = RenderTarget::GetCurrentRenderLayer();
+         const float activeScale = RenderTarget::GetCurrentRenderScale(); // Dynamic resolution: back to the same part of the target
          RenderTarget::OnFrameFlushed();
          if (activeRT)
-            activeRT->Activate();
+            activeRT->Activate(activeLayer, activeScale);
 
          bgfx::destroy(csTexture);
       }
@@ -315,9 +317,11 @@ bgfx::TextureHandle Sampler::GetCoreTexture(bool withMipmaps)
 
          // Get back to the rendering view
          RenderTarget* activeRT = RenderTarget::GetCurrentRenderTarget();
+         const int activeLayer = RenderTarget::GetCurrentRenderLayer();
+         const float activeScale = RenderTarget::GetCurrentRenderScale(); // Dynamic resolution: back to the same part of the target
          RenderTarget::OnFrameFlushed();
          if (activeRT)
-            activeRT->Activate();
+            activeRT->Activate(activeLayer, activeScale);
 
          // Mipmaps have been generated, we can release the framebuffer and base version of the texture (on a view processed after the one actually generating the mipmaps, to ensure correct command execution order)
          bgfx::destroy(mipsFramebuffer);
