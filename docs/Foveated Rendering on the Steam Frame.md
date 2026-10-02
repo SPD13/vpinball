@@ -125,12 +125,12 @@ The default autotuner algorithm, `BANDWIDTH`, compares an estimate of the memory
 On the device, from ssh (`cd ~/devkit-game/vpx_frame`), with the table's path in `TABLE` and `ResFactor = 0.2637` in `~/.local/share/VPinballX/10.8/VPinballX.ini`:
 
 ```
-# frame time only (no profiler), the status line every 5 s in the output
-LD_LIBRARY_PATH=$PWD DISPLAY=:1 ./VPinballX_BGFX -Play "$TABLE" 2>&1 | grep --line-buffered gpu_frametime
+# frame time only (no profiler), the status line every 5 s in the output (VPX_XR_METRICS enables the runtime's counter)
+VPX_XR_METRICS=1 LD_LIBRARY_PATH=$PWD DISPLAY=:1 ./VPinballX_BGFX -Play "$TABLE" 2>&1 | grep --line-buffered gpu_frametime
 
 # the same with direct rendering forced / the measured autotuner
-TU_DEBUG=sysmem LD_LIBRARY_PATH=$PWD DISPLAY=:1 ./VPinballX_BGFX -Play "$TABLE"
-TU_AUTOTUNE_ALGO=profiled LD_LIBRARY_PATH=$PWD DISPLAY=:1 ./VPinballX_BGFX -Play "$TABLE"
+VPX_XR_METRICS=1 TU_DEBUG=sysmem LD_LIBRARY_PATH=$PWD DISPLAY=:1 ./VPinballX_BGFX -Play "$TABLE"
+VPX_XR_METRICS=1 TU_AUTOTUNE_ALGO=profiled LD_LIBRARY_PATH=$PWD DISPLAY=:1 ./VPinballX_BGFX -Play "$TABLE"
 
 # per-target breakdown
 VPX_GPU_PROFILE=1 LD_LIBRARY_PATH=$PWD DISPLAY=:1 ./VPinballX_BGFX -Play "$TABLE" 2>&1 | grep --line-buffered "GPU by target"

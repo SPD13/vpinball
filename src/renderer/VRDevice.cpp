@@ -1079,7 +1079,10 @@ void VRDevice::CreateSession()
    if (m_foveationExtensionSupported)
       CreateOwnFoveationMap();
 
-   if (m_performanceMetricsExtensionSupported)
+   // The runtime's performance counters (app GPU frame time on the Steam Frame, logged every 5 s) only when measuring: VPX_XR_METRICS=1 for the
+   // counters alone, VPX_GPU_PROFILE=1 for the counters and bgfx's per-target breakdown. They cost the runtime a timestamp query per frame, and
+   // SteamVR mishandles them across sessions (see ReleaseSession)
+   if (m_performanceMetricsExtensionSupported && (getenv("VPX_XR_METRICS") != nullptr || getenv("VPX_GPU_PROFILE") != nullptr))
    {
       uint32_t count = 0;
       OPENXR_CHECK(m_xrEnumeratePerformanceMetricsCounterPathsMETA(m_xrInstance, 0, &count, nullptr), "Failed to enumerate performance counters.");
@@ -1096,6 +1099,7 @@ void VRDevice::CreateSession()
       XrPerformanceMetricsStateMETA state { XR_TYPE_PERFORMANCE_METRICS_STATE_META };
       state.enabled = XR_TRUE;
       OPENXR_CHECK(m_xrSetPerformanceMetricsStateMETA(m_session, &state), "Failed to enable performance counters.");
+      m_performanceCountersEnabled = true;
       string names;
       for (const auto& counter : m_performanceCounters)
          names += ' ' + counter.first;
@@ -1636,6 +1640,18 @@ void VRDevice::ReleaseSession()
    assert(m_session);
 
    EndSession();
+
+   // Performance counters off before the session goes: SteamVR keeps their enabled state with the instance, destroys the timestamp query
+   // pools it created for them with the session, and reads those pools again from the next session's xrEndFrame when they were left enabled
+   // (crash in the driver on the Steam Frame, SteamVR 2.17.10, when a table was played after the lobby)
+   if (m_performanceCountersEnabled)
+   {
+      XrPerformanceMetricsStateMETA state { XR_TYPE_PERFORMANCE_METRICS_STATE_META };
+      state.enabled = XR_FALSE;
+      OPENXR_CHECK(m_xrSetPerformanceMetricsStateMETA(m_session, &state), "Failed to disable performance counters.");
+      m_performanceCountersEnabled = false;
+      m_performanceCounters.clear();
+   }
 
    // The action spaces of the controllers, then the input handler which owns their actions
    for (XrSpace* space : { &m_leftControllerSpace, &m_rightControllerSpace, &m_leftAimSpace, &m_rightAimSpace })
