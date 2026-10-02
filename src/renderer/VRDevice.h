@@ -488,6 +488,15 @@ private:
    PFN_xrGetRenderModelStateEXT m_xrGetRenderModelStateEXT = nullptr;
    PFN_xrEnumerateInteractionRenderModelIdsEXT m_xrEnumerateInteractionRenderModelIdsEXT = nullptr;
    vector<XrRenderModelNodeStateEXT> m_renderModelNodeStates; // Scratch buffer for LocateControllerModels
+   struct ControllerModelDebug
+   {
+      XrResult locateResult;
+      XrSpaceLocationFlags flags;
+      XrPosef pose;
+      XrResult stateResult;
+      int visibleNodes;
+   };
+   ControllerModelDebug m_controllerModelsDebug[4] {}; // Last results of LocateControllerModels, logged by LogRuntimeStatus
    #endif
 
    bool m_visibilityMaskExtensionSupported = false;

@@ -5,6 +5,7 @@
 #if defined(ENABLE_XR)
 
 #include "VRControllerModels.h"
+#include "core/VPApp.h"
 #include "renderer/IndexBuffer.h"
 #include "renderer/MeshBuffer.h"
 #include "renderer/Renderer.h"
@@ -50,6 +51,8 @@ VRControllerModels::~VRControllerModels()
 {
    for (const auto& model : m_models)
       Release(*model);
+   if (m_stickerTexture)
+      m_rd->m_texMan.UnloadTexture(m_stickerTexture.get());
 }
 
 void VRControllerModels::Release(Model& model) const
@@ -242,6 +245,27 @@ std::unique_ptr<VRControllerModels::Model> VRControllerModels::Load(uint64_t id,
       for (cgltf_size i = node->children_count; i > 0; i--)
          stack.push_back(node->children[i - 1]);
    }
+   // The Steam Frame controllers have a sticker on their front, the 'status' node, where SteamVR shows the logo of the running application when it
+   // draws the controllers itself. Its texture coordinates cover the whole image it is meant for, while the asset maps it on the shared color
+   // texture (which shows a squeezed copy of that texture): it gets our round logo instead, on a transparent background at the aspect ratio of the sticker (3.8 x 4.1 cm)
+   string nodeNames;
+   for (cgltf_size i = 0; i < data->nodes_count; i++)
+   {
+      const char* const name = data->nodes[i].name ? data->nodes[i].name : "";
+      nodeNames += (i ? ", "s : ""s) + name;
+      if (strcmp(name, "status") == 0 && nodeIndex[i] >= 0)
+         for (const int p : model->nodes[nodeIndex[i]].primitives)
+         {
+            // The logo is round on a transparent background: the sticker is alpha blended over the body
+            Primitive& primitive = model->primitives[p];
+            primitive.sticker = true;
+            primitive.transparent = true;
+            primitive.material.m_cBase = RGB(255, 255, 255);
+            primitive.material.m_fOpacity = 1.f;
+            primitive.material.m_bOpacityActive = true;
+         }
+   }
+   PLOGI << "OpenXR controller model " << id << " nodes: " << nodeNames;
    for (size_t i = 0; i < animatableNodes.size(); i++)
       if (!animatableFound[i])
          PLOGW << "OpenXR controller model " << id << ": animatable node '" << animatableNodes[i] << "' not found in the asset";
@@ -276,6 +300,8 @@ void VRControllerModels::Render(Renderer* renderer, const VRDevice& vrDevice)
 
    Shader* const shader = m_rd->m_basicShader;
    bool drawn = false;
+   int drawCount = 0;
+   Vertex3Ds firstCenter(0.f, 0.f, 0.f);
    for (const VRDevice::ControllerModel& controller : controllers)
    {
       if (!controller.located)
@@ -285,8 +311,10 @@ void VRControllerModels::Render(Renderer* renderer, const VRDevice& vrDevice)
          continue;
       const Model& model = **it;
 
-      // Place the nodes, with the poses of the animated ones given by the runtime (relative to their parent, the node keeping its scale)
+      // Place the nodes, with the poses of the animated ones given by the runtime (relative to their parent, the node keeping its scale).
+      // SteamVR/OpenXR 2.17.10 on the Steam Frame reports every node as hidden: when no node at all is visible, the visibility is not used.
       const Matrix3D modelToRoom = controller.modelToReference * vrDevice.GetReferenceToRoom();
+      const bool useVisibility = std::ranges::any_of(controller.nodeStates, [](const VRDevice::ControllerModel::NodeState& state) { return state.visible; });
       m_nodeWorld.resize(model.nodes.size());
       m_nodeVisible.resize(model.nodes.size());
       for (size_t i = 0; i < model.nodes.size(); i++)
@@ -297,8 +325,11 @@ void VRControllerModels::Render(Renderer* renderer, const VRDevice& vrDevice)
          if (node.animatable >= 0 && node.animatable < static_cast<int>(controller.nodeStates.size()))
          {
             const VRDevice::ControllerModel::NodeState& state = controller.nodeStates[node.animatable];
-            local = Matrix3D::MatrixScale(node.scale.x, node.scale.y, node.scale.z) * VRDevice::PoseToMatrix(state.pose);
-            visible = visible && state.visible;
+            // A pose without a unit rotation was not filled by the runtime: the node keeps its own transform
+            const XrQuaternionf& q = state.pose.orientation;
+            if (const float length = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w; length > 0.5f && length < 1.5f)
+               local = Matrix3D::MatrixScale(node.scale.x, node.scale.y, node.scale.z) * VRDevice::PoseToMatrix(state.pose);
+            visible = visible && (state.visible || !useVisibility);
          }
          m_nodeWorld[i] = node.parent < 0 ? local : local * m_nodeWorld[node.parent];
          m_nodeVisible[i] = visible;
@@ -314,7 +345,19 @@ void VRControllerModels::Render(Renderer* renderer, const VRDevice& vrDevice)
          for (const int p : model.nodes[i].primitives)
          {
             const Primitive& primitive = model.primitives[p];
-            BaseTexture* const texture = (primitive.texture >= 0 && primitive.texture < static_cast<int>(model.textures.size())) ? model.textures[primitive.texture].get() : nullptr;
+            BaseTexture* texture = (primitive.texture >= 0 && primitive.texture < static_cast<int>(model.textures.size())) ? model.textures[primitive.texture].get() : nullptr;
+            if (primitive.sticker)
+            {
+               if (!m_stickerTextureLoaded)
+               {
+                  m_stickerTextureLoaded = true;
+                  m_stickerTexture = BaseTexture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "controller-sticker.png"));
+                  if (m_stickerTexture == nullptr)
+                     PLOGE << "Controller sticker image not found (assets/controller-sticker.png)";
+               }
+               if (m_stickerTexture)
+                  texture = m_stickerTexture.get();
+            }
             m_rd->ResetRenderState();
             // The room space is mirrored compared to the glTF space, which reverses the winding of the triangles: both sides are drawn
             m_rd->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
@@ -333,9 +376,20 @@ void VRControllerModels::Render(Renderer* renderer, const VRDevice& vrDevice)
             else
                m_rd->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_TRUE);
             m_rd->DrawMesh(shader, primitive.transparent, center, 0.f, primitive.mesh, RenderDevice::TRIANGLELIST, 0, primitive.mesh->m_ib->m_count);
+            if (!drawn)
+               firstCenter = center;
             drawn = true;
+            drawCount++;
          }
       }
+   }
+
+   // Diagnostics, every 5 seconds: what was drawn, and where in the room (VPU)
+   if (const double now = static_cast<double>(usec()) * 1e-6; now >= m_nextLogTime)
+   {
+      m_nextLogTime = now + 5.;
+      PLOGI << std::format("Controller models: {} listed, {} loaded, {} meshes drawn, first at {:.0f},{:.0f},{:.0f} (room VPU)", controllers.size(), m_models.size(), drawCount, firstCenter.x,
+         firstCenter.y, firstCenter.z);
    }
 
    if (drawn)
