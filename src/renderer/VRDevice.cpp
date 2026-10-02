@@ -893,6 +893,24 @@ void VRDevice::LogRuntimeStatus()
          status += std::to_string(value.uintValue);
       status += unit;
    }
+   // Controller models: what the runtime gives for each (diagnostics of the placement)
+   #if defined(XR_EXT_render_model) && defined(XR_EXT_interaction_render_model)
+   for (size_t i = 0; i < m_controllerModels.size() && i < std::size(m_controllerModelsDebug); i++)
+   {
+      const auto& d = m_controllerModelsDebug[i];
+      status += std::format(" | controller {}: locate {} flags 0x{:x} pos {:.2f},{:.2f},{:.2f} state {} visible {}/{} {}", m_controllerModels[i].id, static_cast<int>(d.locateResult),
+         static_cast<uint64_t>(d.flags), d.pose.position.x, d.pose.position.y, d.pose.position.z, static_cast<int>(d.stateResult), d.visibleNodes, m_controllerModels[i].nodeStates.size(),
+         m_controllerModels[i].located ? "located" : "not located");
+      if (!m_controllerModels[i].nodeStates.empty())
+      {
+         const XrPosef& p = m_controllerModels[i].nodeStates[0].pose;
+         status += std::format(", node 0 '{}' q {:.2f},{:.2f},{:.2f},{:.2f} p {:.3f},{:.3f},{:.3f}", m_controllerModels[i].animatableNodes[0], p.orientation.x, p.orientation.y, p.orientation.z,
+            p.orientation.w, p.position.x, p.position.y, p.position.z);
+      }
+   }
+   if (!m_controllerModels.empty())
+      status += std::format(" | head {:.2f},{:.2f},{:.2f}", m_uiHeadPos.x, m_uiHeadPos.y, m_uiHeadPos.z);
+   #endif
    // With VPX_GPU_PROFILE set in the environment (bgfx profiler enabled by the render device), the GPU time of the last frame per render target
    if (getenv("VPX_GPU_PROFILE") != nullptr)
    {
@@ -1508,6 +1526,17 @@ void VRDevice::UpdateControllerModels()
          m_controllerModelsRetryTime = static_cast<double>(usec()) * 1e-6 + 2.;
          continue;
       }
+      if (getenv("VPX_DUMP_CONTROLLER_MODELS") != nullptr)
+      {
+         // Diagnostics: the asset as given by the runtime, to inspect it with glTF tools
+         const string path = std::format("/tmp/vpx-controller-model-{}.glb", model.id);
+         if (FILE* f = fopen(path.c_str(), "wb"); f)
+         {
+            fwrite(model.asset->data(), 1, model.asset->size(), f);
+            fclose(f);
+            PLOGI << "OpenXR controller model " << model.id << " written to " << path;
+         }
+      }
       PLOGI << "OpenXR controller model " << model.id << " loaded: " << model.asset->size() / 1024 << " KB, " << model.animatableNodes.size() << " animatable nodes";
       models.push_back(std::move(model));
       handles.push_back(handle);
@@ -1537,7 +1566,10 @@ void VRDevice::LocateControllerModels(XrTime time)
       if (!show)
          continue;
       XrSpaceLocation location { XR_TYPE_SPACE_LOCATION };
-      if (xrLocateSpace(m_renderModelHandles[i].space, m_referenceSpace, time, &location) != XR_SUCCESS)
+      const XrResult locateResult = xrLocateSpace(m_renderModelHandles[i].space, m_referenceSpace, time, &location);
+      if (i < std::size(m_controllerModelsDebug))
+         m_controllerModelsDebug[i] = { locateResult, location.locationFlags, location.pose, XR_SUCCESS, 0 };
+      if (locateResult != XR_SUCCESS)
          continue;
       if ((location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) == 0 || (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) == 0)
          continue;
@@ -1551,9 +1583,15 @@ void VRDevice::LocateControllerModels(XrTime time)
       XrRenderModelStateEXT state { XR_TYPE_RENDER_MODEL_STATE_EXT };
       state.nodeStateCount = static_cast<uint32_t>(m_renderModelNodeStates.size());
       state.nodeStates = m_renderModelNodeStates.data();
-      if (XR_SUCCEEDED(m_xrGetRenderModelStateEXT(m_renderModelHandles[i].renderModel, &stateInfo, &state)))
+      const XrResult stateResult = m_xrGetRenderModelStateEXT(m_renderModelHandles[i].renderModel, &stateInfo, &state);
+      if (XR_SUCCEEDED(stateResult))
          for (size_t j = 0; j < model.nodeStates.size(); j++)
             model.nodeStates[j] = { m_renderModelNodeStates[j].nodePose, m_renderModelNodeStates[j].isVisible == XR_TRUE };
+      if (i < std::size(m_controllerModelsDebug))
+      {
+         m_controllerModelsDebug[i].stateResult = stateResult;
+         m_controllerModelsDebug[i].visibleNodes = static_cast<int>(std::ranges::count_if(model.nodeStates, [](const ControllerModel::NodeState& n) { return n.visible; }));
+      }
    }
    #endif
 }

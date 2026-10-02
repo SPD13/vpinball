@@ -31,6 +31,7 @@ private:
       Material material;
       float alphaTest = -1.f; // glTF alpha mask cutoff, or -1 without
       bool transparent = false; // glTF alpha blend
+      bool sticker = false; // Front sticker of the controller, which shows our logo (see Load)
    };
    struct Node
    {
@@ -52,9 +53,12 @@ private:
 
    RenderDevice* const m_rd;
    vector<std::unique_ptr<Model>> m_models;
+   std::shared_ptr<BaseTexture> m_stickerTexture; // Our logo, for the front sticker of the controllers
+   bool m_stickerTextureLoaded = false;
    vector<uint64_t> m_failedIds; // Assets that could not be loaded, not tried again
    vector<Matrix3D> m_nodeWorld; // Scratch buffers for Render
    vector<bool> m_nodeVisible;
+   double m_nextLogTime = 0.;
 };
 
 #endif
