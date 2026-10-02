@@ -44,6 +44,11 @@ public:
    // switching tables neither closes the window nor makes the VR runtime see the application quit and start again. They are released
    // when the application closes. Otherwise, they are released when the table which used them is closed (editor, mobile builds).
    bool m_keepDisplayBetweenTables = false;
+   // The VR device (OpenXR instance) is not kept, only the windows are: SteamVR (2.17.10 on the Steam Frame) ties its Vulkan objects to the
+   // OpenXR instance and reuses them for the next session after destroying them with the previous one (crash in the driver at xrEndFrame),
+   // and creating a new Vulkan device under the same instance makes it call the destroyed VkInstance (abort in the loader). Found on the
+   // Frame on 2026-10-02 with the Vulkan API dump layer. A runtime fixing this could set it back to true.
+   static constexpr bool m_keepVRDeviceBetweenTables = false;
    // Window kept from the previous table if it was created with the same settings, otherwise a new one
    VPX::Window* AcquireWindow(int windowId, const string& title, const Settings& settings);
    void ReleaseWindow(VPX::Window* wnd);

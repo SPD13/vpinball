@@ -584,7 +584,7 @@ VRDevice* VPApp::AcquireVRDevice(const Settings& settings)
 
 void VPApp::ReleaseVRDevice(bool discard)
 {
-   if (m_vrDevice && (discard || !m_keepDisplayBetweenTables || m_vrDevice->IsLost()))
+   if (m_vrDevice && (discard || !m_keepDisplayBetweenTables || !m_keepVRDeviceBetweenTables || m_vrDevice->IsLost()))
    {
       delete m_vrDevice;
       m_vrDevice = nullptr;

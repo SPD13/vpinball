@@ -146,9 +146,10 @@
 
 class MeshBuffer;
 
-// The VR device lives as long as the OpenXR instance: when tables are played one after another, the application keeps it from one table
-// to the next (see VPApp::AcquireVRDevice), so the runtime does not see the application quit and start again. Each table creates its own
-// session (CreateSession / ReleaseSession, from the render thread) and applies its settings (ApplyTableSettings).
+// The VR device lives as long as the OpenXR instance: when tables are played one after another, the application can keep it from one table
+// to the next (see VPApp::AcquireVRDevice), so the runtime does not see the application quit and start again. Each table then creates its
+// own session (CreateSession / ReleaseSession, from the render thread) and applies its settings (ApplyTableSettings). SteamVR 2.17.10 does
+// not survive a second session on one instance (see VPApp::m_keepVRDeviceBetweenTables), so the device is created again for each table there.
 class VRDevice final
 {
 public:
@@ -447,6 +448,7 @@ private:
    PFN_xrSetPerformanceMetricsStateMETA m_xrSetPerformanceMetricsStateMETA = nullptr;
    PFN_xrQueryPerformanceMetricsCounterMETA m_xrQueryPerformanceMetricsCounterMETA = nullptr;
    vector<std::pair<string, XrPath>> m_performanceCounters;
+   bool m_performanceCountersEnabled = false; // Enabled on the current session (see CreateSession and ReleaseSession)
    double m_nextStatusLogTime = 0.;
    void LogRuntimeStatus();
 
