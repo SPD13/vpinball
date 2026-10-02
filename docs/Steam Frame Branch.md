@@ -21,6 +21,7 @@ Changes a player sees, in the standalone builds (details in the numbered section
 - **VR**: the menu on a panel standing in the room, in the table's direction, at an adjustable distance, used with the controllers' pointer; notifications above the menu (sections 7 and 8).
 - **No "controller detected" prompt for the VR controllers**: Steam Input also presents the Frame controllers as an Xbox gamepad; in VR, VPX no longer asks to set up a layout for it, since the controllers already work through OpenXR (section 7).
 - **Eye-tracked foveated rendering, exclusive to this branch and to the Steam Frame build**: full shading only around the point the eyes look at, following the headset's eye tracker, so native 2160×2160 per eye stays affordable; a "Foveated rendering" level (Off / Low / Medium / High), an "Eye-tracked" switch and a status line in the VR settings page. Not in upstream Visual Pinball, and inert on Windows and macOS, whose builds lack the Vulkan driver support and the bgfx patch (section 9, and `Doc/foveated-rendering.md` for the full technical reference).
+- **Steadier chrome, smoother edges**: specular anti-aliasing in the material shader stops the shiny parts from sparkling when the image is resampled every frame, on every platform; the headset builds also default to Standard FXAA, the only anti-aliasing within the Frame's budget at native resolution (section 12, `docs/Image Quality on the Steam Frame.md`).
 
 ## Status
 
@@ -188,12 +189,24 @@ The controllers the player holds are drawn in the scene as the headset system sh
 
 - **Runtime side** (`VRDevice`): enables `XR_EXT_render_model`, `XR_EXT_interaction_render_model` and `XR_EXT_uuid` (needed as the instance asks for OpenXR 1.0) when the runtime has them; the log says "OpenXR controller models: supported by the runtime". `UpdateControllerModels` asks for the models of the devices held (`xrEnumerateInteractionRenderModelIdsEXT`, again on `XR_TYPE_EVENT_DATA_INTERACTION_RENDER_MODELS_CHANGED_EXT`, on interaction profile changes, and every 2 s while the list is empty or an asset was unavailable), creates each model, its space and its asset, and keeps the glTF binary and the names of its animatable nodes ("OpenXR controller model N loaded: … KB, … animatable nodes"). Only `KHR_mesh_quantization` is declared as a supported glTF extension. Every frame, `LocateControllerModels` locates each model space in the reference space and reads the node poses (`xrGetRenderModelStateEXT`) at the predicted display time. Both run on the render thread before the frame is requested, like the menu panel; the logic thread reads the result while preparing the frame.
 - **Drawing** (`VRControllerModels`, owned by `Renderer`, called at the end of `RenderDynamics` in VR, outside reflection passes): the asset is parsed with cgltf once per model (triangle meshes, base color factor and texture, alpha mask and blend, node hierarchy; PNG/JPEG images through `BaseTexture::CreateFromData`), then each node is drawn with the basic shader in the room space reference: reference space to room VPU is `VRDevice::GetReferenceToRoom()`. An animated node takes the pose given by the runtime as its local transform (relative to its parent), keeping its own scale. Materials: metallic-roughness factors to a VPX material (the metallic-roughness texture is ignored, a mesh which has one is shaded as a non metal), half lit / half unlit (`controllerUnlitPart`) so the controllers stay readable on dark tables, both sides drawn (the room space is mirrored compared to glTF).
+- **Found on the Frame** (SteamVR/OpenXR 2.17.10): both controllers are listed and located, but `xrGetRenderModelStateEXT` returns every node hidden with an identity pose, so no part moves; when no node at all is visible the visibility is ignored, and a pose without a unit rotation keeps the node's own transform.
+- **Front sticker**: the `status` node is where SteamVR shows the running application's logo when it draws the controllers itself (`visibility.default = false` in `/opt/steamvr/drivers/frame_controller/resources/rendermodels/*/frame_controller_*.json`). The asset maps it on the shared color texture although its texture coordinates span a whole image of its own, which showed a squeezed copy of that texture. No OpenXR function to get or set that logo was found, so the node is drawn with `src/assets/controller-sticker.png` (the ball of the dark iOS app icon, cut out with a round mask on a transparent background, at the 3.8 × 4.1 cm aspect of the sticker, 474 × 512), alpha blended over the body with a white base color.
 - **Setting** `PlayerVR/ShowControllers` (default on), in the VR settings page, applied live. The models are also hidden during the table image capture.
 - **To check on the device**: that SteamVR lists the Frame controllers once they are bound, their placement against the real controllers, the direction of the texture coordinates, that the animated parts move the right way (the pose is taken as relative to the parent node), and the cost.
+
+## 12. Image quality on the Steam Frame (2026-10-02)
+
+Files: `src/shaders/bgfx/material.sh`, `src/shaders/bgfx/fs_ball.sc`, `src/shaders/bgfx_basic.h`, `src/shaders/bgfx_ball.h` (regenerated), `src/core/Settings_properties.inl`; the analysis and the measurements in `docs/Image Quality on the Steam Frame.md`.
+
+Compared with a PSVR2 on a PC, the Frame showed stair-stepped diagonals and chrome parts that seemed to move while the head was still. No setting or feature is missing on the Frame (all defaults, no platform reduction, anisotropic filtering and mipmaps active): the PC image is supersampled by SteamVR's recommended resolution and downsampled by the compositor, while the Frame renders 1:1 with the panel and no anti-aliasing. Measured at 2160×2160 on a heavy table (9.7 ms baseline, 13.9 ms budget at 72 Hz): Standard FXAA +1.6–2.5 ms, MSAA 4× +11.3 ms (the scene pass runs in direct mode, so the samples go through memory), 1.3× supersampling +5.4 ms. The device heats up over back-to-back runs (GPU 60 °C at rest, 90 °C in a run; a hot run of the same configuration measured 3 ms more), so measurements need a rest between launches. With both changes the table runs at ≈ 11 ms; the specular anti-aliasing itself costs nothing measurable.
+
+- **Standard FXAA by default** in the headset builds (`__STANDALONE__ && ENABLE_XR`), the only option within the budget; it fixes the edges, not the sparkle.
+- **Specular anti-aliasing** in the material shader (Kaplanyan 2016, Tokuyoshi & Kaplanyan 2019): the variance of the normal over the pixel, from its screen-space derivatives, widens the glossy lobe (point lights and glossy environment lookup, through the Blinn-Phong exponent ↔ alpha² = 2 / (n + 2) conversion), and the mirror lookup of the specular layer reads the environment map at the mip matching the footprint of the reflection instead of mip 0. Flat surfaces are unchanged. This applies to every backend; the shader headers were regenerated on macOS for SPIR-V, Metal, GLSL and GLSL ES, **the DirectX 11/12 blobs are the previous ones** (bgfx's shaderc needs the Windows HLSL compiler): run `src/shaders/bgfx/shaders.sh` on Windows before relying on it with the Direct3D backends.
 
 ## Effects on existing builds
 
 - `-Play`, the editor and the Visual Studio build behave as before, except for the OpenXR changes that apply everywhere: the Vulkan extension filter, the extra controller inputs and default mappings, the menu panel and pointer, and the upstream VR fixes of section 8.
+- Every build with the bgfx renderer gets the specular anti-aliasing of the material shader (section 12), except through Direct3D 11/12 until the shader headers are regenerated on Windows.
 - Standalone desktop builds get a "Tables" entry at the top of the in-game menu. When a table starts they create `VPinballX/Tables/pinmame/roms` in the documents folder, unless a PinMAME folder is already defined or `~/.pinmame/roms` exists (section 6).
 - iOS/Android library builds: uploads are staged in `.upload`; `InGameUIPage` has the tile code; no other intended change.
 - The Visual Studio project files (`make/*.vcxproj`) were not updated. None of the new files is needed by a non-standalone build; the CMake build lists them.
@@ -214,6 +227,8 @@ src/renderer/VRControllerModels.h
 src/renderer/VRControllerModels.cpp
 third-party/include/cgltf/cgltf.h
 docs/Steam Frame Branch.md
+docs/Foveated Rendering on the Steam Frame.md
+docs/Image Quality on the Steam Frame.md
 ```
 
 Modified:
@@ -233,7 +248,9 @@ src/assets/web/styles.css               missing ROMs, ROM folder link, upload ba
 src/core/AppCommands.h, AppCommands.cpp -Launcher, table switching, lobby
 src/core/main.cpp                       launcher counts as play mode
 src/core/VPApp.h, VPApp.cpp             table library, web server, ROM folder, lobby path
-src/core/Settings_properties.inl        Standalone settings, VR autodetect default on standalone OpenXR builds
+src/core/Settings_properties.inl        Standalone settings, VR autodetect and Standard FXAA defaults on standalone OpenXR builds
+src/shaders/bgfx/material.sh, fs_ball.sc   specular anti-aliasing (section 12)
+src/shaders/bgfx_basic.h, bgfx_ball.h   regenerated (DirectX blobs carried over)
 src/core/player.h, player.cpp           table image on close
 src/input/InputManager.h, .cpp          quit action captures the image in launcher mode, no layout prompt for the VR virtual gamepad
 src/input/SDLInputHandler.h             VR virtual gamepad detection, joystick vendor/product ids logged

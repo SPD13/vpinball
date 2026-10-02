@@ -183,8 +183,16 @@ PropFloat(Player, AAFactor, "Full Scene Anti Aliasing"s,
 PropEnum(Player, MSAASamples, "MSAA level"s,
    "Set the amount of MSAA samples.\nMSAA can help reduce geometry aliasing at the cost of performance and GPU memory.\nThis can improve image quality if not using supersampling"s, int,
    0, "Disabled"s, "4 Samples"s, "6 Samples"s, "8 Samples"s);
+#if defined(__STANDALONE__) && defined(ENABLE_XR)
+// Headset builds (Steam Frame) render 1:1 with the panel, without the supersampling a PC SteamVR setup gets from its recommended resolution, so
+// the diagonals are stair-stepped without antialiasing. Standard FXAA is the only option within the frame budget of heavy tables at 72 Hz
+// (+1.6 to 2.5 ms at 2160x2160 on the Frame, MSAA 4x +11 ms, 1.3x supersampling +5.5 ms), see docs/Image Quality on the Steam Frame.md
+PropEnum(Player, FXAA, "Post processed antialiasing"s, "Select between different antialiasing techniques that offer different quality vs performance balances"s, int, 2, "Disabled"s,
+   "Fast FXAA"s, "Standard FXAA"s, "Quality FXAA"s, "Fast NFAA"s, "Standard DLAA"s, "Quality SMAA"s, "Quality FAAA"s);
+#else
 PropEnum(Player, FXAA, "Post processed antialiasing"s, "Select between different antialiasing techniques that offer different quality vs performance balances"s, int, 0, "Disabled"s,
    "Fast FXAA"s, "Standard FXAA"s, "Quality FXAA"s, "Fast NFAA"s, "Standard DLAA"s, "Quality SMAA"s, "Quality FAAA"s);
+#endif
 PropEnum(Player, Sharpen, "Post processed sharpening"s, "Select between different sharpening techniques that offer different quality vs performance balances"s, int, 0, "Disabled"s, "CAS"s,
    "Bilateral CAS"s);
 
@@ -276,7 +284,7 @@ PropBool(PlayerVR, AddBackglass, "Add Backglass"s, "Add a default backglass disp
 PropFloatDyn(PlayerVR, ControllerCabYOffset, "Cabinet Y Offset"s, "Y offset to apply when using controller view centering"s, -150.f, 50.f, 0.f);
 PropFloatDyn(PlayerVR, ControllerLockbarScale, "Lockbar size ratio"s, "Lockbar size ratio to apply when using controller view centering"s, 0.5f, 2.0f, 1.f);
 PropFloatUnbounded(PlayerVR, ResFactor, "ResFactor"s, ""s, -1.f);
-PropBool(PlayerVR, ShowControllers, "Show controllers"s, "Show the controllers in the scene, as the headset system shows them, with their buttons moving when pressed (needs runtime support: XR_EXT_render_model)"s, true);
+PropBool(PlayerVR, ShowControllers, "Show controllers"s, "Show the controllers in the scene, as the headset system shows them (needs runtime support: XR_EXT_render_model)"s, true);
 PropBool(PlayerVR, LockFeetToGround, "Lock Feet to Ground"s, "Lock cabinet feet to ground. This usually feels more natural (avoid floating cabinet) but may be deactivated for example for playing mini flipper seated at a desk."s, true);
 
 // Physics override profiles

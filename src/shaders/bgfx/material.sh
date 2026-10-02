@@ -61,6 +61,51 @@ vec3 FresnelSchlick(const vec3 spec, const float LdotH, const float edge)
 }
 
 //
+// Specular antialiasing
+//
+// The shading normal of a curved or normal mapped surface varies inside the footprint of a pixel, so a glossy highlight thinner than a pixel
+// is hit or missed by the sample and flickers with the slightest movement: sparkling chrome parts, worst in a headset where the image is
+// resampled every frame. Following Kaplanyan et al. (Filtering Distributions of Normals for Shading Antialiasing, 2016) and Tokuyoshi &
+// Kaplanyan (Improved Geometric Specular Antialiasing, 2019), the variance of the normal over the pixel, from its screen-space derivatives,
+// is added to the roughness of the lobe, which widens the highlight to what the pixel can resolve. The material gives its lobe as a
+// Blinn-Phong exponent: it is converted to the Beckmann-like alpha^2 = 2 / (exponent + 2), widened, and converted back. The mirror lookup
+// of the specular layer, which has no roughness of its own, is instead read from the mip level matching the footprint of the reflection.
+// Fragment shaders only (derivatives): call NormalVariation outside of non-uniform branches.
+//
+
+#define SPECULAR_AA_PIXEL_SIGMA2 0.25 // Variance of the sample position inside the pixel: (half a pixel)^2
+#define SPECULAR_AA_MAX_KERNEL 0.18 // Cap of the added roughness: beyond it, the normal is noise over the pixel and widening it further only dims the surface
+
+// x: variance of the normal over the pixel (sigma^2), y: squared change of the normal across one pixel in its largest direction
+vec2 NormalVariation(const vec3 N)
+{
+   const vec3 dNdx = dFdx(N);
+   const vec3 dNdy = dFdy(N);
+   const float dx2 = dot(dNdx, dNdx);
+   const float dy2 = dot(dNdy, dNdy);
+   return vec2(SPECULAR_AA_PIXEL_SIGMA2 * (dx2 + dy2), max(dx2, dy2));
+}
+
+// Roughness (alpha^2) to add to a lobe for this pixel
+float SpecularAAKernel(const vec2 normalVariation)
+{
+   return min(2.0 * normalVariation.x, SPECULAR_AA_MAX_KERNEL);
+}
+
+// Glossy exponent widened by the kernel roughness
+float SpecularAAGlossyPower(const float glossyPower, const float kernelRoughness)
+{
+   return 2.0 / (2.0 / (glossyPower + 2.0) + kernelRoughness) - 2.0;
+}
+
+// Mip level of the environment map for a mirror lookup: the reflection vector turns twice as fast as the normal, and the equirectangular
+// map has width / (2 PI) texels per radian, so the footprint of the pixel in the map is |dN| * width / PI texels
+float SpecularAAMirrorMip(const vec2 normalVariation)
+{
+   return clamp(0.5 * log2(max(normalVariation.y, 1e-12)) + log2(fenvEmissionScale_TexWidth.y / PI), 0.0, log2(fenvEmissionScale_TexWidth.y) - 1.);
+}
+
+//
 
 #ifdef STEREO
 vec3 DoPointLight(const vec3 pos, const vec3 N, const vec3 V, const vec3 diffuse, const vec3 glossy, const float edge, const float glossyPower, const int i, const bool is_metal, const float v_eye) 
@@ -125,10 +170,11 @@ vec3 DoEnvmapGlossy(const vec3 N, const vec3 V, const vec2 Ruv, const vec3 gloss
 }
 
 //!! PI?
-vec3 DoEnvmap2ndLayer(const vec3 color1stLayer, const vec3 pos, const vec3 N, const vec3 V, const float NdotV, const vec2 Ruv, const vec3 specular)
+// mip: level of the mirror lookup, 0 for a flat surface, see SpecularAAMirrorMip
+vec3 DoEnvmap2ndLayer(const vec3 color1stLayer, const vec3 pos, const vec3 N, const vec3 V, const float NdotV, const vec2 Ruv, const vec3 specular, const float mip)
 {
    const vec3 w = FresnelSchlick(specular, NdotV, Roughness_WrapL_Edge_Thickness.z); //!! ?
-   const vec3 env = texNoLod(tex_env, Ruv).xyz;
+   const vec3 env = texture2DLod(tex_env, Ruv, mip).xyz;
    return mix(color1stLayer, env*fenvEmissionScale_TexWidth.x, w); // weight (optional) lower diffuse/glossy layer with clearcoat/specular
 }
 
@@ -136,7 +182,7 @@ vec3 DoEnvmap2ndLayer(const vec3 color1stLayer, const vec3 pos, const vec3 N, co
 // Apply lighting from the environment and the 2 scene lights
 // - Lighting is kinda PBR since glossy and diffuse are normalized, and the 2nd layer (specular/clearcoat) is 'blended' via Fresnel
 // - Apply the 2 points lights to the diffuse (Lambert with optional rim/wrap) and glossy (Ashikhmin/Blinn) components, clearcoat (a.k.a. specular) is not applied (as point lights).
-//   Light energy can be tweaked in order to have ranged lights instead of the physical 1/d² energy
+//   Light energy can be tweaked in order to have ranged lights instead of the physical 1/dï¿½ energy
 //   This lighting can be 'disabled', in fact replacing it by 2 times the diffuse color (backwards compatibility bug)
 // - Apply the environment lighting with diffuse, glossy and a specular/clearcoat layer
 //   Diffuse is applied via a precomputed/'filtered' version of the envmap.
@@ -150,6 +196,12 @@ vec3 lightLoop(const vec3 pos, vec3 N, const vec3 V, vec3 diffuse, vec3 glossy, 
 #endif
 {
    vec3 color = vec3_splat(0.0);
+
+   // Specular antialiasing (see above): from the normal before it is flipped for backside lighting, the flip being a per pixel sign change
+   // that would read as a huge variation along the line where it starts
+   const vec2 normalVariation = NormalVariation(N);
+   const float kernelRoughness = SpecularAAKernel(normalVariation);
+   const float glossyPower = SpecularAAGlossyPower(Roughness_WrapL_Edge_Thickness.x, kernelRoughness);
 
    float NdotV = dot(N,V);
    if (NdotV < 0.0)
@@ -181,9 +233,9 @@ vec3 lightLoop(const vec3 pos, vec3 N, const vec3 V, vec3 diffuse, vec3 glossy, 
          color += float(iLightPointNum) * diffuse; // Old bug kept for backward compatibility: when lighting is disabled, it results to applying it twice
       else for (int i = 0; i < NUM_LIGHTS; i++)
          #ifdef STEREO
-            color += DoPointLight(pos, N, V, diffuse, glossy, edge, Roughness_WrapL_Edge_Thickness.x, i, is_metal, v_eye); // no clearcoat needed as only pointlights so far
+            color += DoPointLight(pos, N, V, diffuse, glossy, edge, glossyPower, i, is_metal, v_eye); // no clearcoat needed as only pointlights so far
          #else
-            color += DoPointLight(pos, N, V, diffuse, glossy, edge, Roughness_WrapL_Edge_Thickness.x, i, is_metal); // no clearcoat needed as only pointlights so far
+            color += DoPointLight(pos, N, V, diffuse, glossy, edge, glossyPower, i, is_metal); // no clearcoat needed as only pointlights so far
          #endif
    }
 
@@ -200,9 +252,9 @@ vec3 lightLoop(const vec3 pos, vec3 N, const vec3 V, vec3 diffuse, vec3 glossy, 
        R = /*normalize*/(( mul(vec4(R,0.0), mView) ).xyz); // trafo back to world for lookup into world space envmap // actually: mul(vec4(R,0.0), matViewInverseInverseTranspose), but optimized to save one matrix
        const vec2 Ruv = ray_to_equirectangular_uv(R);
        if (glossyMax > 0.0)
-          color += DoEnvmapGlossy(N, V, Ruv, glossy, Roughness_WrapL_Edge_Thickness.x);
+          color += DoEnvmapGlossy(N, V, Ruv, glossy, glossyPower);
        if (specularMax > 0.0)
-          color = DoEnvmap2ndLayer(color, pos, N, V, NdotV, Ruv, specular);
+          color = DoEnvmap2ndLayer(color, pos, N, V, NdotV, Ruv, specular, SpecularAAMirrorMip(normalVariation));
    }
 
    return /*Gamma(ToneMap(*/color/*))*/;
