@@ -255,12 +255,10 @@ PropEnum(PlayerVR, AskToTurnOn, "Enable VR"s, "Ask to turn on VR"s, int, 2, "Ena
 #endif
 // Foveated rendering: full shading only around the point the eyes look at, requested from the OpenXR runtime (XR_FB_foveation; on the Steam Frame the
 // runtime generates eye-tracked density maps when XR_META_foveation_eye_tracked is available and eye tracking is enabled in the headset settings).
-// The default is on for the standalone OpenXR builds, where native resolution is only affordable with it; it is inert where the runtime lacks the extension
-#if defined(__STANDALONE__) && defined(ENABLE_XR)
-PropEnum(PlayerVR, Foveation, "Foveated rendering"s, "Reduce the shading quality away from the point the eyes look at, to render at a higher resolution or with heavier settings. Needs runtime support (Steam Frame); eye-tracked when the headset allows it, otherwise fixed at the center"s, int, 2, "Off"s, "Low"s, "Medium"s, "High"s);
-#else
+// Off by default: on the Steam Frame the driver only applies density maps in its tiled render path, where a heavy table's scene pass is geometry-bound,
+// so the measured gain is marginal while direct rendering of that pass is what makes native resolution affordable (docs/Steam Frame Branch.md, section 9).
+// Kept available for tables that are fragment-bound and for other drivers; inert where the runtime lacks the extension
 PropEnum(PlayerVR, Foveation, "Foveated rendering"s, "Reduce the shading quality away from the point the eyes look at, to render at a higher resolution or with heavier settings. Needs runtime support (Steam Frame); eye-tracked when the headset allows it, otherwise fixed at the center"s, int, 0, "Off"s, "Low"s, "Medium"s, "High"s);
-#endif
 // Sign conventions of the gaze offsets applied to the density map (the runtime reports the gaze in normalized coordinates, Vulkan images have y down); kept as settings to be tuned on the device
 PropBool(PlayerVR, FoveationFlipX, "Foveation offset: flip X"s, "Mirror the horizontal gaze offset of the foveated rendering"s, false);
 PropBool(PlayerVR, FoveationFlipY, "Foveation offset: flip Y"s, "Mirror the vertical gaze offset of the foveated rendering"s, true);

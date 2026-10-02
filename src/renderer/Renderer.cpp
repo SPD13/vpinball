@@ -3011,16 +3011,23 @@ void Renderer::RenderFrame()
       {
          if (std::shared_ptr<MeshBuffer> mask = g_pplayer->m_vrDevice->GetVisibilityMask(); mask)
          {
-            static constexpr Vertex3Ds pos{0.f, 0.f, 200000.0f}; // Very high depth bias to ensure being rendered before other opaque parts (which are sorted front to back)
+            // Drawn before every other opaque part: the sort key of a draw is depthBias - z, and keys 50000 apart are ordered highest first (the rule that
+            // keeps old tables' playfield first, see RenderPass::SortCommands), so the bias must be large and positive. A z of 200000 gave a key of -200000
+            // and the mask ended up after all the opaque parts (seen in the driver's trace on the Steam Frame), which defeated it as an early depth mask.
+            static constexpr Vertex3Ds pos{0.f, 0.f, 0.f};
+            static constexpr float maskDepthBias = 200000.0f;
             m_renderDevice->ResetRenderState();
             m_renderDevice->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
             m_renderDevice->SetRenderState(RenderState::COLORWRITEENABLE, RenderState::RS_FALSE);
             m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_TRUE);
             m_renderDevice->SetRenderState(RenderState::ZENABLE, RenderState::RS_TRUE);
-            m_renderDevice->SetRenderState(RenderState::ZFUNC, RenderState::Z_ALWAYS);
+            // The mask shader writes the near plane depth (z = 0), which passes a less-or-equal test against the cleared depth buffer just as an
+            // always-pass test would, while keeping the hierarchical depth rejection (LRZ on Adreno) that drivers disable for the rest of the pass
+            // after a depth write with an always-pass test
+            m_renderDevice->SetRenderState(RenderState::ZFUNC, RenderState::Z_LESSEQUAL);
             m_renderDevice->m_basicShader->SetMatrix(ShaderUniform::matWorldViewProj, g_pplayer->m_vrDevice->GetVisibilityMaskProjs(), 2);
             m_renderDevice->m_basicShader->SetTechnique(ShaderTechnique::vr_mask);
-            m_renderDevice->DrawMesh(m_renderDevice->m_basicShader, false, pos, 0, mask, RenderDevice::TRIANGLELIST, 0, mask->m_ib->m_count);
+            m_renderDevice->DrawMesh(m_renderDevice->m_basicShader, false, pos, maskDepthBias, mask, RenderDevice::TRIANGLELIST, 0, mask->m_ib->m_count);
             UpdateBasicShaderMatrix();
          }
       }
@@ -3134,6 +3141,13 @@ void Renderer::RenderFrame()
 
    if (g_pplayer->GetProfilingMode() == PF_ENABLED)
       m_gpu_profiler.Timestamp(GTS_PostProcess);
+}
+
+void Renderer::RenderLoadingFrame()
+{
+   m_renderDevice->SetRenderTarget("Loading screen"s, m_renderDevice->GetOutputBackBuffer(), false);
+   m_renderDevice->Clear(clearType::TARGET | clearType::ZBUFFER, 0xFF000000); // Opaque black
+   g_pplayer->m_liveUI->RenderUI();
 }
 
 

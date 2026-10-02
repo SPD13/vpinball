@@ -8,6 +8,8 @@
 #include "core/VPXPluginAPIImpl.h"
 #include "parts/Collection.h"
 #include "plugins/VPXPlugin.h"
+#include "renderer/VRDevice.h"
+#include "renderer/Window.h"
 
 #if defined(CRASH_HANDLER) || defined(VPX_STANDALONE_CRASH_HANDLER)
 #include "utils/CrashHandler.h"
@@ -448,6 +450,31 @@ void VPApp::NextTableImageFocus()
    g_app->m_settings.SetStandalone_TableImageFocus((clamp(g_app->m_settings.GetStandalone_TableImageFocus(), 0, 2) + 1) % 3, false);
 }
 
+string VPApp::GetLoadingText(const std::filesystem::path& tablePath, bool lobby)
+{
+   if (lobby)
+      return "Loading the lobby..."s;
+   string name = tablePath.stem().string();
+   const std::filesystem::path normalPath = tablePath.lexically_normal();
+   const VPinballLib::TableLibrary& library = GetTableLibrary();
+   for (const auto& table : library.GetTables())
+      if (library.GetFullPath(table).lexically_normal() == normalPath)
+      {
+         name = table.name;
+         break;
+      }
+   return "Loading " + name + "...";
+}
+
+string VPApp::GetNextLoadingText(bool playingLobby)
+{
+   if (!m_nextTableFilename.empty())
+      return GetLoadingText(m_nextTableFilename, false);
+   if (m_launcherMode && (!playingLobby || m_reloadLobby))
+      return GetLoadingText({}, true);
+   return {};
+}
+
 void VPApp::ResetLobbyRoom()
 {
    std::error_code ec;
@@ -467,6 +494,7 @@ WebServer& VPApp::GetWebServer()
 
 VPApp::~VPApp()
 {
+   ReleaseDisplayResources();
    #ifndef __STANDALONE__
       m_module.RevokeClassObjects();
       m_module.Term();
@@ -489,6 +517,94 @@ VPApp::~VPApp()
    #ifdef _CRTDBG_MAP_ALLOC
       _CrtDumpMemoryLeaks();
    #endif
+}
+
+VPX::Window* VPApp::AcquireWindow(int windowId, const string& title, const Settings& settings)
+{
+   const string config = VPX::Window::GetConfigKey(settings, static_cast<VPXWindowId>(windowId));
+   VPX::Window* wnd = nullptr;
+   if (const auto it = std::ranges::find_if(m_keptWindows, [windowId](const KeptWindow& kept) { return kept.windowId == windowId; }); it != m_keptWindows.end())
+   {
+      if (it->config == config)
+      {
+         PLOGI << "Window #" << windowId << " kept from the previous table";
+         wnd = it->window;
+      }
+      else
+      {
+         PLOGI << "Window #" << windowId << " settings changed since the previous table, the window is created again";
+         delete it->window;
+      }
+      m_keptWindows.erase(it);
+      SDL_QuitSubSystem(SDL_INIT_VIDEO); // Balances the reference taken when the window was kept
+   }
+   if (wnd == nullptr)
+      wnd = new VPX::Window(title, settings, static_cast<VPXWindowId>(windowId));
+   m_usedWindows.push_back({ wnd, windowId, config });
+   return wnd;
+}
+
+void VPApp::ReleaseWindow(VPX::Window* wnd)
+{
+   const auto it = std::ranges::find_if(m_usedWindows, [wnd](const KeptWindow& used) { return used.window == wnd; });
+   if (it == m_usedWindows.end())
+   {
+      assert(false); // Not acquired from AcquireWindow
+      delete wnd;
+      return;
+   }
+   const KeptWindow used = *it;
+   m_usedWindows.erase(it);
+   if (m_keepDisplayBetweenTables)
+   {
+      // Each table initializes then releases the video subsystem, which must stay alive with the kept window
+      SDL_InitSubSystem(SDL_INIT_VIDEO);
+      m_keptWindows.push_back(used);
+   }
+   else
+      delete used.window;
+}
+
+#ifdef ENABLE_XR
+VRDevice* VPApp::AcquireVRDevice(const Settings& settings)
+{
+   if (m_vrDevice && (m_vrDevice->IsLost() || m_vrDevice->GetRendererType() != VRDevice::SelectRendererType(settings)))
+   {
+      PLOGI << "The VR device kept from the previous table can't be used anymore (" << (m_vrDevice->IsLost() ? "lost by the runtime" : "graphics backend changed")
+            << "), it is created again";
+      delete m_vrDevice;
+      m_vrDevice = nullptr;
+   }
+   if (m_vrDevice)
+      PLOGI << "VR device kept from the previous table (same OpenXR instance)";
+   else
+      m_vrDevice = new VRDevice(settings);
+   return m_vrDevice;
+}
+
+void VPApp::ReleaseVRDevice(bool discard)
+{
+   if (m_vrDevice && (discard || !m_keepDisplayBetweenTables || m_vrDevice->IsLost()))
+   {
+      delete m_vrDevice;
+      m_vrDevice = nullptr;
+   }
+}
+#endif
+
+void VPApp::ReleaseDisplayResources()
+{
+   assert(m_usedWindows.empty()); // Only called when no table is played
+   #ifdef ENABLE_XR
+   delete m_vrDevice;
+   m_vrDevice = nullptr;
+   #endif
+   for (const KeptWindow& kept : m_keptWindows)
+   {
+      delete kept.window;
+      SDL_QuitSubSystem(SDL_INIT_VIDEO);
+   }
+   m_keptWindows.clear();
 }
 
 void VPApp::LimitMultiThreading()

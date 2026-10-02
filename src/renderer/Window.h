@@ -130,6 +130,9 @@ public:
       int left; // Logical position
    };
 
+   // The settings an OS window is created from (display, mode, size), to know if a window can be kept for the next table (see VPApp::AcquireWindow)
+   static string GetConfigKey(const Settings& settings, VPXWindowId windowId);
+
    static vector<DisplayConfig> GetDisplays();
    static vector<VideoMode> GetDisplayModes(const DisplayConfig& display);
    static DisplayConfig GetDisplayConfig(const string& displayName);

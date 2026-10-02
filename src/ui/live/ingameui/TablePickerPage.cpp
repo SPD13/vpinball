@@ -567,7 +567,9 @@ void TablePickerPage::BuildMenuTab()
             const auto setDistance = [this](float value)
             {
                g_app->m_settings.SetStandalone_VRMenuDistance(clamp(roundf(value * 10.f) / 10.f, 0.3f, 3.f), false);
+               #ifdef ENABLE_XR
                m_player->m_vrDevice->RecenterUIPanel();
+               #endif
             };
             ImGui::AlignTextToFramePadding();
             ImGui::Text("Menu distance: %.1f m", distance);

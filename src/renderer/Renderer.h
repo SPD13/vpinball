@@ -63,6 +63,7 @@ public:
    ShadeMode GetShadeMode() const { return m_shadeMode; };
 
    void RenderFrame();
+   void RenderLoadingFrame(); // Only the in-game UI (its loading screen, see LiveUI::SetLoadingText) on black, while the table is loading
 
    enum ColorSpace
    {

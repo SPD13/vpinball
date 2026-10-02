@@ -1,6 +1,7 @@
 // license:GPLv3+
 
 #include "core/stdafx.h"
+#include "core/VPApp.h"
 #include "renderer/Renderer.h"
 
 #include "parts/Collection.h"
@@ -544,6 +545,20 @@ void RenderDevice::RenderThread(RenderDevice* rd, bgfx::Init init)
 
    // Wait until main thread has released all native resources
    rd->m_rendererInitialized.acquire();
+
+   // Everything should be destroyed by now: report what is left. Not a problem as long as BGFX is shut down with each table, but these would
+   // add up from one table to the next if the device was kept. A frame is submitted first since BGFX frees the destroyed handles with frames.
+   bgfx::frame();
+   if (const bgfx::Stats* stats = bgfx::getStats(); stats->numTextures || stats->numFrameBuffers || stats->numVertexBuffers || stats->numIndexBuffers
+      || stats->numDynamicVertexBuffers || stats->numDynamicIndexBuffers || stats->numPrograms || stats->numShaders || stats->numUniforms)
+   {
+      PLOGW << "BGFX resources not released by the table: " << stats->numTextures << " textures, " << stats->numFrameBuffers << " frame buffers, "
+            << stats->numVertexBuffers << " vertex buffers, " << stats->numIndexBuffers << " index buffers, " << stats->numDynamicVertexBuffers << " dynamic vertex buffers, "
+            << stats->numDynamicIndexBuffers << " dynamic index buffers, " << stats->numPrograms << " programs, " << stats->numShaders << " shaders, "
+            << stats->numUniforms << " uniforms";
+   }
+   else
+      PLOGI << "BGFX resources all released by the table";
    bgfx::shutdown();
    rd->m_renderDeviceAlive = true;
 }
@@ -1267,7 +1282,8 @@ RenderDevice::RenderDevice(
    // Create preview in the render device as it holds the desktop swapchain (not really clean and should be refactored for all windows to be added/removed by the client)
    if (isVR && !g_isAndroid)
    {
-      VPX::Window* previewWnd = new VPX::Window("Visual Pinball VR Preview"s, g_pplayer->m_ptable->m_settings, VPXWindowId::VPXWINDOW_VRPreview);
+      // The window may be kept from the previous table (see VPApp::AcquireWindow)
+      VPX::Window* previewWnd = g_app->AcquireWindow(VPXWindowId::VPXWINDOW_VRPreview, "Visual Pinball VR Preview"s, g_pplayer->m_ptable->m_settings);
 #ifdef ENABLE_BGFX
       // Color and depth format are likely wrong => use the ones selected by the OpenXR backend
       RenderTarget* backbuffer = new RenderTarget(this, SurfaceType::RT_DEFAULT, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, bgfx::TextureFormat::RGBA8, BGFX_INVALID_HANDLE,
@@ -1361,7 +1377,13 @@ RenderDevice::RenderDevice(
       init.platformData.nwh = SDL_GetPointerProperty(SDL_GetWindowProperties(swapchainWnd->GetCore()), SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, NULL);
    }
    #elif BX_PLATFORM_OSX
-   init.platformData.nwh = SDL_GetRenderMetalLayer(SDL_CreateRenderer(swapchainWnd->GetCore(), "Metal"));
+   {
+      // A window kept from the previous table already has its renderer (a window can only have one)
+      SDL_Renderer* renderer = SDL_GetRenderer(swapchainWnd->GetCore());
+      if (renderer == nullptr)
+         renderer = SDL_CreateRenderer(swapchainWnd->GetCore(), "Metal");
+      init.platformData.nwh = SDL_GetRenderMetalLayer(renderer);
+   }
    #elif BX_PLATFORM_IOS
    init.platformData.nwh = VPinballLib::VPinballLib::Instance().GetMetalLayer();
    #elif BX_PLATFORM_ANDROID
@@ -1943,9 +1965,9 @@ RenderDevice::~RenderDevice()
       wnd->SetBackBuffer(nullptr);
    }
 
-   // Delete preview window we eventually created in constructor
+   // Delete (or keep for the next table) the preview window we eventually created in constructor
    if (g_pplayer->IsVR() && m_outputWnd.size() > 1)
-      delete m_outputWnd[1];
+      g_app->ReleaseWindow(m_outputWnd[1]);
 
 
 #if defined(ENABLE_BGFX)
@@ -2280,6 +2302,7 @@ void RenderDevice::ResetActiveView()
 void RenderDevice::SubmitAndFlipFrame(bool present)
 {
    // Process pending texture upload/mipmap generation before flipping the frame
+   std::unique_lock uploadsLock(m_pendingTextureUploadsMutex);
    for (auto it = m_pendingTextureUploads.cbegin(); it != m_pendingTextureUploads.cend();)
    {
       (*it)->GetCoreTexture(true);
@@ -2292,6 +2315,7 @@ void RenderDevice::SubmitAndFlipFrame(bool present)
          ++it;
       }
    }
+   uploadsLock.unlock();
    const uint32_t frameIdx = bgfx::frame(present ? BGFX_FRAME_NONE : BGFX_FRAME_FLUSH);
    if (present)
       m_lastPresentFrameIdx = frameIdx;
@@ -2454,7 +2478,10 @@ void RenderDevice::UploadTexture(ITexManCacheable* texture, const bool linearRGB
    while (m_framePending || !m_frameMutex.try_lock())
       std::this_thread::yield();
    std::lock_guard lock(m_frameMutex, std::adopt_lock);
-   m_pendingTextureUploads.push_back(sampler);
+   {
+      std::lock_guard uploadsLock(m_pendingTextureUploadsMutex);
+      m_pendingTextureUploads.push_back(sampler);
+   }
    SubmitRenderFrame(); // Submit texture upload to render thread
    SubmitRenderFrame(); // Block until render thread has processed the pending texture uploads and mipmap generations
    #endif

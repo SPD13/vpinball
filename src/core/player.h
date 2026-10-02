@@ -137,6 +137,10 @@ private:
    bool IsInGameUIClosed() const;
    bool m_tableImageCaptureStarted = false;
    bool m_tableImageMenuHidden = false;
+   std::atomic<bool> m_tableImageCaptureDone = false; // Set by the render thread when the capture is saved
+   void CloseAfterLoadingScreen();
+   unsigned int m_closingLoadingFrame = 0; // Frame from which the loading screen of what follows is shown, before closing
+   std::chrono::steady_clock::time_point m_closingLoadingTime;
    std::filesystem::path m_tableImageReplacePath; // Set while waiting for the in-game menu to close
    std::atomic<int> m_tableImageReplaced = 0; // Result of ReplaceTableImage, set by the render thread: 1 replaced, 2 failed
 public:
@@ -225,6 +229,9 @@ private:
    void PrepareFrame();
    void SubmitFrame();
    void FinishFrame();
+   // While the table is loading, a frame with only the loading screen of the in-game UI, if the render thread accepts one
+   void RenderLoadingFrame(bool ownsFrameMutex);
+   std::chrono::steady_clock::time_point m_lastLoadingFrameTime;
 
    static void OnAuxRendererChanged(const unsigned int msgId, void *userData, void *msgData);
    unsigned int m_getAuxRendererId = 0, m_onAuxRendererChgId = 0;

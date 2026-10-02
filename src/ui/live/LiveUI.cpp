@@ -408,15 +408,17 @@ void LiveUI::RenderUI()
    const int width = static_cast<int>(rotated ? io.DisplaySize.y : io.DisplaySize.x);
    const int height = static_cast<int>(rotated ? io.DisplaySize.x : io.DisplaySize.y);
 
-   if (!closingForCapture)
+   if (!closingForCapture && !IsLoadingScreenShown())
       UpdateTouchUI();
 
    ImGui::PushFont(m_baseFont, m_baseFont->LegacySize);
 
-   // Tweak UI (aligned to playfield view, using custom flipper controls)
-   m_inGameUI.Update();
+   if (IsLoadingScreenShown())
+      RenderLoadingScreen();
+   else
+      m_inGameUI.Update(); // Tweak UI (aligned to playfield view, using custom flipper controls)
 
-   if (!closingForCapture)
+   if (!closingForCapture && !IsLoadingScreenShown())
    {
       // VR controller pointer
       if (m_vrPointerVisible)
@@ -635,6 +637,47 @@ void LiveUI::RenderUI()
    #endif
 
    NewFrame();
+}
+
+// A message with a spinner in the middle of the display. Outside VR, what is behind is darkened (when the previous table closes); in VR the UI covers
+// a large panel standing in the room, so only the message window is drawn on it.
+void LiveUI::RenderLoadingScreen()
+{
+   const ImGuiIO& io = ImGui::GetIO();
+   if (m_player->m_vrDevice == nullptr)
+      ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0.f, 0.f), io.DisplaySize, IM_COL32(0, 0, 0, 160));
+
+   ImGui::PushFont(m_baseFont, m_baseFont->LegacySize * 1.5f);
+   // The size is given, as an auto resized window only gets its size on its second frame, which may be the only one displayed before closing a table
+   const float radius = ImGui::GetFontSize() * 0.75f;
+   const ImVec2 padding(ImGui::GetFontSize() * 1.2f, ImGui::GetFontSize() * 0.9f);
+   const ImVec2 textSize = ImGui::CalcTextSize(m_loadingText.c_str());
+   const ImVec2 size(padding.x * 2.f + radius * 3.f + textSize.x, padding.y * 2.f + max(radius * 2.f, textSize.y));
+   ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+   ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+   ImGui::SetNextWindowBgAlpha(0.85f);
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, ImGui::GetFontSize() * 0.5f);
+   ImGui::Begin("LoadingScreen", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing
+         | ImGuiWindowFlags_NoSavedSettings);
+
+   // Spinner: three quarters of a circle turning once per second, on a dim full circle
+   const float thickness = radius * 0.25f;
+   const ImVec2 pos = ImGui::GetCursorScreenPos();
+   const ImVec2 center(pos.x + radius, pos.y + 0.5f * (size.y - padding.y * 2.f));
+   ImDrawList* const drawList = ImGui::GetWindowDrawList();
+   drawList->AddCircle(center, radius - thickness * 0.5f, IM_COL32(255, 255, 255, 50), 32, thickness);
+   const float start = static_cast<float>(ImGui::GetTime() * (2. * M_PI));
+   drawList->PathArcTo(center, radius - thickness * 0.5f, start, start + static_cast<float>(M_PI * 1.5), 32);
+   drawList->PathStroke(IM_COL32(255, 255, 255, 255), ImDrawFlags_None, thickness);
+
+   // Message, vertically centered on the spinner
+   ImGui::SetCursorScreenPos(ImVec2(pos.x + radius * 3.f, center.y - textSize.y * 0.5f));
+   ImGui::TextUnformatted(m_loadingText.c_str());
+
+   ImGui::End();
+   ImGui::PopStyleVar(2);
+   ImGui::PopFont();
 }
 
 void LiveUI::UpdateTouchUI()

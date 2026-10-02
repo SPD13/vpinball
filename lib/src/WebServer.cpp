@@ -489,7 +489,8 @@ void WebServer::Files(struct mg_connection *c, struct mg_http_message* hm)
       if (ec)
          continue;
 
-      const std::time_t mtime = std::chrono::system_clock::to_time_t(std::chrono::file_clock::to_sys(writeTime));
+      // The cast is needed with libc++ (macOS), where file_clock::to_sys gives a finer duration than the one of system_clock
+      const std::time_t mtime = std::chrono::system_clock::to_time_t(std::chrono::time_point_cast<std::chrono::system_clock::duration>(std::chrono::file_clock::to_sys(writeTime)));
       char datebuf[32];
       std::tm tm;
 #ifdef _WIN32
