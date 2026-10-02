@@ -2827,6 +2827,14 @@ void RenderDevice::DrawTexturedQuad(Shader* shader, const Vertex3D_NoTex2* verti
 void RenderDevice::DrawFullscreenTexturedQuad(Shader* shader)
 {
    assert(shader == m_FBShader || shader == m_stereoShader); // FrameBuffer/Stereo shaders are the only ones using Position/Texture vertex format
+   if (m_renderScale < 1.f)
+   {
+      // Dynamic resolution: the source was rendered into its top left part at the scale of the frame (see BeginScaledRendering)
+      const float s = m_renderScale;
+      const Vertex3D_TexelOnly verts[4] = { { 1.0f, 1.0f, 0.0f, s, 0.0f }, { -1.0f, 1.0f, 0.0f, 0.0f, 0.0f }, { 1.0f, -1.0f, 0.0f, s, s }, { -1.0f, -1.0f, 0.0f, 0.0f, s } };
+      DrawTexturedQuad(shader, verts);
+      return;
+   }
    static constexpr Vertex3Ds pos { 0.f, 0.f, 0.f };
    DrawMesh(shader, false, pos, 0.f, m_quadMeshBuffer, TRIANGLESTRIP, 0, 4);
 }

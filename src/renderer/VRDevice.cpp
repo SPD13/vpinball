@@ -167,6 +167,11 @@ void VRDevice::ApplyTableSettings(const Settings& settings)
       m_foveationEyeTracked = settings.GetPlayerVR_FoveationEyeTracked();
       m_foveationFlipX = settings.GetPlayerVR_FoveationFlipX();
       m_foveationFlipY = settings.GetPlayerVR_FoveationFlipY();
+      m_dynamicResolution = settings.GetPlayerVR_DynamicResolution();
+      m_dynamicResolutionTarget = clamp(settings.GetPlayerVR_DynamicResolutionTarget(), 0.5f, 1.f);
+      m_dynamicResolutionMinScale = clamp(settings.GetPlayerVR_DynamicResolutionMinScale(), 0.5f, 1.f);
+      m_dynamicRenderScale = 1.f; // Each table starts at full size
+      m_frameBudgetMs = 0.f; // Learned again from the session's frame periods
 
       // State of the previous table
       m_headsetViewCentering = false;
@@ -864,6 +869,98 @@ string VRDevice::GetFoveationStatus() const
    return m_foveationEyeTrackedActive ? "Eye-tracked"s : "Fixed: eye tracking not active (enable it in the headset settings)"s;
 }
 
+void VRDevice::EnablePerformanceCounters()
+{
+   if (!m_performanceMetricsExtensionSupported || m_performanceCountersEnabled || m_session == XR_NULL_HANDLE)
+      return;
+   uint32_t count = 0;
+   OPENXR_CHECK(m_xrEnumeratePerformanceMetricsCounterPathsMETA(m_xrInstance, 0, &count, nullptr), "Failed to enumerate performance counters.");
+   vector<XrPath> paths(count);
+   OPENXR_CHECK(m_xrEnumeratePerformanceMetricsCounterPathsMETA(m_xrInstance, count, &count, paths.data()), "Failed to enumerate performance counters.");
+   m_performanceCounters.clear();
+   m_gpuFrameTimePath = XR_NULL_PATH;
+   for (uint32_t i = 0; i < count; i++)
+   {
+      char name[XR_MAX_PATH_LENGTH];
+      uint32_t length = 0;
+      if (XR_SUCCEEDED(xrPathToString(m_xrInstance, paths[i], sizeof(name), &length, name)))
+      {
+         m_performanceCounters.emplace_back(name, paths[i]);
+         if (strcmp(name, "/perfmetrics_meta/app/gpu_frametime") == 0)
+            m_gpuFrameTimePath = paths[i];
+      }
+   }
+   XrPerformanceMetricsStateMETA state { XR_TYPE_PERFORMANCE_METRICS_STATE_META };
+   state.enabled = XR_TRUE;
+   OPENXR_CHECK(m_xrSetPerformanceMetricsStateMETA(m_session, &state), "Failed to enable performance counters.");
+   m_performanceCountersEnabled = true;
+   string names;
+   for (const auto& counter : m_performanceCounters)
+      names += ' ' + counter.first;
+   PLOGI << "OpenXR performance counters enabled (" << m_performanceCounters.size() << "):" << names;
+}
+
+void VRDevice::SetDynamicResolution(bool enabled)
+{
+   m_dynamicResolution = enabled;
+   if (!enabled)
+      m_dynamicRenderScale = 1.f;
+   // Turned on during a session: the counters are enabled by the render thread at the next frame (see UpdateDynamicResolution)
+}
+
+// Render thread, once per frame: the scale of the next frame from the GPU time of the last one. The counter is the runtime's measure of the
+// application's GPU work for a frame, so it includes everything the frame renders and follows the GPU clock (the Frame slows its GPU down
+// as it heats up, which this absorbs). The scale moves by small steps: down as soon as a frame is over the target, so a heavy view is
+// caught within a few frames, up slowly once frames are well under it, so the sharpness does not pump. The lower limit is the runtime's
+// recommended size (the headset's own performance target), the upper one the swapchain size chosen with ResFactor.
+void VRDevice::UpdateDynamicResolution(const XrDuration predictedDisplayPeriod)
+{
+   // The budget is the display's frame period: the shortest period the runtime predicted in this session. SteamVR doubles the predicted
+   // period when it throttles an application to half rate after missed frames; taking that as the budget would raise the resolution
+   // again and keep the application throttled (seen on the Frame: 27.8 ms reported at 72 Hz, the scale climbed back to 100 %)
+   if (predictedDisplayPeriod > 0)
+   {
+      const float periodMs = static_cast<float>(predictedDisplayPeriod) / 1000000.f;
+      if (m_frameBudgetMs <= 0.f || periodMs < m_frameBudgetMs)
+         m_frameBudgetMs = periodMs;
+   }
+   if (!m_dynamicResolution)
+      return;
+   if (!m_performanceCountersEnabled)
+      EnablePerformanceCounters();
+   if (m_gpuFrameTimePath == XR_NULL_PATH || predictedDisplayPeriod <= 0)
+      return;
+   XrPerformanceMetricsCounterMETA value { XR_TYPE_PERFORMANCE_METRICS_COUNTER_META };
+   if (!XR_SUCCEEDED(m_xrQueryPerformanceMetricsCounterMETA(m_session, m_gpuFrameTimePath, &value)) || !(value.counterFlags & XR_PERFORMANCE_METRICS_COUNTER_FLOAT_VALUE_VALID_BIT_META))
+      return;
+   const float gpuMs = value.floatValue;
+   m_lastGpuFrameTimeMs = gpuMs;
+   if (gpuMs < 1.f) // Nothing rendered (the headset is not worn): keep the scale
+      return;
+   const float budgetMs = m_frameBudgetMs;
+   const float targetMs = budgetMs * m_dynamicResolutionTarget;
+   const float minScale = clamp(m_dynamicResolutionMinScale.load(), 0.5f, 1.f);
+   float scale = m_dynamicRenderScale;
+   if (gpuMs > targetMs)
+      scale -= 0.02f * (1.f + (gpuMs - targetMs) / targetMs); // Faster the further over
+   else if (gpuMs < targetMs * 0.9f)
+      scale += 0.003f;
+   m_dynamicRenderScale = clamp(scale, minScale, 1.f);
+}
+
+string VRDevice::GetDynamicResolutionStatus() const
+{
+   if (!m_performanceMetricsExtensionSupported)
+      return "not supported by the runtime (no GPU time counter)";
+   if (!m_dynamicResolution)
+      return "off";
+   const float scale = m_dynamicRenderScale;
+   string status = std::format("{}x{} ({:.0f} %)", static_cast<int>(lroundf(static_cast<float>(m_eyeWidth) * scale)), static_cast<int>(lroundf(static_cast<float>(m_eyeHeight) * scale)), scale * 100.f);
+   if (m_lastGpuFrameTimeMs > 0.f)
+      status += std::format(", GPU {:.1f} ms of {:.1f} ms (target {:.0f} %)", m_lastGpuFrameTimeMs.load(), m_frameBudgetMs.load(), m_dynamicResolutionTarget.load() * 100.f);
+   return status;
+}
+
 // Every few seconds: the eye-tracked state and the runtime's performance counters (the ones in milliseconds and percents), so settings can be
 // compared from the log on the device
 void VRDevice::LogRuntimeStatus()
@@ -876,6 +973,7 @@ void VRDevice::LogRuntimeStatus()
    string status = "Foveation: " + GetFoveationStatus();
    if (m_foveationEyeTrackedActive)
       status += std::format(" (gaze L {:.2f},{:.2f} R {:.2f},{:.2f})", m_foveationCenter[0].x, m_foveationCenter[0].y, m_foveationCenter[1].x, m_foveationCenter[1].y);
+   status += " | Dynamic resolution: " + GetDynamicResolutionStatus();
    for (const auto& counter : m_performanceCounters)
    {
       XrPerformanceMetricsCounterMETA value { XR_TYPE_PERFORMANCE_METRICS_COUNTER_META };
@@ -1097,32 +1195,11 @@ void VRDevice::CreateSession()
    if (m_foveationExtensionSupported)
       CreateOwnFoveationMap();
 
-   // The runtime's performance counters (app GPU frame time on the Steam Frame, logged every 5 s) only when measuring: VPX_XR_METRICS=1 for the
-   // counters alone, VPX_GPU_PROFILE=1 for the counters and bgfx's per-target breakdown. They cost the runtime a timestamp query per frame, and
-   // SteamVR mishandles them across sessions (see ReleaseSession)
-   if (m_performanceMetricsExtensionSupported && (getenv("VPX_XR_METRICS") != nullptr || getenv("VPX_GPU_PROFILE") != nullptr))
-   {
-      uint32_t count = 0;
-      OPENXR_CHECK(m_xrEnumeratePerformanceMetricsCounterPathsMETA(m_xrInstance, 0, &count, nullptr), "Failed to enumerate performance counters.");
-      vector<XrPath> paths(count);
-      OPENXR_CHECK(m_xrEnumeratePerformanceMetricsCounterPathsMETA(m_xrInstance, count, &count, paths.data()), "Failed to enumerate performance counters.");
-      m_performanceCounters.clear();
-      for (uint32_t i = 0; i < count; i++)
-      {
-         char name[XR_MAX_PATH_LENGTH];
-         uint32_t length = 0;
-         if (XR_SUCCEEDED(xrPathToString(m_xrInstance, paths[i], sizeof(name), &length, name)))
-            m_performanceCounters.emplace_back(name, paths[i]);
-      }
-      XrPerformanceMetricsStateMETA state { XR_TYPE_PERFORMANCE_METRICS_STATE_META };
-      state.enabled = XR_TRUE;
-      OPENXR_CHECK(m_xrSetPerformanceMetricsStateMETA(m_session, &state), "Failed to enable performance counters.");
-      m_performanceCountersEnabled = true;
-      string names;
-      for (const auto& counter : m_performanceCounters)
-         names += ' ' + counter.first;
-      PLOGI << "OpenXR performance counters enabled (" << m_performanceCounters.size() << "):" << names;
-   }
+   // The runtime's performance counters (app GPU frame time on the Steam Frame, logged every 5 s): for the dynamic resolution, and when
+   // measuring (VPX_XR_METRICS=1 for the counters alone, VPX_GPU_PROFILE=1 for the counters and bgfx's per-target breakdown). They cost the
+   // runtime a timestamp query per frame, and SteamVR mishandles them across sessions (see ReleaseSession)
+   if (m_dynamicResolution || getenv("VPX_XR_METRICS") != nullptr || getenv("VPX_GPU_PROFILE") != nullptr)
+      EnablePerformanceCounters();
 
    auto inputHandler = std::make_unique<XRInputHandler>(g_pplayer->m_pininput, m_xrInstance, m_session);
    XrAction leftPoseAction = inputHandler->GetAction("/user/hand/left/input/grip/pose");
@@ -1689,6 +1766,7 @@ void VRDevice::ReleaseSession()
       OPENXR_CHECK(m_xrSetPerformanceMetricsStateMETA(m_session, &state), "Failed to disable performance counters.");
       m_performanceCountersEnabled = false;
       m_performanceCounters.clear();
+      m_gpuFrameTimePath = XR_NULL_PATH;
    }
 
    // The action spaces of the controllers, then the input handler which owns their actions
@@ -2012,6 +2090,8 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
    XrFrameState frameState { XR_TYPE_FRAME_STATE };
    constexpr XrFrameWaitInfo frameWaitInfo { XR_TYPE_FRAME_WAIT_INFO, nullptr };
    OPENXR_CHECK(xrWaitFrame(m_session, &frameWaitInfo, &frameState), "Failed to wait for XR Frame.");
+   // Dynamic resolution: the scale of the frame about to be prepared, from the GPU time of the previous ones
+   UpdateDynamicResolution(frameState.predictedDisplayPeriod);
    g_pplayer->m_renderProfiler->ExitProfileSection();
    #ifdef MSVC_CONCURRENCY_VIEWER
    delete tagSpanFF;
@@ -2407,8 +2487,22 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
                = std::make_unique<RenderTarget>(rd, SurfaceType::RT_STEREO, fbh, colorAttachment.handle, m_colorSwapchainInfo.format, depthAttachment.handle, m_depthSwapchainInfo.format,
                   std::format("VRSwapchain [{}/{}]", colorImageIndex, depthImageIndex), m_colorSwapchainInfo.width, m_colorSwapchainInfo.height, colorFormat::RGBA);
             vrRenderTarget = m_swapchainRenderTargets[colorImageIndex + depthImageIndex * m_colorSwapchainInfo.imageViews.size()].get();
+            vrRenderTarget->m_dynamicResolution = true; // The frame draws its top left part at the dynamic resolution scale (see above)
          }
          submitFrame(vrRenderTarget);
+
+         // Dynamic resolution: the frame drew the top left part of the swapchain image (see RenderDevice::BeginScaledRendering), tell the
+         // compositor to sample that part only. The depth image was copied over the same part.
+         if (const float executedScale = rd->GetExecutedRenderScale(); executedScale < 1.f)
+         {
+            const XrRect2Di drawnRect = { { 0, 0 }, { vrRenderTarget->GetScaledWidth(executedScale), vrRenderTarget->GetScaledHeight(executedScale) } };
+            for (uint32_t i = 0; i < viewCount; i++)
+            {
+               renderLayerInfo.layerProjectionViews[i].subImage.imageRect = drawnRect;
+               if (m_depthExtensionSupported)
+                  renderLayerInfo.depthInfoViews[i].subImage.imageRect = drawnRect;
+            }
+         }
 
          // Fill out the XrCompositionLayerProjection structure for usage with xrEndFrame().
          renderLayerInfo.layerProjection.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_CORRECT_CHROMATIC_ABERRATION_BIT;

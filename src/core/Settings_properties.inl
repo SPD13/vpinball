@@ -284,6 +284,16 @@ PropBool(PlayerVR, AddBackglass, "Add Backglass"s, "Add a default backglass disp
 PropFloatDyn(PlayerVR, ControllerCabYOffset, "Cabinet Y Offset"s, "Y offset to apply when using controller view centering"s, -150.f, 50.f, 0.f);
 PropFloatDyn(PlayerVR, ControllerLockbarScale, "Lockbar size ratio"s, "Lockbar size ratio to apply when using controller view centering"s, 0.5f, 2.0f, 1.f);
 PropFloatUnbounded(PlayerVR, ResFactor, "ResFactor"s, ""s, -1.f);
+// Dynamic resolution: the render scale follows the GPU time of the frames reported by the runtime (XR_META_performance_metrics), between the
+// headset's recommended size and the size chosen with ResFactor, so heavy tables keep their frame rate instead of judder on head movements and
+// light tables keep the full sharpness (see VRDevice::UpdateDynamicResolution). On by default where the counters exist (Steam Frame build).
+#if defined(__STANDALONE__) && defined(ENABLE_XR)
+PropBool(PlayerVR, DynamicResolution, "Dynamic resolution"s, "Lower the rendering resolution when a frame takes longer than the target, up to the headset's recommended resolution, and raise it back when there is room. Needs runtime support (XR_META_performance_metrics)"s, true);
+#else
+PropBool(PlayerVR, DynamicResolution, "Dynamic resolution"s, "Lower the rendering resolution when a frame takes longer than the target, up to the headset's recommended resolution, and raise it back when there is room. Needs runtime support (XR_META_performance_metrics)"s, false);
+#endif
+PropFloat(PlayerVR, DynamicResolutionTarget, "Dynamic resolution target"s, "GPU time the dynamic resolution aims for, as a fraction of the frame period (85% of 13.9 ms at 72 Hz is 11.8 ms). Lower values keep more headroom for the compositor and for the GPU slowing down as the headset heats up"s, 0.5f, 1.f, 0.85f);
+PropFloat(PlayerVR, DynamicResolutionMinScale, "Dynamic resolution minimum"s, "Lowest rendering resolution the dynamic resolution may go down to, as a fraction of the table's resolution (per axis: 70% of 2160 is 1512 pixels, half the pixels). The headset's recommended resolution is 80% on the Steam Frame"s, 0.5f, 1.f, 0.7f);
 PropBool(PlayerVR, ShowControllers, "Show controllers"s, "Show the controllers in the scene, as the headset system shows them (needs runtime support: XR_EXT_render_model)"s, true);
 PropBool(PlayerVR, LockFeetToGround, "Lock Feet to Ground"s, "Lock cabinet feet to ground. This usually feels more natural (avoid floating cabinet) but may be deactivated for example for playing mini flipper seated at a desk."s, true);
 

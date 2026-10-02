@@ -23,6 +23,7 @@ void RenderPass::Reset(const string& name, RenderTarget* const rt)
    m_rt = rt;
    m_name = name;
    m_singleLayerRendering = -1;
+   m_renderScale = 1.f;
    m_areaOfInterest.x = m_areaOfInterest.y = m_areaOfInterest.z = m_areaOfInterest.w = FLT_MAX;
    m_depthReadback = false;
    m_sortKey = 0;
@@ -185,13 +186,15 @@ bool RenderPass::Execute(const bool log)
    if (m_commands.empty())
       return false;
 
+   // Size of the rendered part of the target (dynamic resolution, see RenderTarget::Activate): the clip space bounds map to it
+   const int rtWidth = m_rt->GetScaledWidth(m_renderScale), rtHeight = m_rt->GetScaledHeight(m_renderScale);
    int left,bottom,right,top;
    if (m_areaOfInterest.x != FLT_MAX)
    {
-      left   = clamp((int)((0.5f + m_areaOfInterest.x * 0.5f) * (float)m_rt->GetWidth() ), 0, m_rt->GetWidth());
-      bottom = clamp((int)((0.5f + m_areaOfInterest.y * 0.5f) * (float)m_rt->GetHeight()), 0, m_rt->GetHeight());
-      right  = clamp((int)((0.5f + m_areaOfInterest.z * 0.5f) * (float)m_rt->GetWidth() ), 0, m_rt->GetWidth());
-      top    = clamp((int)((0.5f + m_areaOfInterest.w * 0.5f) * (float)m_rt->GetHeight()), 0, m_rt->GetHeight());
+      left   = clamp((int)((0.5f + m_areaOfInterest.x * 0.5f) * (float)rtWidth ), 0, rtWidth);
+      bottom = clamp((int)((0.5f + m_areaOfInterest.y * 0.5f) * (float)rtHeight), 0, rtHeight);
+      right  = clamp((int)((0.5f + m_areaOfInterest.z * 0.5f) * (float)rtWidth ), 0, rtWidth);
+      top    = clamp((int)((0.5f + m_areaOfInterest.w * 0.5f) * (float)rtHeight), 0, rtHeight);
       assert((left <= right) && (bottom <= top));
       if (left == right || bottom == top)
          return false;
@@ -238,10 +241,10 @@ bool RenderPass::Execute(const bool log)
 
    if (m_rt->m_nLayers == 1 || (m_singleLayerRendering < 0 && m_rt->GetRenderDevice()->SupportLayeredRendering()))
    {
-      m_rt->Activate();
+      m_rt->Activate(-1, m_renderScale);
       #if defined(ENABLE_BGFX)
       if (m_areaOfInterest.x != FLT_MAX)
-         bgfx::setViewScissor(m_rt->GetRenderDevice()->m_activeViewId, left, m_rt->GetHeight() - top, right - left, top - bottom);
+         bgfx::setViewScissor(m_rt->GetRenderDevice()->m_activeViewId, left, rtHeight - top, right - left, top - bottom);
       if (m_rt->GetRenderDevice()->m_nameViews)
          m_rt->GetRenderDevice()->SetViewName(m_rt->GetRenderDevice()->m_activeViewId, m_name + " [RT=" + m_rt->m_name + ']');
       #endif
@@ -251,10 +254,10 @@ bool RenderPass::Execute(const bool log)
    else if (m_singleLayerRendering >= 0)
    {
       assert(m_singleLayerRendering < m_rt->m_nLayers);
-      m_rt->Activate(m_singleLayerRendering);
+      m_rt->Activate(m_singleLayerRendering, m_renderScale);
       #if defined(ENABLE_BGFX)
       if (m_areaOfInterest.x != FLT_MAX)
-         bgfx::setViewScissor(m_rt->GetRenderDevice()->m_activeViewId, left, m_rt->GetHeight() - top, right - left, top - bottom);
+         bgfx::setViewScissor(m_rt->GetRenderDevice()->m_activeViewId, left, rtHeight - top, right - left, top - bottom);
       if (m_rt->GetRenderDevice()->m_nameViews)
          m_rt->GetRenderDevice()->SetViewName(m_rt->GetRenderDevice()->m_activeViewId, m_name + " [RT=" + m_rt->m_name + " / Layer=" + std::to_string(m_singleLayerRendering) + ']');
       #endif
@@ -265,10 +268,10 @@ bool RenderPass::Execute(const bool log)
    {
       for (int layer = 0; layer < m_rt->m_nLayers; layer++)
       {
-         m_rt->Activate(layer);
+         m_rt->Activate(layer, m_renderScale);
          #if defined(ENABLE_BGFX)
          if (m_areaOfInterest.x != FLT_MAX)
-            bgfx::setViewScissor(m_rt->GetRenderDevice()->m_activeViewId, left, m_rt->GetHeight() - top, right - left, top - bottom);
+            bgfx::setViewScissor(m_rt->GetRenderDevice()->m_activeViewId, left, rtHeight - top, right - left, top - bottom);
          if (m_rt->GetRenderDevice()->m_nameViews)
             m_rt->GetRenderDevice()->SetViewName(m_rt->GetRenderDevice()->m_activeViewId, m_name + " [RT=" + m_rt->m_name + " / Layer=" + std::to_string(layer) + ']');
          #endif

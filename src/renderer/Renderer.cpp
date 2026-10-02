@@ -181,6 +181,12 @@ Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncM
    m_pOffscreenBackBufferTexture1 = new RenderTarget(m_renderDevice, rtType, "BackBuffer1"s, renderWidthAA, renderHeightAA, renderFormat, true, 1, "Fatal Error: unable to create offscreen back buffer");
    #endif
 
+   // Scene buffers follow the dynamic resolution of the frame (see RenderFrame), as every target rendered with the scene projection or
+   // sampled at screen coordinates
+   if (m_pOffscreenMSAABackBufferTexture)
+      m_pOffscreenMSAABackBufferTexture->m_dynamicResolution = true;
+   m_pOffscreenBackBufferTexture1->m_dynamicResolution = true;
+
    // Second render target to swap, allowing to read previous frame render for ball reflection and motion blur
    m_pOffscreenBackBufferTexture2 = m_pOffscreenBackBufferTexture1->Duplicate("BackBuffer2"s, false);
    #if defined(ENABLE_BGFX) && defined(BGFX_RESOLVE_FRAGMENT_DENSITY_MAP)
@@ -189,19 +195,22 @@ Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncM
    #endif
 
    // Initialize shaders
-   m_renderDevice->m_basicShader->SetVector(ShaderUniform::w_h_height, (float)(1.0 / (double)GetMSAABackBufferTexture()->GetWidth()), (float)(1.0 / (double)GetMSAABackBufferTexture()->GetHeight()), 0.0f, 0.0f);
+   // z of w_h_height and w of w_h_disableLighting: dynamic resolution scale of the frame, applied by the shaders to the texture coordinates they
+   // derive from clip space (refraction probe, ball reflection of the previous frame), updated by RenderFrame
+   m_renderDevice->m_basicShader->SetVector(ShaderUniform::w_h_height, (float)(1.0 / (double)GetMSAABackBufferTexture()->GetWidth()), (float)(1.0 / (double)GetMSAABackBufferTexture()->GetHeight()), 1.0f, 0.0f);
    m_renderDevice->m_ballShader->SetVector(ShaderUniform::w_h_disableLighting,
       1.5f / (float)GetPreviousBackBufferTexture()->GetWidth(), // UV Offset for sampling reflections
       1.5f / (float)GetPreviousBackBufferTexture()->GetHeight(),
-      0.f, 0.f);
+      0.f, 1.f);
    DisableBallLighting(m_table->m_settings.GetPlayer_DisableLightingForBalls());
 
    // alloc bloom tex at 1/4 x 1/4 res (allows for simple HQ downscale of clipped input while saving memory)
-   m_pBloomBufferTexture = new RenderTarget(m_renderDevice, 
-      GetBackBufferTexture()->m_type, "BloomBuffer1"s, 
-      m_renderWidth / 4, m_renderHeight / 4, 
+   m_pBloomBufferTexture = new RenderTarget(m_renderDevice,
+      GetBackBufferTexture()->m_type, "BloomBuffer1"s,
+      m_renderWidth / 4, m_renderHeight / 4,
       GetBackBufferTexture()->GetColorFormat(),
       false, 1, "Fatal Error: unable to create bloom buffer!");
+   m_pBloomBufferTexture->m_dynamicResolution = true;
    m_pBloomTmpBufferTexture = m_pBloomBufferTexture->Duplicate("BloomBuffer2"s);
 
    // These three assets are shipped with the application, so failing to load one means a broken install rather than
@@ -510,8 +519,9 @@ RenderTarget* Renderer::GetPostProcessRenderTarget1()
          GetBackBufferTexture()->m_type, "PostProcess1"s, 
          min(GetBackBufferTexture()->GetWidth(), m_renderWidth),
          min(GetBackBufferTexture()->GetHeight(), m_renderHeight),
-         GetBackBufferTexture()->GetColorFormat() == RGBA10 ? colorFormat::RGBA10 : colorFormat::RGBA8, false, 1, 
+         GetBackBufferTexture()->GetColorFormat() == RGBA10 ? colorFormat::RGBA10 : colorFormat::RGBA8, false, 1,
          "Fatal Error: unable to create stereo3D/post-processing AA/sharpen buffer!");
+      m_pPostProcessRenderTarget1->m_dynamicResolution = true;
    }
    return m_pPostProcessRenderTarget1;
 }
@@ -542,6 +552,7 @@ RenderTarget* Renderer::GetReflectionBufferTexture()
          GetBackBufferTexture()->GetHeight(),
          GetBackBufferTexture()->GetColorFormat(),
          false, 1, "Fatal Error: unable to create Reflection buffer!");
+      m_pReflectionBufferTexture->m_dynamicResolution = true;
    }
    return m_pReflectionBufferTexture;
 }
@@ -556,6 +567,7 @@ RenderTarget* Renderer::GetMotionBlurBufferTexture()
          GetBackBufferTexture()->GetHeight(),
          GetBackBufferTexture()->GetColorFormat(),
          false, 1, "Fatal Error: unable to create MotionBlur buffer!");
+      m_pMotionBlurBufferTexture->m_dynamicResolution = true;
    }
    return m_pMotionBlurBufferTexture;
 }
@@ -568,6 +580,7 @@ RenderTarget* Renderer::GetAORenderTarget(int idx)
       m_pAORenderTarget1 = new RenderTarget(m_renderDevice, GetBackBufferTexture()->m_type, "AO1"s, 
          GetBackBufferTexture()->GetWidth(), GetBackBufferTexture()->GetHeight(), colorFormat::GREY8, false, 1, 
          "Unable to create AO buffers!\r\nPlease disable Ambient Occlusion.\r\nOr try to (un)set \"Alternative Depth Buffer processing\" in the video options!");
+      m_pAORenderTarget1->m_dynamicResolution = true;
       m_pAORenderTarget2 = m_pAORenderTarget1->Duplicate("AO2"s);
    }
    return idx == 0 ? m_pAORenderTarget1 : m_pAORenderTarget2;
@@ -2123,12 +2136,13 @@ void Renderer::UpdateBloom(RenderTarget* renderedRT)
 
    const double w = static_cast<double>(renderedRT->GetWidth());
    const double h = static_cast<double>(renderedRT->GetHeight());
+   const float s = m_renderDevice->GetRenderScale(); // Dynamic resolution: the rendered part of the source
    const Vertex3D_TexelOnly shiftedVerts[4] =
    {
-      {  1.0f,  1.0f, 0.0f, 1.0f + (float)(2.25 / w), 0.0f + (float)(2.25 / h) },
+      {  1.0f,  1.0f, 0.0f, s    + (float)(2.25 / w), 0.0f + (float)(2.25 / h) },
       { -1.0f,  1.0f, 0.0f, 0.0f + (float)(2.25 / w), 0.0f + (float)(2.25 / h) },
-      {  1.0f, -1.0f, 0.0f, 1.0f + (float)(2.25 / w), 1.0f + (float)(2.25 / h) },
-      { -1.0f, -1.0f, 0.0f, 0.0f + (float)(2.25 / w), 1.0f + (float)(2.25 / h) }
+      {  1.0f, -1.0f, 0.0f, s    + (float)(2.25 / w), s    + (float)(2.25 / h) },
+      { -1.0f, -1.0f, 0.0f, 0.0f + (float)(2.25 / w), s    + (float)(2.25 / h) }
    };
    {
       m_renderDevice->m_FBShader->SetTextureNull(ShaderUniform::tex_fb_filtered);
@@ -2472,12 +2486,13 @@ void Renderer::SetupTonemapping(RenderTarget* renderedRT, RenderTarget* tonemapR
 RenderTarget* Renderer::ApplyTonemapping(RenderTarget* renderedRT, RenderTarget* tonemapRT)
 {
    SetupTonemapping(renderedRT, tonemapRT, true);
+   const float s = m_renderDevice->GetRenderScale(); // Dynamic resolution: the rendered part of the source
    const Vertex3D_TexelOnly shiftedVerts[4] =
    {
-      {  1.0f + m_screenOffset.x,  1.0f + m_screenOffset.y, 0.0f, 1.0f, 0.0f },
+      {  1.0f + m_screenOffset.x,  1.0f + m_screenOffset.y, 0.0f, s,    0.0f },
       { -1.0f + m_screenOffset.x,  1.0f + m_screenOffset.y, 0.0f, 0.0f, 0.0f },
-      {  1.0f + m_screenOffset.x, -1.0f + m_screenOffset.y, 0.0f, 1.0f, 1.0f },
-      { -1.0f + m_screenOffset.x, -1.0f + m_screenOffset.y, 0.0f, 0.0f, 1.0f }
+      {  1.0f + m_screenOffset.x, -1.0f + m_screenOffset.y, 0.0f, s,    s    },
+      { -1.0f + m_screenOffset.x, -1.0f + m_screenOffset.y, 0.0f, 0.0f, s    }
    };
    m_renderDevice->DrawTexturedQuad(m_renderDevice->m_FBShader, shiftedVerts);
    return tonemapRT;
@@ -2828,10 +2843,12 @@ RenderTarget* Renderer::ApplyStereo(RenderTarget* renderedRT, RenderTarget* outp
       // FIXME this will not work as the current backbuffer is declared as not having a depth buffer (even if it has like here), beside BGFX does not support blitting depth to the default backbuffer
       if (g_pplayer->m_vrDevice->UseDepthBuffer())
       {
-         // Copy depth buffer to OpenXR swapchain's current depth target
+         // Copy depth buffer to OpenXR swapchain's current depth target (the rendered part only, with dynamic resolution)
+         const float s = m_renderDevice->GetRenderScale();
+         const int sw = GetBackBufferTexture()->GetScaledWidth(s), sh = GetBackBufferTexture()->GetScaledHeight(s);
          m_renderDevice->SetRenderTarget("OpenXR-Depth"s, outputBackBuffer, true, true);
          m_renderDevice->AddRenderTargetDependency(GetBackBufferTexture(), true);
-         m_renderDevice->BlitRenderTarget(GetBackBufferTexture(), outputBackBuffer, false, true);
+         m_renderDevice->BlitRenderTarget(GetBackBufferTexture(), outputBackBuffer, false, true, 0, 0, sw, sh, 0, 0, sw, sh);
       }
 
       // Blit preview
@@ -2945,6 +2962,22 @@ void Renderer::RenderFrame()
 {
    // Keep previous render as a reflection probe for ball reflection and for hires motion blur
    SwapBackBufferRenderTargets();
+
+   // Dynamic resolution (headset only): the scene passes of this frame render into the top left part of the scene buffers at the scale the
+   // VR device asks for, from the GPU time of the previous frames (see VRDevice::UpdateDynamicResolution); the runtime is told which part
+   // of the swapchain image was drawn. The shaders which derive texture coordinates from clip space get the scale through their uniforms.
+   float renderScale = 1.f;
+   #if defined(ENABLE_XR)
+   if (m_stereo3D == STEREO_VR && g_pplayer->m_vrDevice)
+      renderScale = g_pplayer->m_vrDevice->GetDynamicRenderScale();
+   #endif
+   m_renderDevice->BeginScaledRendering(renderScale);
+   {
+      const vec4 whh = m_renderDevice->m_basicShader->GetVector(ShaderUniform::w_h_height);
+      m_renderDevice->m_basicShader->SetVector(ShaderUniform::w_h_height, whh.x, whh.y, renderScale, whh.w);
+      const vec4 whd = m_renderDevice->m_ballShader->GetVector(ShaderUniform::w_h_disableLighting);
+      m_renderDevice->m_ballShader->SetVector(ShaderUniform::w_h_disableLighting, whd.x, whd.y, whd.z, renderScale);
+   }
 
    // Setup initial MVP to setup shaders and rendering
    if (m_stereo3D != STEREO_VR)
@@ -3138,6 +3171,9 @@ void Renderer::RenderFrame()
 
    // The last rendered render target must be the output back buffer
    assert(renderedRT == m_renderDevice->GetOutputBackBuffer());
+
+   // Whatever follows in this frame (captures, overlays) renders at full size
+   m_renderDevice->EndScaledRendering();
 
    if (g_pplayer->GetProfilingMode() == PF_ENABLED)
       m_gpu_profiler.Timestamp(GTS_PostProcess);
