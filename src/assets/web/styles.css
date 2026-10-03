@@ -1137,3 +1137,372 @@ body.dragging-files .file-list:has(.file-item.drag-over) {
     display: none;
   }
 }
+/* Links between the file manager and the tables page */
+.page-nav {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border-radius: var(--radius);
+  background: var(--border-color);
+  align-self: flex-start;
+}
+
+.page-nav[hidden] {
+  display: none;
+}
+
+.page-nav-item {
+  padding: 0.375rem 0.875rem;
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.page-nav-item:hover {
+  color: var(--text-primary);
+}
+
+.page-nav-item.current {
+  background: var(--card-background);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Tables page: a grid of tiles, like the table picker of the application */
+.tables-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.tables-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tables-tab {
+  padding: 0.375rem 0.875rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--card-background);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tables-tab:hover {
+  border-color: var(--text-tertiary);
+  color: var(--text-primary);
+}
+
+.tables-tab.current {
+  background: var(--text-primary);
+  border-color: var(--text-primary);
+  color: var(--card-background);
+}
+
+.tables-summary {
+  display: flex;
+  align-items: baseline;
+  min-height: 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.tables-count {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.tables-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 1rem;
+}
+
+.tables-empty {
+  padding: 3rem 1rem;
+  text-align: center;
+  color: var(--text-tertiary);
+}
+
+.tables-empty[hidden] {
+  display: none;
+}
+
+.tables-grid {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 1rem;
+}
+
+.table-tile {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: calc(var(--radius) * 2);
+  background: var(--card-background);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.table-tile:hover {
+  border-color: var(--text-tertiary);
+  box-shadow: var(--shadow-md);
+}
+
+.table-tile.playing {
+  border-color: var(--success-color);
+}
+
+/* Same proportions as the tiles of the table picker, the image fitted inside */
+.table-tile-image {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  background: #1f2937;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.table-tile-image img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0;
+}
+
+.table-tile-image img.loaded {
+  opacity: 1;
+}
+
+.table-tile-placeholder[hidden],
+.table-tile-badge[hidden] {
+  display: none;
+}
+
+.table-tile-placeholder {
+  font-size: 2.5rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.25);
+  user-select: none;
+}
+
+.table-tile-badge {
+  position: absolute;
+  left: 0.5rem;
+  top: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  background: var(--success-color);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.table-tile-star {
+  position: absolute;
+  right: 0.5rem;
+  top: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: none;
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.table-tile-star svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+}
+
+.table-tile-star:hover {
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+}
+
+.table-tile-star.on {
+  color: #fbbf24;
+}
+
+.table-tile-star.on svg {
+  fill: currentColor;
+}
+
+.table-tile-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.5rem 0.25rem 0.5rem 0.75rem;
+}
+
+.table-tile-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.table-tile-name,
+.table-tile-file {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-tile-name {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.table-tile-file {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+
+.table-tile-menu {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.table-tile-menu svg {
+  width: 18px;
+  height: 18px;
+}
+
+.table-tile-menu:hover,
+.table-tile-menu.open {
+  background: var(--border-color);
+  color: var(--text-primary);
+}
+
+.table-menu {
+  position: fixed;
+}
+
+.table-menu .context-menu-item {
+  width: 100%;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: left;
+}
+
+.table-menu .context-menu-item.danger,
+.table-menu .context-menu-item.danger .context-menu-icon {
+  color: var(--danger-color);
+}
+
+.table-menu .context-menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: none;
+}
+
+.tables-dialog {
+  width: min(28rem, calc(100% - 2rem));
+  margin: auto;
+  padding: 1.25rem;
+  border: none;
+  border-radius: calc(var(--radius) * 2);
+  background: var(--card-background);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-lg);
+}
+
+.tables-dialog::backdrop {
+  background: rgba(17, 24, 39, 0.5);
+}
+
+.tables-dialog h2 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.tables-dialog-hint {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin: 0.5rem 0;
+  overflow-wrap: anywhere;
+}
+
+.tables-dialog-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius);
+  background: var(--background-color);
+  overflow-wrap: anywhere;
+}
+
+.tables-dialog input[type="text"] {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 1rem;
+}
+
+.tables-dialog input[type="text"]:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px rgba(253, 52, 35, 0.2);
+}
+
+.tables-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
+}
+
+.tables-dialog-left {
+  margin-right: auto;
+}
+
+@media (max-width: 768px) {
+  .tables-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 0.75rem;
+  }
+
+  .tables-toolbar .search-container,
+  .tables-toolbar .search-container input,
+  .tables-toolbar .search-container input:focus {
+    width: 100%;
+  }
+}

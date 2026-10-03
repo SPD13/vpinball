@@ -289,6 +289,10 @@ function fetchInfo() {
       // RAR and 7z archives are only supported by some builds
       if (Array.isArray(data.extractableExtensions))
         FileTypeHelper.EXTRACTABLE_EXTENSIONS = new Set(data.extractableExtensions);
+      // The tables page manages the table library of the desktop application: hidden for the mobile launchers, which have their own
+      const pageNav = DOMCache.get('page-nav');
+      if (pageNav)
+        pageNav.hidden = data.tableLibrary === false;
       updateStatusDisplay();
       return data;
     })

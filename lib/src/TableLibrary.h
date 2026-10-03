@@ -84,6 +84,7 @@ public:
    std::vector<Table> Import(const std::filesystem::path& path, const ProgressCallback& onProgress = nullptr);
 
    bool Delete(const std::string& uuid);
+   // Name displayed for the table (its files are not renamed). Empty or blank: back to the name derived from the file name (see GetDefaultName).
    bool Rename(const std::string& uuid, const std::string& newName);
    // Empty: remove the image, absolute: copy the image next to the table, relative: reference an existing file
    bool SetImage(const std::string& uuid, const std::string& imagePath);
@@ -118,6 +119,8 @@ public:
    std::filesystem::path GetScriptPath(const Table& table) const { return BuildPath(table.path).replace_extension(".vbs"); }
 
    static std::string SanitizeName(const std::string& name);
+   // Name given to a table when it is added: its file name, without extension, underscores replaced by spaces
+   static std::string GetDefaultName(const Table& table);
 
    // Fuzzy search: the characters of each word of the query must all be found in the text, in the same order, ignoring case. Words may be in any order.
    // Returns nothing if they are not, otherwise a score which is higher for matches that are consecutive, at the start of words, or early in the text.

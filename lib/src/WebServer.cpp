@@ -110,7 +110,8 @@ void WebServer::EventHandler(struct mg_connection *c, int ev, void *ev_data)
       struct mg_http_message *hm = (struct mg_http_message *) ev_data;
 
       // Everything but the static web page needs a paired browser
-      static constexpr const char* apiRoutes[] = { "/info", "/status", "/files", "/download", "/upload", "/delete", "/folder", "/extract", "/command", "/log-stream", "/rename", "/move", "/missing-roms" };
+      static constexpr const char* apiRoutes[] = { "/info", "/status", "/files", "/download", "/upload", "/delete", "/folder", "/extract", "/command", "/log-stream", "/rename", "/move", "/missing-roms",
+         "/tables", "/table-image", "/table-favorite", "/table-name", "/table-delete" };
       const bool isApi = std::any_of(std::begin(apiRoutes), std::end(apiRoutes), [hm](const char* route) { return mg_match(hm->uri, mg_str(route), NULL); });
       if (mg_match(hm->uri, mg_str("/pair"), NULL))
          webServer->Pair(c, hm);
@@ -144,20 +145,37 @@ void WebServer::EventHandler(struct mg_connection *c, int ev, void *ev_data)
          webServer->Move(c, hm);
       else if (mg_match(hm->uri, mg_str("/missing-roms"), NULL))
          webServer->MissingRoms(c, hm);
+      else if (mg_match(hm->uri, mg_str("/tables"), NULL))
+         webServer->Tables(c, hm);
+      else if (mg_match(hm->uri, mg_str("/table-image"), NULL))
+         webServer->TableImage(c, hm);
+      else if (mg_match(hm->uri, mg_str("/table-favorite"), NULL))
+         webServer->TableFavorite(c, hm);
+      else if (mg_match(hm->uri, mg_str("/table-name"), NULL))
+         webServer->TableName(c, hm);
+      else if (mg_match(hm->uri, mg_str("/table-delete"), NULL))
+         webServer->TableDelete(c, hm);
       else {
          struct mg_http_serve_opts opts = {};
 
          string uri(hm->uri.buf, hm->uri.len);
          if (!uri.empty() && uri.front() == '/') uri.erase(0, 1);
 
+         // The home page is the tables page, the file manager (vpx.html) being linked from it. The mobile launchers own their table
+         // library, so their home page is the file manager.
+#ifdef __LIBVPINBALL__
+         constexpr const char* homePage = "vpx.html";
+#else
+         constexpr const char* homePage = "tables.html";
+#endif
          std::filesystem::path webBase = std::filesystem::path(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets)) / "web";
-         std::filesystem::path asset = uri.empty() ? webBase / "vpx.html" : webBase / uri;
+         std::filesystem::path asset = webBase / uri;
 
          std::error_code ec;
          if (!uri.empty() && std::filesystem::exists(asset, ec))
             mg_http_serve_file(c, hm, asset.string().c_str(), &opts);
          else
-            mg_http_serve_file(c, hm, (webBase / "vpx.html").string().c_str(), &opts);
+            mg_http_serve_file(c, hm, (webBase / homePage).string().c_str(), &opts);
       }
    }
    else if (ev == MG_EV_WAKEUP) {
@@ -410,7 +428,12 @@ void WebServer::Pair(struct mg_connection *c, struct mg_http_message* hm)
 void WebServer::Info(struct mg_connection *c, struct mg_http_message* hm)
 {
    // Archives that can be extracted (and imported as tables when uploaded at the root), which depends on the build
-   json j = {{"version", VP_VERSION_STRING_FULL_LITERAL}, {"extractableExtensions", ZipUtils::GetExtractableExtensions()}};
+#ifdef __LIBVPINBALL__
+   constexpr bool hasTableLibrary = false;
+#else
+   constexpr bool hasTableLibrary = true; // The tables page manages it
+#endif
+   json j = {{"version", VP_VERSION_STRING_FULL_LITERAL}, {"extractableExtensions", ZipUtils::GetExtractableExtensions()}, {"tableLibrary", hasTableLibrary}};
    string response = j.dump();
    mg_http_reply(c, STATUS_OK, HEADER_JSON, "%s", response.c_str());
 }
@@ -611,6 +634,161 @@ void WebServer::MissingRoms(struct mg_connection *c, struct mg_http_message* hm)
 #endif
    const string response = json { { "missingRoms", list } }.dump();
    mg_http_reply(c, STATUS_OK, HEADER_JSON, "%s", response.c_str());
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Table library: what the table picker of the application shows, with the names and favorites it displays
+
+#ifndef __LIBVPINBALL__
+// The table being played holds its files, and saves its settings when closing (the lobby is not a table, even when it is loaded from one to use its VR room)
+static bool IsPlayed(const VPinballLib::TableLibrary& library, const VPinballLib::Table& table)
+{
+   if (g_pplayer == nullptr || g_pplayer->m_isLobby)
+      return false;
+   std::error_code ec;
+   return std::filesystem::equivalent(g_pplayer->m_ptable->m_filename, library.GetFullPath(table), ec);
+}
+
+// The table named by the 'uuid' parameter, replying an error if there is none
+static std::optional<VPinballLib::Table> GetRequestedTable(struct mg_connection *c, struct mg_http_message* hm)
+{
+   char uuid[64];
+   mg_http_get_var(&hm->query, "uuid", uuid, sizeof(uuid));
+   std::optional<VPinballLib::Table> table = *uuid == '\0' ? std::nullopt : g_app->GetTableLibrary().GetTable(uuid);
+   if (!table)
+      mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+   return table;
+}
+#endif
+
+// GET: the tables of the library, with the revision of the list for the page to know when it changed
+void WebServer::Tables(struct mg_connection *c, struct mg_http_message* hm)
+{
+#ifdef __LIBVPINBALL__
+   mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+#else
+   VPinballLib::TableLibrary& library = g_app->GetTableLibrary();
+   json tables = json::array();
+   for (const VPinballLib::Table& table : library.GetTables())
+      tables.push_back({
+         { "uuid", table.uuid },
+         { "name", table.name },
+         { "defaultName", VPinballLib::TableLibrary::GetDefaultName(table) },
+         { "path", table.path },
+         { "hasImage", !table.image.empty() },
+         { "createdAt", table.createdAt },
+         { "modifiedAt", table.modifiedAt },
+         { "lastPlayedAt", table.lastPlayedAt },
+         { "playCount", table.playCount },
+         { "favorite", table.favorite },
+         { "playing", IsPlayed(library, table) } });
+   const string response = json { { "revision", library.GetRevision() }, { "scanning", library.IsScanning() }, { "tables", tables } }.dump();
+   mg_http_reply(c, STATUS_OK, HEADER_JSON, "%s", response.c_str());
+#endif
+}
+
+// GET: the image of a table (the page adds its modification date to the URL, so that browsers may cache it)
+void WebServer::TableImage(struct mg_connection *c, struct mg_http_message* hm)
+{
+#ifdef __LIBVPINBALL__
+   mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+#else
+   const std::optional<VPinballLib::Table> table = GetRequestedTable(c, hm);
+   if (!table)
+      return;
+   const std::filesystem::path imagePath = g_app->GetTableLibrary().GetImagePath(*table);
+   std::error_code ec;
+   if (imagePath.empty() || !std::filesystem::is_regular_file(imagePath, ec)) {
+      mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+      return;
+   }
+   struct mg_http_serve_opts opts = {};
+   opts.extra_headers = "Cache-Control: max-age=86400\r\n";
+   mg_http_serve_file(c, hm, PathToUTF8(imagePath).c_str(), &opts);
+#endif
+}
+
+// POST with 'uuid' and 'favorite' (1 or 0)
+void WebServer::TableFavorite(struct mg_connection *c, struct mg_http_message* hm)
+{
+#ifdef __LIBVPINBALL__
+   mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+#else
+   if (mg_strcmp(hm->method, mg_str("POST")) != 0) {
+      mg_http_reply(c, STATUS_METHOD_NOT_ALLOWED, "", "%s", RESPONSE_METHOD_NOT_ALLOWED);
+      return;
+   }
+   char favorite[8];
+   mg_http_get_var(&hm->query, "favorite", favorite, sizeof(favorite));
+   if (*favorite == '\0') {
+      mg_http_reply(c, STATUS_BAD_REQUEST, "", "%s", RESPONSE_BAD_REQUEST);
+      return;
+   }
+   const std::optional<VPinballLib::Table> table = GetRequestedTable(c, hm);
+   if (!table)
+      return;
+   g_app->GetTableLibrary().SetFavorite(table->uuid, strcmp(favorite, "0") != 0); // False when unchanged, which is not an error
+   mg_http_reply(c, STATUS_OK, "", RESPONSE_OK);
+#endif
+}
+
+// POST with 'uuid' and 'name', the name displayed for the table by the table picker. An empty name gives back the one derived from the file name.
+void WebServer::TableName(struct mg_connection *c, struct mg_http_message* hm)
+{
+#ifdef __LIBVPINBALL__
+   mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+#else
+   if (mg_strcmp(hm->method, mg_str("POST")) != 0) {
+      mg_http_reply(c, STATUS_METHOD_NOT_ALLOWED, "", "%s", RESPONSE_METHOD_NOT_ALLOWED);
+      return;
+   }
+   // The parameter is required, even empty (a name which does not fit in the buffer fails to decode)
+   char buffer[512];
+   if (mg_http_var(hm->query, mg_str("name")).buf == nullptr || mg_http_get_var(&hm->query, "name", buffer, sizeof(buffer)) < 0) {
+      mg_http_reply(c, STATUS_BAD_REQUEST, "", "%s", RESPONSE_BAD_REQUEST);
+      return;
+   }
+   // One line, without the spaces around it
+   string name = buffer;
+   std::replace_if(name.begin(), name.end(), [](char ch) { return ch == '\r' || ch == '\n' || ch == '\t'; }, ' ');
+   name.erase(0, name.find_first_not_of(' '));
+   name.erase(name.find_last_not_of(' ') + 1);
+
+   const std::optional<VPinballLib::Table> table = GetRequestedTable(c, hm);
+   if (!table)
+      return;
+   if (g_app->GetTableLibrary().Rename(table->uuid, name)) // False when unchanged, which is not an error
+      PLOGI.printf("Table display name changed: %s -> %s", table->name.c_str(), name.empty() ? VPinballLib::TableLibrary::GetDefaultName(*table).c_str() : name.c_str());
+   mg_http_reply(c, STATUS_OK, "", RESPONSE_OK);
+#endif
+}
+
+// POST with 'uuid': delete the table and its files (the whole folder when it is the only table in it)
+void WebServer::TableDelete(struct mg_connection *c, struct mg_http_message* hm)
+{
+#ifdef __LIBVPINBALL__
+   mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+#else
+   if (mg_strcmp(hm->method, mg_str("POST")) != 0) {
+      mg_http_reply(c, STATUS_METHOD_NOT_ALLOWED, "", "%s", RESPONSE_METHOD_NOT_ALLOWED);
+      return;
+   }
+   const std::optional<VPinballLib::Table> table = GetRequestedTable(c, hm);
+   if (!table)
+      return;
+   VPinballLib::TableLibrary& library = g_app->GetTableLibrary();
+   if (IsPlayed(library, *table)) {
+      mg_http_reply(c, STATUS_CONFLICT, "", RESPONSE_CONFLICT);
+      return;
+   }
+   if (!library.Delete(table->uuid)) {
+      mg_http_reply(c, STATUS_INTERNAL_SERVER_ERROR, "", RESPONSE_INTERNAL_SERVER_ERROR);
+      return;
+   }
+   PLOGI.printf("Table deleted: %s (%s)", table->name.c_str(), table->path.c_str());
+   SetLastUpdate(); // Files are gone: the file manager refreshes
+   mg_http_reply(c, STATUS_OK, "", RESPONSE_OK);
+#endif
 }
 
 void WebServer::Delete(struct mg_connection *c, struct mg_http_message* hm)

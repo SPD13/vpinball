@@ -17,6 +17,7 @@ Changes a player sees, in the standalone builds (details in the numbered section
 - **Table actions**: play, restart, rename, reset the table settings, delete, and use the table's VR room in the lobby.
 - **Lobby** in launcher mode, from which tables are started and to which they return (section 4).
 - **Web upload**: add tables and ROMs from a browser on the local network, with a pairing code that can be switched off, missing ROMs listed, and a link to the ROM folder. It can be on for the session only or always on (started with the application), and stays on while switching between the lobby and the tables (sections 5 and 8).
+- **Tables page in the browser**, the home page of the web server: the library as a grid of thumbnails with the picker's tabs and search, a star to add or remove a favorite, and a "..." menu on each table to set its **display name** (the name the picker shows, the files are not renamed) or **delete** it with all its files. With an empty library it links to the file manager, which stays one click away (section 5).
 - **Missing ROM message** naming the files to add and where (section 8).
 - **VR**: the menu on a panel standing in the room, in the table's direction, at an adjustable distance, used with the controllers' pointer; notifications above the menu (sections 7 and 8).
 - **No "controller detected" prompt for the VR controllers**: Steam Input also presents the Frame controllers as an Xbox gamepad; in VR, VPX no longer asks to set up a layout for it, since the controllers already work through OpenXR (section 7).
@@ -28,7 +29,7 @@ Changes a player sees, in the standalone builds (details in the numbered section
 
 | Part | State |
 |---|---|
-| Table library, table picker, launcher mode, web upload, shared ROM folder | Built and run on macOS arm64. Checked through automated tests, scripted runs with frame captures of the real application, and `curl` for the web server. On Windows, the table picker was tested by hand (tabs, thumbnail grid, favorite stars, pager arrows, search box); other parts are not yet driven by a person for every feature (see each section). On the Steam Frame (2026-10-01), the lobby, the Wi-Fi upload and uploaded tables were used in the headset. |
+| Table library, table picker, launcher mode, web upload, shared ROM folder | Built and run on macOS arm64. Checked through automated tests, scripted runs with frame captures of the real application, and `curl` for the web server. On Windows, the table picker was tested by hand (tabs, thumbnail grid, favorite stars, pager arrows, search box); other parts are not yet driven by a person for every feature (see each section). On the Steam Frame (2026-10-01), the lobby, the Wi-Fi upload and uploaded tables were used in the headset. The tables page of the web server (2026-10-03) was run on macOS, its routes checked with `curl` and the page driven in Chrome; it is deployed on the Frame but not yet used there. |
 | OpenXR, Valve Frame controller profile, Vulkan extension filter, VR menu panel and pointer | **Run in VR on Windows with a PSVR2** (SteamVR 2.17), in the `windows-mingw` build with `ENABLE_XR=ON` (2026-09-27), which is standalone + OpenXR + Vulkan like the Frame build. Linux ARM64: rebuilt with everything on 2026-09-28 and **run in the headset on the Steam Frame on 2026-10-01** after the driver workaround of section 7: OpenXR runtime found, Frame controller profile accepted with its 32 bindings, lobby and tables displayed (details in `Doc/steam-frame-port-plan.md`, section 6). Not yet checked there: launch from the Steam library, pointer and buttons, performance. |
 | Eye-tracked foveated rendering (Steam Frame only) | **Works in the headset on the Steam Frame (2026-10-01)**: the sharp zone follows the eyes on both axes, confirmed with the head moving while the eyes stay on an object. With a density map the gain was ≈ 0.5 ms per frame at High, because on Turnip a density map forces the tiled render path, where the scene pass is geometry-bound (geometry re-processed per bin); rendering the scene pass directly instead takes the frame from 14.0 to 9.1 ms at native 2160×2160 (`TU_AUTOTUNE_ALGO=profiled`). **Since 2026-10-03 the scene is foveated through a fragment shading rate image that follows the gaze ray, which the driver applies in the direct path: Addams Family 14.3 → 11.2 ms at High, 11.3 at Medium (the default); Ghostbusters 11.3 → 9.2 with a fixed image**, measurements and mechanism in `Doc/foveated-rendering.md`, sections 7 and 10. |
 | Windows | `windows-mingw` (with or without `ENABLE_XR`): built and used with GCC 16 (MSYS2 UCRT64), Debug. Visual Studio build: built and run in VR in Debug with Vulkan, without the launcher (see "Build variants"). |
@@ -56,7 +57,7 @@ A C++ port of the Android `TableManager.kt` / iOS `TableManager.swift`, keeping 
 - On load, old absolute paths are converted; entries with a duplicate uuid or path, a missing file, or a path leaving the tables folder are dropped.
 - `Rescan`: registers new `.vpx` files (recursively), drops entries whose file is gone, picks up `<table>.png|.jpg`, and imports `.zip`/`.vpxz` bundles found **at the root** of the tables folder, then deletes them, as well as `.rar` (RAR4 and RAR5) and `.7z` ones in the builds that include libarchive (windows-mingw and Linux, when `external.sh` built it; CMake defines `VPX_ARCHIVE_SUPPORT` then). Archives deeper in the tree are never touched, so PinMAME ROM zips stay zipped. A root bundle without a table is left in place and not extracted again during the run. Hidden files, `._*` and `__MACOSX` are ignored. An optional settle time skips files still being copied.
 - Bundles are extracted into a hidden `.import` folder inside the tables folder and moved into place, so a large table is never on disk twice. Several tables in one bundle folder are moved once and all registered.
-- `Import`, `Delete`, `Rename`, `SetImage`, `ReloadImage`, `ResetIni`, `Export`. Deleting a table that is alone in its folder removes the folder; otherwise it removes the `.vpx` and its same-name `.ini`, `.vbs`, `.directb2s`, `.png`, `.jpg`.
+- `Import`, `Delete`, `Rename`, `SetImage`, `ReloadImage`, `ResetIni`, `Export`. `Rename` sets the display name (the `name` of `tables.json`, files untouched); an empty or blank name gives back the default one, `GetDefaultName`: the file name without extension, underscores replaced by spaces, as given to a new table. Deleting a table that is alone in its folder removes the folder; otherwise it removes the `.vpx` and its same-name `.ini`, `.vbs`, `.directb2s`, `.png`, `.jpg`.
 - `RescanAsync` runs scans on a worker thread and never misses a request. The list read by the UI is locked only for the final swap, never during file work. `GetRevision` lets a UI poll for changes.
 - Player statistics: `playCount`, `lastPlayedAt`, `favorite`, with `RecordPlay` and `SetFavorite`. They are stored in a separate **`table-stats.json`**, keyed by uuid, because the mobile launchers reject unknown fields in `tables.json`.
 - `FuzzyScore`: each word of the query must be found in the text with its letters in order (not necessarily adjacent); words may be in any order; the best alignment is scored, with bonuses for consecutive letters, word starts and the start of the text.
@@ -105,7 +106,7 @@ Files: `src/core/AppCommands.h/.cpp`, `src/core/main.cpp`, `src/core/VPApp.h/.cp
 
 ## 5. Web upload on desktop
 
-Files: `lib/src/WebServer.h/.cpp`, `src/assets/web/app.js`, `src/assets/web/vpx.html`, `make/CMakeLists_sources.txt`, `make/CMakeLists_app.txt`.
+Files: `lib/src/WebServer.h/.cpp`, `src/assets/web/app.js`, `src/assets/web/vpx.html`, `src/assets/web/tables.html`, `src/assets/web/tables.js`, `src/assets/web/styles.css`, `make/CMakeLists_sources.txt`, `make/CMakeLists_app.txt`.
 
 The web server and its page are upstream's. Changes:
 
@@ -120,7 +121,32 @@ The web server and its page are upstream's. Changes:
 - **"Upload Folder"** entry in the page's menu (`uploadFolder()`), using the browser's folder picker; skips hidden files. Dropping a folder on the page already worked.
 - Uploading `VPinballX.ini` to switch the settings file is limited to the mobile builds.
 
-Known gaps: plain HTTP; the static page and `/assets/*` are served without pairing. Not verified: the pairing prompt and the Upload Folder entry in a real browser. The pairing switch, the three modes and the server staying on across tables (2026-10-02) are compiled on macOS but not yet run, on the desktop or in the headset.
+### Tables page (2026-10-03)
+
+A second page, `tables.html` with `tables.js`, shows the table library the way the picker does, for desktop builds (the mobile launchers own their library, see below).
+
+- **Home page.** `/`, and any unknown path, now serve `tables.html`; the file manager moves to `/vpx.html` (same page, its links are relative or hashes, so folder browsing and the Back button work unchanged). Both pages have a "Tables | Files" switch at the top right of the header. The file manager hides it only when `/info` reports `tableLibrary: false`, so a page cached from an older server still offers the link.
+- **Tiles** like the picker's grid: the table image in a 16:10 frame (the table's initial when it has none), the display name, the file name underneath, statistics in the tooltip, and a "Playing" badge on the running table. Images load lazily, through `/table-image?uuid=&v=<modifiedAt>`, so browsers cache them until the image changes.
+- **Tabs and search** as in the picker: All, Recent, Newly added, Most played, Favorites (kept in the URL hash), and the same in-order letter matching for the search. "Upload tables and ROMs here", with "here" linking to the file manager, is shown whenever the library is empty.
+- **Star** on each tile: adds or removes the favorite at once, saved in `table-stats.json` like the picker's star.
+- **"..." menu** on each tile:
+  - **Display name**: a dialog with the current name, and the name derived from the file as a hint; "Use file name" goes back to it. Names are trimmed, kept on one line, limited to 128 characters in the page. The picker shows the new name at once (same library).
+  - **Delete**: a confirmation dialog with the table's path, then `TableLibrary::Delete`: the whole folder when the table is alone in it, otherwise the table and its same-name companion files. Disabled for the running table, which the server also refuses.
+  - The dialogs close only with their buttons, not with Escape nor a click outside their fields.
+- **Live list**: the page polls `/tables` every 3 s while it is visible, and renders again only when the answer changed, so favorites set in the headset, tables added by uploads or a rescan, and the running table appear without reloading. Tiles are reused between renders, so images are not reloaded.
+- **Routes** (behind pairing like the other API routes; desktop only, 404 in the mobile builds):
+
+  | Route | Method | Parameters | Answer |
+  |---|---|---|---|
+  | `/tables` | GET | | `{revision, scanning, tables:[{uuid, name, defaultName, path, hasImage, createdAt, modifiedAt, lastPlayedAt, playCount, favorite, playing}]}` |
+  | `/table-image` | GET | `uuid` | the image, cacheable for a day; 404 without image |
+  | `/table-favorite` | POST | `uuid`, `favorite` (1 or 0) | 200; 400 without `favorite`, 404 unknown table |
+  | `/table-name` | POST | `uuid`, `name` (empty: default name) | 200; 400 when `name` is missing or too long, 404 unknown table |
+  | `/table-delete` | POST | `uuid` | 200; 409 for the running table, 404 unknown table, 500 when the files could not be removed |
+
+  `/info` also reports `tableLibrary` (true on desktop), which the pages use to tell a desktop server from a mobile one and from a server built before this page. A deletion notifies the file manager like the other file changes; a favorite or a name does not, as no file of the tables folder changes.
+
+Known gaps: plain HTTP; the static pages and `/assets/*` are served without pairing. The tables page serves the table images at full size (a few MB for a screenshot), which a large library may feel over Wi-Fi; a resized thumbnail route would fix it. Not verified on the tables page: refusing to delete the running table (the routes and the page were otherwise checked on macOS), and any use in the headset's network conditions. Not verified: the pairing prompt and the Upload Folder entry in a real browser. The pairing switch, the three modes and the server staying on across tables (2026-10-02) are compiled on macOS but not yet run, on the desktop or in the headset.
 
 ## 6. Shared ROM folder
 
@@ -221,7 +247,7 @@ Found on the first run: the runtime's recommended size (80 %) is not a low enoug
 - The dynamic resolution plumbing (render scale on passes and targets) is inert outside VR: the scale stays 1 and every view rect and texture coordinate is what it was.
 - Every build with the bgfx renderer gets the specular anti-aliasing of the material shader (section 12), except through Direct3D 11/12 until the shader headers are regenerated on Windows.
 - Standalone desktop builds get a "Tables" entry at the top of the in-game menu. When a table starts they create `VPinballX/Tables/pinmame/roms` in the documents folder, unless a PinMAME folder is already defined or `~/.pinmame/roms` exists (section 6).
-- iOS/Android library builds: uploads are staged in `.upload`; `InGameUIPage` has the tile code; no other intended change.
+- iOS/Android library builds: uploads are staged in `.upload`; `InGameUIPage` has the tile code; the home page of the web server stays the file manager, the tables routes answer 404 and `/info` reports `tableLibrary: false`, so the file manager hides its link to the tables page; no other intended change.
 - The Visual Studio project files (`make/*.vcxproj`) were not updated. None of the new files is needed by a non-standalone build; the CMake build lists them.
 
 ## Files
@@ -231,6 +257,8 @@ New:
 ```
 lib/src/TableLibrary.h
 lib/src/TableLibrary.cpp
+src/assets/web/tables.html
+src/assets/web/tables.js
 src/ui/live/ingameui/TablePickerPage.h
 src/ui/live/ingameui/TablePickerPage.cpp
 src/ui/live/ingameui/MessagePage.h
@@ -256,9 +284,9 @@ platforms/linux-aarch64/bgfx-turnip-descriptor-pool.patch   descriptor pools wit
 platforms/linux-aarch64/bgfx-fragment-density-map.patch     fragment density map attachments and offsets (section 9)
 platforms/linux-aarch64/bgfx-fragment-shading-rate.patch   fragment shading rate attachments, the foveation path used on the Frame (section 9)
 platforms/linux-x64/external.sh         OpenXR loader
-lib/src/WebServer.h, WebServer.cpp      desktop use, pairing, staged uploads
-src/assets/web/app.js, vpx.html         pairing prompt, Upload Folder, missing ROMs, ROM folder link
-src/assets/web/styles.css               missing ROMs, ROM folder link, upload banner
+lib/src/WebServer.h, WebServer.cpp      desktop use, pairing, staged uploads, tables routes, tables page as home page
+src/assets/web/app.js, vpx.html         pairing prompt, Upload Folder, missing ROMs, ROM folder link, Tables | Files switch
+src/assets/web/styles.css               missing ROMs, ROM folder link, upload banner, tables page
 src/core/AppCommands.h, AppCommands.cpp -Launcher, table switching, lobby
 src/core/main.cpp                       launcher counts as play mode, web server started with the application when always on
 src/core/VPApp.h, VPApp.cpp             table library, web server (pairing and always-on settings), ROM folder, lobby path

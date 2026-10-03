@@ -48,6 +48,12 @@ private:
    void Extract(struct mg_connection *c, struct mg_http_message* hm);
    void Command(struct mg_connection *c, struct mg_http_message* hm);
    void LogStream(struct mg_connection *c, struct mg_http_message* hm);
+   // The table library, for the tables page: list, image, favorite, display name and deletion (desktop builds, the mobile launchers own their library)
+   void Tables(struct mg_connection *c, struct mg_http_message* hm);
+   void TableImage(struct mg_connection *c, struct mg_http_message* hm);
+   void TableFavorite(struct mg_connection *c, struct mg_http_message* hm);
+   void TableName(struct mg_connection *c, struct mg_http_message* hm);
+   void TableDelete(struct mg_connection *c, struct mg_http_message* hm);
 
    void AddLogEntry(const string& formattedLog);
    void BroadcastLogEntry(const string& formattedLog);

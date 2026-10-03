@@ -170,6 +170,8 @@ string TableLibrary::SanitizeName(const string& name)
    return sanitized.empty() ? "table"s : sanitized;
 }
 
+string TableLibrary::GetDefaultName(const Table& table) { return NameFromStem(fs::path(table.path)); }
+
 string TableLibrary::GetUniqueFolder(const string& baseName) const
 {
    const string sanitized = SanitizeName(baseName);
@@ -611,10 +613,12 @@ bool TableLibrary::Delete(const string& uuid)
 bool TableLibrary::Rename(const string& uuid, const string& newName)
 {
    std::lock_guard operationLock(m_operationMutex);
-   if (newName.find_first_not_of(' ') == string::npos)
-      return false;
+   const bool isBlank = newName.find_first_not_of(' ') == string::npos;
    return Update(uuid, [&](Table& table) {
-      table.name = newName;
+      const string name = isBlank ? GetDefaultName(table) : newName;
+      if (table.name == name)
+         return false;
+      table.name = name;
       return true;
    });
 }
