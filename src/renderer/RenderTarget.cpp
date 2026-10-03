@@ -554,7 +554,7 @@ RenderTarget::RenderTarget(RenderDevice* const rd, const SurfaceType type, const
 }
 
 #if defined(ENABLE_BGFX) && defined(BGFX_RESOLVE_FRAGMENT_DENSITY_MAP)
-void RenderTarget::SetFragmentDensityMap(bgfx::TextureHandle map)
+void RenderTarget::SetFragmentDensityMap(bgfx::TextureHandle map, bool shadingRate)
 {
    if (!bgfx::isValid(m_plainFramebuffer))
       return;
@@ -569,23 +569,29 @@ void RenderTarget::SetFragmentDensityMap(bgfx::TextureHandle map)
       m_framebuffer = cached->second;
       return;
    }
-   // Same attachments as the plain frame buffer, plus the density map, which bgfx keeps out of the color targets
+   // Same attachments as the plain frame buffer, plus the density map (or shading rate image), which bgfx keeps out of the color targets
    std::array<bgfx::Attachment, 3> attachments;
    uint8_t n = 0;
    attachments[n++].init(m_color_tex, bgfx::Access::Write, 0, m_nLayers, 0, BGFX_RESOLVE_NONE);
    if (m_has_depth)
       attachments[n++].init(IsMSAA() ? m_msaaResolveDepthTex : m_depth_tex, bgfx::Access::Write, 0, m_nLayers, 0, BGFX_RESOLVE_NONE);
+   #ifdef BGFX_RESOLVE_FRAGMENT_SHADING_RATE
+   if (shadingRate)
+      attachments[n++].init(map, bgfx::Access::Read, 0, 1, 0, BGFX_RESOLVE_FRAGMENT_SHADING_RATE); // One layer, shared by the eyes
+   else
+   #endif
    attachments[n++].init(map, bgfx::Access::Read, 0, m_nLayers, 0, BGFX_RESOLVE_FRAGMENT_DENSITY_MAP);
    const bgfx::FrameBufferHandle fb = bgfx::createFrameBuffer(n, attachments.data());
+   const char* const kind = shadingRate ? "fragment shading rate image" : "fragment density map";
    if (!bgfx::isValid(fb))
    {
-      PLOGE << "Failed to create the frame buffer of " << m_name << " with a fragment density map; foveated rendering disabled for it";
+      PLOGE << "Failed to create the frame buffer of " << m_name << " with a " << kind << "; foveated rendering disabled for it";
       m_fdmFramebuffers[map.idx] = m_plainFramebuffer;
       m_framebuffer = m_plainFramebuffer;
       return;
    }
    bgfx::setName(fb, (m_name + " (foveated)").c_str());
-   PLOGI << "Fragment density map attached to " << m_name << " (" << m_width << 'x' << m_height << ", " << m_nLayers << " layers)";
+   PLOGI << "Foveated rendering: " << kind << " attached to " << m_name << " (" << m_width << 'x' << m_height << ", " << m_nLayers << " layers)";
    m_fdmFramebuffers[map.idx] = fb;
    m_framebuffer = fb;
 }

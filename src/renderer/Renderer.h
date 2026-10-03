@@ -210,8 +210,8 @@ public:
    RenderTarget* GetOffscreenVR(int eye) const { return eye == 0 ? m_pOffscreenVRLeft : m_pOffscreenVRRight; }
    RenderTarget* GetBackBufferTexture() const { return m_pOffscreenBackBufferTexture1; } // Main render target, with MSAA resolved if any, also may have stereo output (2 viewports)
    #if defined(ENABLE_BGFX) && defined(BGFX_RESOLVE_FRAGMENT_DENSITY_MAP)
-   // Foveated rendering: the fragment density map the scene is rendered with this frame (the VR device sets it from the runtime's map for the acquired swapchain image)
-   void SetFragmentDensityMap(bgfx::TextureHandle map);
+   // Foveated rendering: the fragment density map (or shading rate image) the scene is rendered with this frame (the VR device sets it from the runtime's map for the acquired swapchain image)
+   void SetFragmentDensityMap(bgfx::TextureHandle map, bool shadingRate = false);
    // Offsets of the map's high density area for this frame, in pixels of the scene buffer, one (x, y) pair per eye
    void SetFragmentDensityMapOffsets(const int32_t* offsetsXY, int nLayers);
    #endif

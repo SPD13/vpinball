@@ -298,6 +298,7 @@ VRDevice::VRDevice(const Settings& settings)
          m_foveationExtensionSupported = EnableExtensionIfSupported(XR_FB_FOVEATION_VULKAN_EXTENSION_NAME) && m_foveationExtensionSupported;
       #endif
       m_foveationEyeTrackedExtensionSupported = m_foveationExtensionSupported && EnableExtensionIfSupported(XR_META_FOVEATION_EYE_TRACKED_EXTENSION_NAME);
+      m_eyeGazeExtensionSupported = EnableExtensionIfSupported(XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
       m_performanceMetricsExtensionSupported = EnableExtensionIfSupported(XR_META_PERFORMANCE_METRICS_EXTENSION_NAME);
       #ifdef DEBUG
          m_debugUtilsExtensionSupported = EnableExtensionIfSupported(XR_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -541,7 +542,13 @@ void VRDevice::SetupHMD()
    // Get the System's properties for some general information about the hardware and the vendor.
    XrSystemColorSpacePropertiesFB colorSpaceProperties { XR_TYPE_SYSTEM_COLOR_SPACE_PROPERTIES_FB };
    XrSystemFoveationEyeTrackedPropertiesMETA foveationEyeTrackedProperties { XR_TYPE_SYSTEM_FOVEATION_EYE_TRACKED_PROPERTIES_META };
+   XrSystemEyeGazeInteractionPropertiesEXT eyeGazeProperties { XR_TYPE_SYSTEM_EYE_GAZE_INTERACTION_PROPERTIES_EXT };
    void** next = &m_systemProperties.next;
+   if (m_eyeGazeExtensionSupported)
+   {
+      *next = &eyeGazeProperties;
+      next = &eyeGazeProperties.next;
+   }
    if (m_colorSpaceExtensionSupported)
    {
       *next = &colorSpaceProperties;
@@ -555,6 +562,9 @@ void VRDevice::SetupHMD()
    OPENXR_CHECK(xrGetSystemProperties(m_xrInstance, m_systemID, &m_systemProperties), "Failed to get SystemProperties.");
    m_systemProperties.next = nullptr;
    m_foveationEyeTrackedSystemSupported = m_foveationEyeTrackedExtensionSupported && foveationEyeTrackedProperties.supportsFoveationEyeTracked;
+   m_eyeGazeSystemSupported = m_eyeGazeExtensionSupported && eyeGazeProperties.supportsEyeGazeInteraction;
+   if (m_eyeGazeExtensionSupported)
+      PLOGI << "Eye gaze interaction " << (m_eyeGazeSystemSupported ? "supported" : "not supported") << " by this headset";
    if (m_foveationEyeTrackedExtensionSupported)
       PLOGI << "Eye-tracked foveation " << (m_foveationEyeTrackedSystemSupported ? "supported" : "not supported") << " by this headset";
    if (m_colorSpaceExtensionSupported)
@@ -755,11 +765,15 @@ void VRDevice::ApplyFoveation()
 
    static constexpr XrFoveationLevelFB levels[] = { XR_FOVEATION_LEVEL_NONE_FB, XR_FOVEATION_LEVEL_LOW_FB, XR_FOVEATION_LEVEL_MEDIUM_FB, XR_FOVEATION_LEVEL_HIGH_FB };
    const bool eyeTracked = m_foveationEyeTracked && m_foveationEyeTrackedSystemSupported && m_foveationMode != 0;
+   // When the scene is foveated with our own image (shading rate image or density map with offsets) the runtime's level is NONE: the
+   // eye-tracked profile alone keeps the gaze coming, and the runtime has nothing to do with the images it hands us. The level is only
+   // given to the runtime where its own density maps are the fallback.
+   const bool ownFoveation = m_backend->IsFragmentShadingRateSupported() || m_backend->IsFragmentDensityMapOffsetSupported();
 
    XrFoveationEyeTrackedProfileCreateInfoMETA eyeTrackedInfo { XR_TYPE_FOVEATION_EYE_TRACKED_PROFILE_CREATE_INFO_META };
    eyeTrackedInfo.flags = 0;
    XrFoveationLevelProfileCreateInfoFB levelInfo { XR_TYPE_FOVEATION_LEVEL_PROFILE_CREATE_INFO_FB };
-   levelInfo.level = levels[clamp(m_foveationMode, 0, 3)];
+   levelInfo.level = ownFoveation ? XR_FOVEATION_LEVEL_NONE_FB : levels[clamp(m_foveationMode, 0, 3)];
    levelInfo.verticalOffset = 0.f;
    levelInfo.dynamic = XR_FOVEATION_DYNAMIC_DISABLED_FB;
    if (eyeTracked)
@@ -786,9 +800,19 @@ void VRDevice::ApplyFoveation()
       OPENXR_CHECK(m_xrDestroyFoveationProfileFB(m_foveationProfile), "Failed to destroy foveation profile");
    m_foveationProfile = profile;
    m_foveationApplied = true;
-   PLOGI << "Foveated rendering applied: level " << m_foveationMode << (eyeTracked ? ", eye-tracked" : ", fixed");
+   PLOGI << "Foveated rendering applied: level " << m_foveationMode << " (profile level " << static_cast<int>(levelInfo.level) << ')' << (eyeTracked ? ", eye-tracked" : ", fixed");
    UpdateFoveationState();
 }
+
+// Radius of the full quality area and of the half quality ring per level, as a fraction of the half width (about 55 degrees of field of view
+// on the Steam Frame, so 0.2 is 11 degrees around the gaze, which eye tracking affords); beyond is quarter quality. With the area moved to
+// the gaze, a tighter profile costs nothing in what is looked at: the levels differ by how much of the periphery is coarse.
+static constexpr float kFoveationFullRadius[] = { 1.f, 0.45f, 0.30f, 0.20f };
+static constexpr float kFoveationHalfRadius[] = { 1.f, 0.80f, 0.55f, 0.38f };
+// Tighter rings for the shading rate image that follows the gaze: a single image serves both eyes, so each eye's disc is also shaded at full
+// rate in the other eye's image, where it sits about 0.3 of the half width away (the eyes' asymmetric views); Low here is the fixed Medium
+static constexpr float kGazeFullRadius[] = { 1.f, 0.30f, 0.20f, 0.15f };
+static constexpr float kGazeHalfRadius[] = { 1.f, 0.55f, 0.38f, 0.28f };
 
 // A map of 32 pixel texels (the minimum of the driver) covering the eye image, 8-bit density in R (x) and G (y) identical on both eyes.
 // The hardware uses 1, 1/2 or 1/4 shading rate per axis, so the rings are flat values; the gaze offsets translate the whole map.
@@ -801,10 +825,9 @@ void VRDevice::CreateOwnFoveationMap()
    m_ownFoveationMapWidth = (m_eyeWidth + texel - 1) / texel;
    m_ownFoveationMapHeight = (m_eyeHeight + texel - 1) / texel;
    const uint32_t layers = static_cast<uint32_t>(m_viewConfigurationViews.size());
-   const bgfx::Memory* mem = bgfx::alloc(m_ownFoveationMapWidth * m_ownFoveationMapHeight * 2 * layers);
-   memset(mem->data, 255, mem->size);
+   // Created without data: bgfx makes a texture created with data immutable and silently drops the updates FillOwnFoveationMap relies on
    m_ownFoveationMap = bgfx::createTexture2D(static_cast<uint16_t>(m_ownFoveationMapWidth), static_cast<uint16_t>(m_ownFoveationMapHeight), false, static_cast<uint16_t>(layers),
-      bgfx::TextureFormat::RG8, BGFX_TEXTURE_FRAGMENT_DENSITY_MAP, mem);
+      bgfx::TextureFormat::RG8, BGFX_TEXTURE_FRAGMENT_DENSITY_MAP, nullptr);
    if (!bgfx::isValid(m_ownFoveationMap))
    {
       PLOGW << "Foveated rendering: failed to create the density map";
@@ -821,11 +844,6 @@ void VRDevice::FillOwnFoveationMap()
    #ifdef BGFX_TEXTURE_FRAGMENT_DENSITY_MAP
    if (!bgfx::isValid(m_ownFoveationMap))
       return;
-   // Radius of the full density area and of the half density ring, as a fraction of the half width (about 55 degrees of field of view on the
-   // Steam Frame, so 0.2 is 11 degrees around the gaze, which eye tracking affords); beyond is quarter density. With the map moved to the
-   // gaze, a tighter profile costs nothing in what is looked at: the levels differ by how much of the periphery is coarse.
-   static constexpr float fullRadius[] = { 1.f, 0.45f, 0.30f, 0.20f };
-   static constexpr float halfRadius[] = { 1.f, 0.80f, 0.55f, 0.38f };
    static constexpr uint8_t outerDensity[] = { 255, 64, 64, 64 };
    const int level = clamp(m_foveationMode, 0, 3);
    const float cx = 0.5f * static_cast<float>(m_ownFoveationMapWidth), cy = 0.5f * static_cast<float>(m_ownFoveationMapHeight);
@@ -838,13 +856,255 @@ void VRDevice::FillOwnFoveationMap()
          {
             const float dx = (static_cast<float>(x) + 0.5f - cx) / cx, dy = (static_cast<float>(y) + 0.5f - cy) / cy;
             const float r = sqrtf(dx * dx + dy * dy);
-            const uint8_t density = r < fullRadius[level] ? 255 : r < halfRadius[level] ? 128 : outerDensity[level];
+            const uint8_t density = r < kFoveationFullRadius[level] ? 255 : r < kFoveationHalfRadius[level] ? 128 : outerDensity[level];
             mem->data[(y * m_ownFoveationMapWidth + x) * 2 + 0] = density;
             mem->data[(y * m_ownFoveationMapWidth + x) * 2 + 1] = density;
          }
       bgfx::updateTexture2D(m_ownFoveationMap, static_cast<uint16_t>(layer), 0, 0, 0, static_cast<uint16_t>(m_ownFoveationMapWidth), static_cast<uint16_t>(m_ownFoveationMapHeight), mem);
    }
    #endif
+}
+
+// The gaze of each eye from the runtime (normalized, -1..1), valid when the headset tracks the eyes and the setting asks for it
+// The gaze as a ray in the reference space (XR_EXT_eye_gaze_interaction), turned into the point each eye's image looks at for this frame.
+// Head and eyes are taken at the gaze sample time, so the ray of a fixated point stays put while the head moves, and the point is projected
+// with the views the frame is rendered with; the small vergence between the eyes comes from an assumed fixation distance. The point is
+// smoothed with a short filter (the samples jitter), which a saccade resets.
+void VRDevice::LocateGaze(const std::vector<XrView>& views, const XrTime displayTime)
+{
+   m_gazeRayValid = false;
+   if (m_gazeSpace == XR_NULL_HANDLE || !m_foveationEyeTracked || m_foveationMode == 0 || views.size() < 2)
+      return;
+   // Runtimes may only vouch for the orientation of the gaze pose: the ray then starts between the eyes
+   constexpr XrSpaceLocationFlags valid = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+   XrEyeGazeSampleTimeEXT sampleTime { XR_TYPE_EYE_GAZE_SAMPLE_TIME_EXT };
+   XrSpaceLocation location { XR_TYPE_SPACE_LOCATION, &sampleTime };
+   const XrResult locateResult = xrLocateSpace(m_gazeSpace, m_referenceSpace, displayTime, &location);
+   if (locateResult != XR_SUCCESS || (location.locationFlags & valid) != valid)
+   {
+      static double nextLog = 0.;
+      if (const double now = static_cast<double>(usec()) * 1e-6; now > nextLog)
+      {
+         nextLog = now + 5.;
+         XrActionStateGetInfo getInfo { XR_TYPE_ACTION_STATE_GET_INFO };
+         getInfo.action = m_xrInputHandler ? m_xrInputHandler->GetAction("/user/eyes_ext/input/gaze_ext/pose") : XR_NULL_HANDLE;
+         XrActionStatePose poseState { XR_TYPE_ACTION_STATE_POSE };
+         const XrResult stateResult = getInfo.action != XR_NULL_HANDLE ? xrGetActionStatePose(m_session, &getInfo, &poseState) : XR_ERROR_HANDLE_INVALID;
+         XrPath eyesPath = XR_NULL_PATH;
+         xrStringToPath(m_xrInstance, "/user/eyes_ext", &eyesPath);
+         XrInteractionProfileState profile { XR_TYPE_INTERACTION_PROFILE_STATE };
+         const XrResult profileResult = xrGetCurrentInteractionProfile(m_session, eyesPath, &profile);
+         char profileName[XR_MAX_PATH_LENGTH] = "none";
+         uint32_t length = 0;
+         if (profileResult == XR_SUCCESS && profile.interactionProfile != XR_NULL_PATH)
+            xrPathToString(m_xrInstance, profile.interactionProfile, sizeof(profileName), &length, profileName);
+         PLOGW << "Eye gaze ray unavailable: locate result " << locateResult << ", flags 0x" << std::hex << location.locationFlags << std::dec << ", sample time " << sampleTime.time
+               << ", action active " << (stateResult == XR_SUCCESS ? (poseState.isActive ? "yes" : "no") : "unknown") << " (result " << stateResult << "), profile " << profileName << " (result " << profileResult << ')';
+      }
+      return;
+   }
+   if (sampleTime.time != 0 && sampleTime.time < displayTime)
+   {
+      XrSpaceLocation atSample { XR_TYPE_SPACE_LOCATION };
+      if (xrLocateSpace(m_gazeSpace, m_referenceSpace, sampleTime.time, &atSample) == XR_SUCCESS && (atSample.locationFlags & valid) == valid)
+         location = atSample;
+   }
+   const bx::Quaternion orientation(location.pose.orientation.x, location.pose.orientation.y, location.pose.orientation.z, location.pose.orientation.w);
+   const bx::Vec3 dir = bx::mul(bx::Vec3(0.f, 0.f, -1.f), orientation);
+   const bx::Vec3 origin = (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)
+      ? bx::Vec3(location.pose.position.x, location.pose.position.y, location.pose.position.z)
+      : bx::Vec3(0.5f * (views[0].pose.position.x + views[1].pose.position.x), 0.5f * (views[0].pose.position.y + views[1].pose.position.y), 0.5f * (views[0].pose.position.z + views[1].pose.position.z));
+   constexpr float fixationDistance = 1.f; // meters, about the table
+   bx::Vec3 point(origin.x + dir.x * fixationDistance, origin.y + dir.y * fixationDistance, origin.z + dir.z * fixationDistance);
+   if (m_gazePointValid)
+   {
+      constexpr float tau = 0.035f; // seconds
+      constexpr float saccade = 0.08f; // meters, about 4.5 degrees at the fixation distance
+      const bx::Vec3 previous(m_gazePoint.x, m_gazePoint.y, m_gazePoint.z);
+      if (bx::length(bx::sub(point, previous)) < saccade)
+      {
+         const float dt = clamp(static_cast<float>(static_cast<double>(displayTime - m_gazePointTime) * 1e-9), 0.f, 0.1f);
+         point = bx::lerp(previous, point, 1.f - expf(-dt / tau));
+      }
+   }
+   m_gazePoint = { point.x, point.y, point.z };
+   m_gazePointTime = displayTime;
+   m_gazePointValid = true;
+   XrVector2f centers[2];
+   for (int eye = 0; eye < 2; eye++)
+   {
+      // Into the eye's view space (OpenXR: x right, y up, looking down -z)
+      const XrPosef& eyePose = views[eye].pose;
+      const bx::Quaternion eyeOrientation(eyePose.orientation.x, eyePose.orientation.y, eyePose.orientation.z, eyePose.orientation.w);
+      const bx::Vec3 p = bx::mul(bx::sub(point, bx::Vec3(eyePose.position.x, eyePose.position.y, eyePose.position.z)), bx::conjugate(eyeOrientation));
+      if (p.z >= -0.01f) // Behind the eye
+      {
+         static double nextLog = 0.;
+         if (const double now = static_cast<double>(usec()) * 1e-6; now > nextLog)
+         {
+            nextLog = now + 5.;
+            PLOGW << "Eye gaze ray behind eye " << eye << ": point " << point.x << ',' << point.y << ',' << point.z << " eye " << eyePose.position.x << ',' << eyePose.position.y << ',' << eyePose.position.z << " view " << p.x << ',' << p.y << ',' << p.z;
+         }
+         return;
+      }
+      const XrFovf& fov = views[eye].fov;
+      const float tanL = tanf(fov.angleLeft), tanR = tanf(fov.angleRight), tanD = tanf(fov.angleDown), tanU = tanf(fov.angleUp);
+      const float tx = p.x / -p.z, ty = p.y / -p.z;
+      // Image space of the eye (-1..1, x to the right, y down), the convention of the runtime's foveation center
+      centers[eye].x = (2.f * tx - (tanR + tanL)) / (tanR - tanL);
+      centers[eye].y = -(2.f * ty - (tanU + tanD)) / (tanU - tanD);
+   }
+   m_foveationCenter[0] = centers[0];
+   m_foveationCenter[1] = centers[1];
+   m_gazeRayValid = true;
+}
+
+bool VRDevice::ReadGaze()
+{
+   if (m_gazeRayValid)
+      return true;
+   if (!m_foveationEyeTracked || !m_foveationEyeTrackedExtensionSupported || m_session == XR_NULL_HANDLE)
+      return false;
+   XrFoveationEyeTrackedStateMETA state { XR_TYPE_FOVEATION_EYE_TRACKED_STATE_META };
+   if (!XR_SUCCEEDED(m_xrGetFoveationEyeTrackedStateMETA(m_session, &state)) || (state.flags & XR_FOVEATION_EYE_TRACKED_STATE_VALID_BIT_META) == 0)
+      return false;
+   for (int eye = 0; eye < 2; eye++)
+      m_foveationCenter[eye] = state.foveationCenter[eye];
+   return true;
+}
+
+// The shading rate image for this frame: full rate inside a disc around each eye's gaze (one image serves both eyes, so the union of the
+// two discs), 2x2 in a ring around it, 4x4 beyond, with the radii of the level. Without a valid gaze, the Low rings at the center of the
+// view, wide enough for where a player looks. Sized in the pixels the frame renders (dynamic resolution renders a sub rectangle at the
+// origin). The image is only uploaded when a disc moved by more than half a texel, or the level or scale changed.
+bool VRDevice::UpdateShadingRateMap(bool gazeValid)
+{
+   #ifdef BGFX_TEXTURE_FRAGMENT_SHADING_RATE
+   if (!m_backend->IsFragmentShadingRateSupported() || g_pplayer->m_renderer == nullptr)
+      return false;
+   const RenderTarget* const scene = g_pplayer->m_renderer->GetBackBufferTexture();
+   const uint32_t texel = m_backend->GetFragmentShadingRateTexelSize();
+   const uint32_t w = (static_cast<uint32_t>(scene->GetWidth()) + texel - 1) / texel, h = (static_cast<uint32_t>(scene->GetHeight()) + texel - 1) / texel;
+   if (!bgfx::isValid(m_shadingRateMap) || w != m_shadingRateMapWidth || h != m_shadingRateMapHeight)
+   {
+      if (bgfx::isValid(m_shadingRateMap))
+         bgfx::destroy(m_shadingRateMap);
+      // Created without data (a texture created with data is immutable for bgfx, which then drops the updates below), filled right after
+      m_shadingRateMap = bgfx::createTexture2D(static_cast<uint16_t>(w), static_cast<uint16_t>(h), false, 1, bgfx::TextureFormat::R8U, BGFX_TEXTURE_FRAGMENT_SHADING_RATE, nullptr);
+      m_shadingRateMapWidth = w;
+      m_shadingRateMapHeight = h;
+      m_shadingRateMapKey[0] = -1.f;
+      if (!bgfx::isValid(m_shadingRateMap))
+      {
+         PLOGW << "Foveated rendering: failed to create the shading rate image";
+         return false;
+      }
+      bgfx::setName(m_shadingRateMap, "Foveation shading rate image");
+      PLOGI << "Foveated rendering: shading rate image of " << w << 'x' << h << " (texel " << texel << ") for the " << scene->GetWidth() << 'x' << scene->GetHeight() << " scene buffer";
+   }
+
+   const int level = gazeValid ? clamp(m_foveationMode, 1, 3) : 1;
+   // VPX_FOVEATION_DEBUG=1 shrinks the full quality area to a small spot (and makes the rest coarse) to check in the headset where the
+   // spot sits against the gaze, which settles the sign conventions (FoveationFlipX/Y) of a runtime
+   // (1: a spot for each eye's gaze, 2: a spot for the left eye's gaze only, 3: for the right eye's only)
+   static const int debugSpot = getenv("VPX_FOVEATION_DEBUG") != nullptr ? atoi(getenv("VPX_FOVEATION_DEBUG")) : 0;
+   const float fullRadius = debugSpot ? 0.06f : gazeValid ? kGazeFullRadius[level] : kFoveationFullRadius[level];
+   const float halfRadius = debugSpot ? 0.10f : gazeValid ? kGazeHalfRadius[level] : kFoveationHalfRadius[level];
+   const int firstEye = debugSpot == 3 ? 1 : 0, lastEye = debugSpot == 2 ? 0 : 1;
+   const float scale = m_dynamicRenderScale;
+   const float halfW = 0.5f * static_cast<float>(scene->GetWidth()) * scale / static_cast<float>(texel);
+   const float halfH = 0.5f * static_cast<float>(scene->GetHeight()) * scale / static_cast<float>(texel);
+   float cx[2], cy[2];
+   for (int eye = 0; eye < 2; eye++)
+   {
+      // Same sign conventions as the density map offsets
+      const float gx = gazeValid ? (m_foveationFlipX ? -1.f : 1.f) * m_foveationCenter[eye].x : 0.f;
+      const float gy = gazeValid ? (m_foveationFlipY ? -1.f : 1.f) * m_foveationCenter[eye].y : 0.f;
+      cx[eye] = halfW + gx * halfW;
+      cy[eye] = halfH + gy * halfH;
+   }
+   if (debugSpot)
+   {
+      const float ndcX[2] = { cx[0] / halfW - 1.f, cx[1] / halfW - 1.f }, ndcY[2] = { cy[0] / halfH - 1.f, cy[1] / halfH - 1.f };
+      UpdateGazeMarker(ndcX, ndcY, fullRadius);
+   }
+   const float key[6] = { static_cast<float>(level), scale, cx[0], cy[0], cx[1], cy[1] };
+   bool changed = key[0] != m_shadingRateMapKey[0] || key[1] != m_shadingRateMapKey[1];
+   for (int i = 2; i < 6 && !changed; i++)
+      changed = fabsf(key[i] - m_shadingRateMapKey[i]) > 0.5f;
+   if (!changed)
+      return true;
+   memcpy(m_shadingRateMapKey, key, sizeof(key));
+
+   // Rate code: log2 of the fragment width in bits 2-3, of its height in bits 0-1; the driver's largest fragment bounds the coarse one
+   const uint8_t coarseLog2 = m_backend->GetFragmentShadingRateMaxFragmentSize() >= 4 ? 2 : 1;
+   const uint8_t codes[3] = { 0, 5, static_cast<uint8_t>((coarseLog2 << 2) | coarseLog2) };
+   const bgfx::Memory* mem = bgfx::alloc(w * h);
+   for (uint32_t y = 0; y < h; y++)
+      for (uint32_t x = 0; x < w; x++)
+      {
+         float r = FLT_MAX;
+         for (int eye = firstEye; eye <= lastEye; eye++)
+         {
+            const float dx = (static_cast<float>(x) + 0.5f - cx[eye]) / halfW, dy = (static_cast<float>(y) + 0.5f - cy[eye]) / halfH;
+            r = min(r, sqrtf(dx * dx + dy * dy));
+         }
+         mem->data[y * w + x] = codes[r < fullRadius ? 0 : r < halfRadius ? 1 : 2];
+      }
+   bgfx::updateTexture2D(m_shadingRateMap, 0, 0, 0, 0, static_cast<uint16_t>(w), static_cast<uint16_t>(h), mem);
+   return true;
+   #else
+   return false;
+   #endif
+}
+
+// Debug ring (VPX_FOVEATION_DEBUG) around the full quality spot of each eye, in the eye's tangent space like the visibility mask (x, y at
+// z = -1, the eye index in the normal), drawn by the renderer with the vr_mask technique on top of the scene
+void VRDevice::UpdateGazeMarker(const float* cxNdc, const float* cyNdc, const float radiusNdc)
+{
+   constexpr int segments = 48;
+   constexpr unsigned int nVerts = 2 * 2 * (segments + 1), nIndices = 2 * 6 * segments;
+   RenderDevice* const rd = g_pplayer->m_renderer->m_renderDevice;
+   if (m_gazeMarker == nullptr)
+   {
+      std::shared_ptr<IndexBuffer> ib = std::make_shared<IndexBuffer>(rd, nIndices, false, IndexBuffer::FMT_INDEX32);
+      uint32_t* indices;
+      ib->Lock(indices);
+      for (unsigned int eye = 0; eye < 2; eye++)
+         for (unsigned int i = 0; i < segments; i++)
+         {
+            const uint32_t base = eye * 2 * (segments + 1) + 2 * i;
+            *indices++ = base; *indices++ = base + 1; *indices++ = base + 2;
+            *indices++ = base + 1; *indices++ = base + 3; *indices++ = base + 2;
+         }
+      ib->Unlock();
+      m_gazeMarker = std::make_shared<MeshBuffer>("GazeMarker"s, std::make_shared<VertexBuffer>(rd, nVerts, nullptr, true), ib, true);
+   }
+   Vertex3D_NoTex2* vertices;
+   m_gazeMarker->m_vb->Lock(vertices);
+   for (unsigned int eye = 0; eye < 2; eye++)
+   {
+      const XrFovf& fov = m_viewFov[eye];
+      const float tanL = tanf(fov.angleLeft), tanR = tanf(fov.angleRight), tanD = tanf(fov.angleDown), tanU = tanf(fov.angleUp);
+      const float halfW = 0.5f * (tanR - tanL), halfH = 0.5f * (tanU - tanD);
+      // Image space (y down) to tangent space (y up)
+      const float cx = 0.5f * (tanR + tanL) + cxNdc[eye] * halfW, cy = 0.5f * (tanU + tanD) - cyNdc[eye] * halfH;
+      for (unsigned int i = 0; i <= segments; i++)
+      {
+         const float a = static_cast<float>(i) * (2.f * static_cast<float>(M_PI) / segments);
+         for (unsigned int k = 0; k < 2; k++)
+         {
+            const float r = radiusNdc * (k == 0 ? 1.f : 1.12f);
+            vertices->x = cx + cosf(a) * r * halfW;
+            vertices->y = cy + sinf(a) * r * halfH;
+            vertices->z = -1.f;
+            vertices->nx = static_cast<float>(eye);
+            vertices->ny = vertices->nz = vertices->tu = vertices->tv = 0.f;
+            vertices++;
+         }
+      }
+   }
+   m_gazeMarker->m_vb->Unlock();
 }
 
 void VRDevice::UpdateFoveationState()
@@ -862,11 +1122,14 @@ string VRDevice::GetFoveationStatus() const
       return "Not supported by the runtime"s;
    if (m_foveationMode == 0 || !m_foveationApplied)
       return "Off"s;
+   // Without a valid gaze the shading rate image falls back to the wide Low profile at the center of the view
+   const string how = m_foveationShadingRate ? " (shading rate image, Low profile)"s : " (density map)"s;
    if (!m_foveationEyeTracked)
-      return "Fixed at the center"s;
+      return "Fixed at the center"s + how;
    if (!m_foveationEyeTrackedSystemSupported)
-      return "Fixed: no eye tracking on this headset"s;
-   return m_foveationEyeTrackedActive ? "Eye-tracked"s : "Fixed: eye tracking not active (enable it in the headset settings)"s;
+      return "Fixed: no eye tracking on this headset"s + how;
+   return m_foveationEyeTrackedActive ? (m_foveationShadingRate ? "Eye-tracked (shading rate image)"s : "Eye-tracked (density map)"s)
+                                      : "Fixed: eye tracking not active (enable it in the headset settings)"s + how;
 }
 
 void VRDevice::EnablePerformanceCounters()
@@ -972,7 +1235,7 @@ void VRDevice::LogRuntimeStatus()
    UpdateFoveationState();
    string status = "Foveation: " + GetFoveationStatus();
    if (m_foveationEyeTrackedActive)
-      status += std::format(" (gaze L {:.2f},{:.2f} R {:.2f},{:.2f})", m_foveationCenter[0].x, m_foveationCenter[0].y, m_foveationCenter[1].x, m_foveationCenter[1].y);
+      status += std::format(" (gaze{} L {:.2f},{:.2f} R {:.2f},{:.2f})", m_gazeRayValid ? " ray" : "", m_foveationCenter[0].x, m_foveationCenter[0].y, m_foveationCenter[1].x, m_foveationCenter[1].y);
    status += " | Dynamic resolution: " + GetDynamicResolutionStatus();
    for (const auto& counter : m_performanceCounters)
    {
@@ -1201,7 +1464,18 @@ void VRDevice::CreateSession()
    if (m_dynamicResolution || getenv("VPX_XR_METRICS") != nullptr || getenv("VPX_GPU_PROFILE") != nullptr)
       EnablePerformanceCounters();
 
-   auto inputHandler = std::make_unique<XRInputHandler>(g_pplayer->m_pininput, m_xrInstance, m_session);
+   auto inputHandler = std::make_unique<XRInputHandler>(g_pplayer->m_pininput, m_xrInstance, m_session, m_eyeGazeSystemSupported);
+   if (m_eyeGazeSystemSupported)
+   {
+      if (const XrAction gazeAction = inputHandler->GetAction("/user/eyes_ext/input/gaze_ext/pose"); gazeAction != XR_NULL_HANDLE)
+      {
+         XrActionSpaceCreateInfo actionSpaceInfo { XR_TYPE_ACTION_SPACE_CREATE_INFO };
+         actionSpaceInfo.action = gazeAction;
+         actionSpaceInfo.poseInActionSpace = { { 0.0f, 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 0.0f } };
+         OPENXR_CHECK(xrCreateActionSpace(m_session, &actionSpaceInfo, &m_gazeSpace), "Failed to create the eye gaze action space.");
+         PLOGI << "Foveated rendering: gaze taken from the eye gaze ray (XR_EXT_eye_gaze_interaction)";
+      }
+   }
    XrAction leftPoseAction = inputHandler->GetAction("/user/hand/left/input/grip/pose");
    if (leftPoseAction != XR_NULL_HANDLE)
    {
@@ -1770,7 +2044,8 @@ void VRDevice::ReleaseSession()
    }
 
    // The action spaces of the controllers, then the input handler which owns their actions
-   for (XrSpace* space : { &m_leftControllerSpace, &m_rightControllerSpace, &m_leftAimSpace, &m_rightAimSpace })
+   m_gazeRayValid = m_gazePointValid = false;
+   for (XrSpace* space : { &m_leftControllerSpace, &m_rightControllerSpace, &m_leftAimSpace, &m_rightAimSpace, &m_gazeSpace })
    {
       if (*space != XR_NULL_HANDLE)
          OPENXR_CHECK(xrDestroySpace(*space), "Failed to destroy Controller Space.");
@@ -1793,6 +2068,14 @@ void VRDevice::ReleaseSession()
          bgfx::destroy(m_ownFoveationMap);
          m_ownFoveationMap = BGFX_INVALID_HANDLE;
       }
+      if (bgfx::isValid(m_shadingRateMap))
+      {
+         bgfx::destroy(m_shadingRateMap);
+         m_shadingRateMap = BGFX_INVALID_HANDLE;
+      }
+      m_shadingRateMapWidth = m_shadingRateMapHeight = 0;
+      m_foveationShadingRate = false;
+      m_gazeMarker = nullptr;
    }
    for (const auto& imageView : m_colorSwapchainInfo.imageViews)
       bgfx::destroy(imageView);
@@ -2159,6 +2442,7 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
          if (m_controllerModelsDirty || (m_controllerModelsRetryTime > 0. && static_cast<double>(usec()) * 1e-6 > m_controllerModelsRetryTime))
             UpdateControllerModels();
          LocateControllerModels(renderLayerInfo.predictedDisplayTime);
+         LocateGaze(views, renderLayerInfo.predictedDisplayTime);
       }
       if (rendered)
       {
@@ -2378,6 +2662,7 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
             XrPosef_ToMatrix3D(&view, &views[eye].pose);
             view = vpuScale * view * invVpuScale;
             m_nextProj[eye].SetPerspectiveFovRH(views[eye].fov.angleLeft, views[eye].fov.angleRight, views[eye].fov.angleDown, views[eye].fov.angleUp, zNear, zFar);
+            m_viewFov[eye] = views[eye].fov;
 
             // View is per eye, must be orthonormal (so every scale must be compensated)
             const Matrix3D viewInvSceneScale = view * invSceneScale;
@@ -2407,34 +2692,41 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
          // Foveated rendering: the scene is rendered with the density map the runtime keeps for the acquired image (eye-tracked when the headset allows it)
          if (g_pplayer->m_renderer)
          {
-            // Our own map when offsets are available (the runtime's maps cannot take them), else the runtime's map of the acquired image
+            // The shading rate image where the driver has it (see UpdateShadingRateMap), else our own density map when offsets are
+            // available (the runtime's maps cannot take them), else the runtime's map of the acquired image
             bgfx::TextureHandle map = BGFX_INVALID_HANDLE;
+            bool shadingRate = false;
+            const bool gazeValid = m_foveationMode != 0 && ReadGaze();
             if (m_foveationMode != 0)
             {
-               if (bgfx::isValid(m_ownFoveationMap))
+               if (UpdateShadingRateMap(gazeValid))
+               {
+                  map = m_shadingRateMap;
+                  shadingRate = true;
+               }
+               else if (bgfx::isValid(m_ownFoveationMap))
                   map = m_ownFoveationMap;
                else if (colorImageIndex < m_colorSwapchainInfo.foveationTextures.size())
                   map = m_colorSwapchainInfo.foveationTextures[colorImageIndex];
             }
-            g_pplayer->m_renderer->SetFragmentDensityMap(map);
-            // The map has its high density area in the middle: the gaze moves it through offsets, in pixels of the scene buffer
-            int32_t offsets[4] = { 0, 0, 0, 0 };
-            if (bgfx::isValid(map) && map.idx == m_ownFoveationMap.idx && m_foveationEyeTrackedExtensionSupported && m_backend->IsFragmentDensityMapOffsetSupported())
+            m_foveationShadingRate = shadingRate;
+            g_pplayer->m_renderer->SetFragmentDensityMap(map, shadingRate);
+            if (!shadingRate)
             {
-               XrFoveationEyeTrackedStateMETA state { XR_TYPE_FOVEATION_EYE_TRACKED_STATE_META };
-               if (XR_SUCCEEDED(m_xrGetFoveationEyeTrackedStateMETA(m_session, &state)) && (state.flags & XR_FOVEATION_EYE_TRACKED_STATE_VALID_BIT_META))
+               // The density map has its high density area in the middle: the gaze moves it through offsets, in pixels of the scene buffer
+               int32_t offsets[4] = { 0, 0, 0, 0 };
+               if (gazeValid && bgfx::isValid(map) && map.idx == m_ownFoveationMap.idx && m_backend->IsFragmentDensityMapOffsetSupported())
                {
                   const RenderTarget* const scene = g_pplayer->m_renderer->GetBackBufferTexture();
                   const float halfW = 0.5f * static_cast<float>(scene->GetWidth()), halfH = 0.5f * static_cast<float>(scene->GetHeight());
                   for (int eye = 0; eye < 2; eye++)
                   {
-                     m_foveationCenter[eye] = state.foveationCenter[eye];
-                     offsets[eye * 2 + 0] = static_cast<int32_t>(lroundf((m_foveationFlipX ? -1.f : 1.f) * state.foveationCenter[eye].x * halfW));
-                     offsets[eye * 2 + 1] = static_cast<int32_t>(lroundf((m_foveationFlipY ? -1.f : 1.f) * state.foveationCenter[eye].y * halfH));
+                     offsets[eye * 2 + 0] = static_cast<int32_t>(lroundf((m_foveationFlipX ? -1.f : 1.f) * m_foveationCenter[eye].x * halfW));
+                     offsets[eye * 2 + 1] = static_cast<int32_t>(lroundf((m_foveationFlipY ? -1.f : 1.f) * m_foveationCenter[eye].y * halfH));
                   }
                }
+               g_pplayer->m_renderer->SetFragmentDensityMapOffsets(offsets, 2);
             }
-            g_pplayer->m_renderer->SetFragmentDensityMapOffsets(offsets, 2);
          }
          #endif
 

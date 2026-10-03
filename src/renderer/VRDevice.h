@@ -283,6 +283,7 @@ public:
    std::shared_ptr<MeshBuffer> GetVisibilityMask() const { return m_visibilityMask; }
 
    Matrix3D* GetVisibilityMaskProjs() { return &m_nextProj[0]; }
+   std::shared_ptr<MeshBuffer> GetGazeMarker() const { return m_gazeMarker; } // Debug ring around the foveation spot (VPX_FOVEATION_DEBUG), else null
 
    void EnableControllerViewCentering(bool enable) { m_controllerViewCentering = enable; }
    bool IsControllerViewCenteringEnabled() const { return m_controllerViewCentering; }
@@ -451,6 +452,30 @@ private:
    uint32_t m_ownFoveationMapHeight = 0;
    void CreateOwnFoveationMap();
    void FillOwnFoveationMap();
+   // Shading rate image (VK_KHR_fragment_shading_rate), preferred over the density map where the driver has it since Turnip applies it in
+   // its direct render path too: one R8U rate code per texel of the scene buffer, a single image for both eyes, rewritten whenever the gaze
+   // moves with full rate around each eye's gaze (see UpdateShadingRateMap)
+   bgfx::TextureHandle m_shadingRateMap = BGFX_INVALID_HANDLE;
+   uint32_t m_shadingRateMapWidth = 0;
+   uint32_t m_shadingRateMapHeight = 0;
+   float m_shadingRateMapKey[6] = { -1.f, 0.f, 0.f, 0.f, 0.f, 0.f }; // Level, scale and disc centers of the last upload
+   bool m_foveationShadingRate = false; // The scene is foveated through the shading rate image (else the density map)
+   bool ReadGaze(); // Updates m_foveationCenter from the runtime, true when the gaze is valid
+   // Gaze as a ray (XR_EXT_eye_gaze_interaction), preferred over the runtime's foveation center since it can be taken with the head pose of its
+   // sample and projected with the views of the frame: the point looked at stays put while the head moves. See LocateGaze.
+   bool m_eyeGazeExtensionSupported = false;
+   bool m_eyeGazeSystemSupported = false;
+   XrSpace m_gazeSpace = XR_NULL_HANDLE;
+   bool m_gazeRayValid = false; // For the current frame
+   bool m_gazePointValid = false; // Smoothed fixated point, in the reference space
+   XrVector3f m_gazePoint {};
+   XrTime m_gazePointTime = 0;
+   void LocateGaze(const std::vector<XrView>& views, XrTime displayTime);
+   bool UpdateShadingRateMap(bool gazeValid); // False when the image is not available
+   // VPX_FOVEATION_DEBUG: a ring drawn around the full quality spot of each eye, so the spot can be compared with the gaze in the headset
+   XrFovf m_viewFov[2] = {};
+   std::shared_ptr<MeshBuffer> m_gazeMarker;
+   void UpdateGazeMarker(const float* cxNdc, const float* cyNdc, float radiusNdc); // Image space (y down), one center per eye
 
    // Performance counters of the runtime (XR_META_performance_metrics), logged periodically to compare settings on the device
    bool m_performanceMetricsExtensionSupported = false;

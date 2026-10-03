@@ -35,7 +35,8 @@ private:
    }
 
 public:
-   XRInputHandler(InputManager& pininput, XrInstance instance, XrSession session)
+   // eyeGaze: the runtime has XR_EXT_eye_gaze_interaction enabled, so the gaze pose is bound too (used by the foveated rendering)
+   XRInputHandler(InputManager& pininput, XrInstance instance, XrSession session, bool eyeGaze = false)
       : m_pininput(pininput)
       , m_instance(instance)
       , m_session(session)
@@ -82,7 +83,10 @@ public:
          { "/user/hand/left/input/bumper/click"s, XR_ACTION_TYPE_BOOLEAN_INPUT }, { "/user/hand/right/input/bumper/click"s, XR_ACTION_TYPE_BOOLEAN_INPUT }, // 39, 40
 
          // Pointing poses (in-headset UI)
-         { "/user/hand/left/input/aim/pose"s, XR_ACTION_TYPE_POSE_INPUT }, { "/user/hand/right/input/aim/pose"s, XR_ACTION_TYPE_POSE_INPUT } // 41, 42
+         { "/user/hand/left/input/aim/pose"s, XR_ACTION_TYPE_POSE_INPUT }, { "/user/hand/right/input/aim/pose"s, XR_ACTION_TYPE_POSE_INPUT }, // 41, 42
+
+         // Eye gaze (XR_EXT_eye_gaze_interaction, foveated rendering)
+         { "/user/eyes_ext/input/gaze_ext/pose"s, XR_ACTION_TYPE_POSE_INPUT } // 43
       };
 
       // Bind them
@@ -121,7 +125,7 @@ public:
       }
 
       // Register these bindings for major profiles
-      static const std::array<const char*, 7> profiles { //
+      std::vector<const char*> profiles { //
          "/interaction_profiles/valve/frame_controller_valve", // Needs XR_VALVE_frame_controller_interaction (enabled by VRDevice when available), otherwise the runtime emulates a Touch controller
          "/interaction_profiles/khr/simple_controller", //
          "/interaction_profiles/oculus/touch_controller", //
@@ -129,6 +133,8 @@ public:
          "/interaction_profiles/htc/vive_controller", //
          "/interaction_profiles/microsoft/motion_controller", //
          "/interaction_profiles/google/daydream_controller" };
+      if (eyeGaze)
+         profiles.push_back("/interaction_profiles/ext/eye_gaze_interaction"); // Only the gaze pose is accepted there (SuggestBindings keeps what the profile takes)
       for (const char* p : profiles)
       {
          SuggestBindings(p, bindings);
