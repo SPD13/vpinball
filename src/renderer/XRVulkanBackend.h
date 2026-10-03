@@ -245,6 +245,7 @@ public:
       VkPhysicalDeviceFragmentDensityMapFeaturesEXT fdmFeatures { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT };
       VkPhysicalDeviceFragmentDensityMapLayeredFeaturesVALVE fdmLayeredFeatures { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_LAYERED_FEATURES_VALVE };
       VkPhysicalDeviceFragmentDensityMapOffsetFeaturesEXT fdmOffsetFeatures { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_OFFSET_FEATURES_EXT };
+      VkPhysicalDeviceFragmentShadingRateFeaturesKHR fsrFeatures { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR };
       void* deviceInfoNext = nullptr;
       #ifdef BGFX_TEXTURE_FRAGMENT_DENSITY_MAP
       {
@@ -256,17 +257,54 @@ public:
             std::vector<VkExtensionProperties> available(count);
             enumerateDeviceExtensions(m_physicalDevice, nullptr, &count, available.data());
             const auto has = [&](const char* name) { return std::any_of(available.begin(), available.end(), [name](const VkExtensionProperties& p) { return strcmp(p.extensionName, name) == 0; }); };
+            const auto enable = [&](const char* name)
+            {
+               if (std::none_of(deviceExtensions.begin(), deviceExtensions.end(), [name](const char* e) { return strcmp(e, name) == 0; }))
+                  deviceExtensions.push_back(name);
+            };
+            #ifdef BGFX_TEXTURE_FRAGMENT_SHADING_RATE
+            // Fragment shading rate attachments: the other way to foveate, which Turnip applies in its direct render path too (density maps
+            // force the tiled one). Needs the pipeline rate feature for the combiner that lets the attachment's rate win.
+            if (has(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME) && has(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME))
+            {
+               const PFN_vkGetPhysicalDeviceFeatures2 getFeatures2 = (PFN_vkGetPhysicalDeviceFeatures2)m_vulkan._vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceFeatures2");
+               const PFN_vkGetPhysicalDeviceProperties2 getProperties2 = (PFN_vkGetPhysicalDeviceProperties2)m_vulkan._vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceProperties2");
+               if (getFeatures2 && getProperties2)
+               {
+                  VkPhysicalDeviceFragmentShadingRateFeaturesKHR fsrAvailable { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR };
+                  VkPhysicalDeviceFeatures2 features2 { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &fsrAvailable };
+                  getFeatures2(m_physicalDevice, &features2);
+                  VkPhysicalDeviceFragmentShadingRatePropertiesKHR fsrProperties { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR };
+                  VkPhysicalDeviceProperties2 properties2 { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &fsrProperties };
+                  getProperties2(m_physicalDevice, &properties2);
+                  if (fsrAvailable.pipelineFragmentShadingRate && fsrAvailable.attachmentFragmentShadingRate && fsrProperties.minFragmentShadingRateAttachmentTexelSize.width > 0)
+                  {
+                     m_fsrSupported = true;
+                     m_fsrTexelSize = fsrProperties.minFragmentShadingRateAttachmentTexelSize.width;
+                     m_fsrMaxFragmentSize = fsrProperties.maxFragmentSize.width;
+                     enable(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+                     enable(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
+                     fsrFeatures.pipelineFragmentShadingRate = VK_TRUE;
+                     fsrFeatures.attachmentFragmentShadingRate = VK_TRUE;
+                     fsrFeatures.primitiveFragmentShadingRate = fsrAvailable.primitiveFragmentShadingRate;
+                     fsrFeatures.pNext = deviceInfoNext;
+                     deviceInfoNext = &fsrFeatures;
+                  }
+               }
+            }
+            PLOGI << "Fragment shading rate attachments: " << (m_fsrSupported ? "supported, texel " + std::to_string(m_fsrTexelSize) + ", fragments up to " + std::to_string(m_fsrMaxFragmentSize) + 'x' + std::to_string(m_fsrMaxFragmentSize) : "not supported by the driver");
+            #endif
             if (has(VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME))
             {
                m_fdmSupported = true;
-               deviceExtensions.push_back(VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME);
+               enable(VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME);
                fdmFeatures.fragmentDensityMap = VK_TRUE;
                fdmFeatures.pNext = deviceInfoNext;
                deviceInfoNext = &fdmFeatures;
                if (has(VK_VALVE_FRAGMENT_DENSITY_MAP_LAYERED_EXTENSION_NAME))
                {
                   m_fdmLayeredSupported = true;
-                  deviceExtensions.push_back(VK_VALVE_FRAGMENT_DENSITY_MAP_LAYERED_EXTENSION_NAME);
+                  enable(VK_VALVE_FRAGMENT_DENSITY_MAP_LAYERED_EXTENSION_NAME);
                   fdmLayeredFeatures.fragmentDensityMapLayered = VK_TRUE;
                   fdmLayeredFeatures.pNext = deviceInfoNext;
                   deviceInfoNext = &fdmLayeredFeatures;
@@ -275,8 +313,8 @@ public:
                if (has(VK_EXT_FRAGMENT_DENSITY_MAP_OFFSET_EXTENSION_NAME) && has(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME))
                {
                   m_fdmOffsetSupported = true;
-                  deviceExtensions.push_back(VK_EXT_FRAGMENT_DENSITY_MAP_OFFSET_EXTENSION_NAME);
-                  deviceExtensions.push_back(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
+                  enable(VK_EXT_FRAGMENT_DENSITY_MAP_OFFSET_EXTENSION_NAME);
+                  enable(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
                   fdmOffsetFeatures.fragmentDensityMapOffset = VK_TRUE;
                   fdmOffsetFeatures.pNext = deviceInfoNext;
                   deviceInfoNext = &fdmOffsetFeatures;
@@ -401,6 +439,9 @@ public:
    void RequestFoveationImages(bool request) override { m_requestFoveationImages = request && m_fdmSupported; }
    bool IsFragmentDensityMapSupported() const override { return m_fdmSupported; }
    bool IsFragmentDensityMapOffsetSupported() const override { return m_fdmOffsetSupported; }
+   bool IsFragmentShadingRateSupported() const override { return m_fsrSupported; }
+   uint32_t GetFragmentShadingRateTexelSize() const override { return m_fsrTexelSize; }
+   uint32_t GetFragmentShadingRateMaxFragmentSize() const override { return m_fsrMaxFragmentSize; }
 
    // Wrap the runtime's density map images as textures (external images: bgfx neither allocates nor transitions them), so the scene render target can attach them
    bool CreateFoveationTextures(VRDevice::SwapchainInfo& swapchain) override
@@ -456,6 +497,9 @@ private:
    bool m_fdmSupported = false;
    bool m_fdmLayeredSupported = false;
    bool m_fdmOffsetSupported = false;
+   bool m_fsrSupported = false;
+   uint32_t m_fsrTexelSize = 0;
+   uint32_t m_fsrMaxFragmentSize = 1;
    bool m_requestFoveationImages = false;
 };
 

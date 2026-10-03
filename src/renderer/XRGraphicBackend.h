@@ -25,6 +25,10 @@ public:
    virtual bool CreateFoveationTextures(VRDevice::SwapchainInfo& swapchain) { return false; }
    virtual bool IsFragmentDensityMapSupported() const { return false; }
    virtual bool IsFragmentDensityMapOffsetSupported() const { return false; }
+   // Fragment shading rate attachments (VK_KHR_fragment_shading_rate): a single layer R8U image of one rate code per texel of this size
+   virtual bool IsFragmentShadingRateSupported() const { return false; }
+   virtual uint32_t GetFragmentShadingRateTexelSize() const { return 0; }
+   virtual uint32_t GetFragmentShadingRateMaxFragmentSize() const { return 1; }
 
    virtual const std::vector<int64_t> GetSupportedColorSwapchainFormats() = 0;
    virtual const std::vector<int64_t> GetSupportedDepthSwapchainFormats() = 0;

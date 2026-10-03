@@ -60,8 +60,9 @@ public:
    void ResolveMSAADepth();
    #ifdef BGFX_RESOLVE_FRAGMENT_DENSITY_MAP
    // Foveated rendering: render through a frame buffer that carries this fragment density map (an invalid handle restores the plain one). The
-   // variants are cached since the runtime hands a different map for each of its swapchain images.
-   void SetFragmentDensityMap(bgfx::TextureHandle map);
+   // variants are cached since the runtime hands a different map for each of its swapchain images. The map may instead be a fragment shading
+   // rate attachment (one R8U rate code per texel, a single layer) when bgfx supports those.
+   void SetFragmentDensityMap(bgfx::TextureHandle map, bool shadingRate = false);
    void SetFragmentDensityMapOffsets(const int32_t* offsetsXY, int nLayers); // For the current frame, on the foveated frame buffer in use
    #endif
    static void OnFrameFlushed() { current_render_target = nullptr; current_render_layer = 0; current_render_scale = 1.f; }

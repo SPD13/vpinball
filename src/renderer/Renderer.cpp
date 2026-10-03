@@ -478,13 +478,13 @@ bool Renderer::IsBallLightingDisabled() const
 }
 
 #if defined(ENABLE_BGFX) && defined(BGFX_RESOLVE_FRAGMENT_DENSITY_MAP)
-void Renderer::SetFragmentDensityMap(bgfx::TextureHandle map)
+void Renderer::SetFragmentDensityMap(bgfx::TextureHandle map, bool shadingRate)
 {
    // Both scene buffers: they are swapped every frame (previous frame kept for reflections and motion blur)
    if (m_pOffscreenBackBufferTexture1)
-      m_pOffscreenBackBufferTexture1->SetFragmentDensityMap(map);
+      m_pOffscreenBackBufferTexture1->SetFragmentDensityMap(map, shadingRate);
    if (m_pOffscreenBackBufferTexture2)
-      m_pOffscreenBackBufferTexture2->SetFragmentDensityMap(map);
+      m_pOffscreenBackBufferTexture2->SetFragmentDensityMap(map, shadingRate);
 }
 
 void Renderer::SetFragmentDensityMapOffsets(const int32_t* offsetsXY, int nLayers)
@@ -3088,6 +3088,25 @@ void Renderer::RenderFrame()
    RenderDynamics();
 
    g_pplayer->m_liveUI->Render3D();
+
+   #ifdef ENABLE_XR
+   // Foveation debug (VPX_FOVEATION_DEBUG): a ring around the full quality spot of each eye, drawn on top of the scene like the visibility mask
+   if (g_pplayer->IsVR())
+      if (std::shared_ptr<MeshBuffer> marker = g_pplayer->m_vrDevice->GetGazeMarker(); marker)
+      {
+         static constexpr Vertex3Ds pos{0.f, 0.f, 0.f};
+         m_renderDevice->SetRenderTarget("Gaze marker"s, GetMSAABackBufferTexture(), true, true); // Its own pass, after everything
+         m_renderDevice->ResetRenderState();
+         m_renderDevice->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
+         m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
+         m_renderDevice->SetRenderState(RenderState::ZENABLE, RenderState::RS_FALSE);
+         m_renderDevice->m_basicShader->SetMatrix(ShaderUniform::matWorldViewProj, g_pplayer->m_vrDevice->GetVisibilityMaskProjs(), 2);
+         m_renderDevice->m_basicShader->SetVector(ShaderUniform::staticColor_Alpha, 1.f, 0.f, 1.f, 1.f);
+         m_renderDevice->m_basicShader->SetTechnique(ShaderTechnique::vr_mask);
+         m_renderDevice->DrawMesh(m_renderDevice->m_basicShader, false, pos, 0.f, marker, RenderDevice::TRIANGLELIST, 0, marker->m_ib->m_count);
+         UpdateBasicShaderMatrix();
+      }
+   #endif
 
    // Keep latency low by proceeding input, ... (as next passes are not affected by the game logic)
    g_pplayer->UpdateGameLogic();

@@ -109,9 +109,9 @@ The default autotuner algorithm, `BANDWIDTH`, compares an estimate of the memory
 
 1. **Foveated rendering is not broken; it is the wrong lever for this workload on this driver.** Everything from the OpenXR profile to the per-bin density scaling works and is visible. It removes fragment work, and fragment work is not what the scene pass is bound by once the driver tiles it.
 2. **The bottleneck is tiled rendering of a geometry-heavy pass.** On a tile-based GPU, Visual Pinball's scene pass — hundreds of draws of dense meshes covering most of the view — pays for its geometry once per tile. Direct rendering pays once. The difference is ≈ 5 ms per frame at native resolution, 35 % of the frame.
-3. **Using a density map locks the pass into the expensive path.** So on Turnip, "foveation on" means "tiled", and tiled costs more than foveation can save. Foveation would only pay on a pass whose fragment shading dominates even after the per-tile geometry cost, or on a driver that applies density maps in direct rendering, which Turnip does not.
+3. **Using a density map locks the pass into the expensive path.** So on Turnip, "foveation on" means "tiled", and tiled costs more than foveation can save. Foveation would only pay on a pass whose fragment shading dominates even after the per-tile geometry cost, or on a driver that applies density maps in direct rendering, which Turnip does not. *(Postscript, section 8: Turnip applies the other foveation mechanism, the fragment shading rate attachment, in direct rendering too, and that one recovers the gain.)*
 4. **The fix is to let the driver measure.** `TU_AUTOTUNE_ALGO=profiled` (or `prefer_sysmem`) set in the environment before the Vulkan driver loads gives 9.1–9.3 ms frames at native resolution with the table that was at 14.0 ms. The application now sets it itself for Linux standalone builds (`src/core/main.cpp`, without overwriting a value the user set).
-5. **Foveation defaults to Off** on the Frame and stays available in the VR settings page, for tables that would turn out fragment-bound and for other drivers.
+5. **Foveation defaults to Off** on the Frame and stays available in the VR settings page, for tables that would turn out fragment-bound and for other drivers. *(Superseded by section 8: with the shading rate image it defaults to Medium.)*
 6. **The visibility mask no longer disables LRZ and is drawn first**, verified in the driver's trace (`lrz=true` through all the opaque draws). Frame time with everything in place, nothing set in the environment: **9.0–9.2 ms** at native resolution on the heaviest table.
 
 ## 6. What this changes in the plans
@@ -140,3 +140,26 @@ MESA_GPU_TRACES=print MESA_GPU_TRACEFILE=/tmp/gputrace.txt LD_LIBRARY_PATH=$PWD 
 ```
 
 The headset must be worn: frames (and therefore every number above) only flow while the runtime considers the session visible. A run that prints `gpu_frametime 0.18 ms` with no breakdown is a run during which nothing was rendered.
+
+## 8. Postscript (2026-10-03): the other lever, a shading rate image in direct rendering
+
+Vulkan has two ways to shade fewer fragments than pixels: the fragment density map used above, and the **fragment shading rate attachment** of `VK_KHR_fragment_shading_rate` (an R8 image of one rate code per 8×8 texel block, up to 4×4 pixels per fragment). Reading the driver again for the second one: Turnip programs the rate attachment at subpass begin (`tu7_emit_subpass_shading_rate`, a7xx), in the command stream shared by both render paths, and its autotuner has no rule that forces a pass with a rate attachment into tiling. So, unlike density maps, it should work with the scene pass rendered directly. The device advertises it (`attachmentFragmentShadingRate`, texel 8×8, max fragment 4×4, one rate image for all layers of a layered target).
+
+**Test.** A third bgfx patch adds the rate attachment to a frame buffer (`BGFX_RESOLVE_FRAGMENT_SHADING_RATE`, render pass created through `vkCreateRenderPass2` with `VkFragmentShadingRateAttachmentInfoKHR`, pipeline combiner `KEEP, REPLACE` so the attachment's rate wins), and the scene buffer gets a 270×270 rate image. Fixed images first, to measure the mechanism before writing the gaze into it: 4×4 everywhere (the upper bound of what shading can give), 2×2 everywhere, and the High and Low rings of the density map profile fixed at the center. Native 2160×2160 per eye, dynamic resolution off, counter `gpu_frametime` sampled every 5 s over 40 s per run, medians:
+
+| Run | Ghostbusters | Addams Family | Seen in the headset |
+|---|---|---|---|
+| baseline (59 °C / 71 °C) | 11.3 ms | 14.9 ms | — |
+| 4×4 everywhere | 9.1 (−2.2, −19 %) | **11.0 (−3.9, −26 %)** | unusable, as intended |
+| 2×2 everywhere | 9.7 (−1.6) | — | soft |
+| High rings, fixed center | 9.2 (−2.1) | **11.6 (−3.3, −22 %)** | sharp zone not where one looks |
+| Low rings, fixed center | 10.0 (−1.3) | 12.1 (−2.8) | indistinguishable from the baseline |
+| baseline again (68 °C / 71 °C) | 11.6 | 15.1 | — |
+
+The driver's trace is not needed this time: the pass stayed direct (High rings give almost the whole upper bound, where density maps gave 0.5 ms), and the floor of 4×4 everywhere, ≈ 9 ms on Ghostbusters and ≈ 11 ms on Addams, is the cost that no foveation can touch: geometry, the playfield probe, the post passes.
+
+**What this changes.** On the heaviest table, High rings bring the frame from 14.9 to 11.6 ms, inside the 72 Hz budget with margin, at full resolution where the eyes look, which dynamic resolution only achieved by rendering the whole image at 80 %. So the foveation setting is back on by default (Medium) on the Frame, now through the shading rate image: the gaze, taken as a ray from `XR_EXT_eye_gaze_interaction` at its sample time and projected with the views of the frame (so that an object the eyes hold stays sharp while the head turns, which the runtime's per-image foveation center could not give), rewrites the 270×270 image (73 KB, only when a disc moved by more than half a texel) with full rate in a disc around each eye's gaze (the one image serves both eyes, so the union of the two discs), 2×2 in a ring, 4×4 beyond. Without a valid gaze the wide Low profile is used at the center, which the test showed to be invisible. The density map path stays as the fallback for drivers without the extension. Dynamic resolution remains the safety net underneath.
+
+Measured with the setting, eye-tracked, on Addams Family at native resolution (headset at 67–71 °C): Off 14.3 ms, High 11.2, Medium 11.3, Low 11.5 — about 3 ms, 22 % of the frame, at every level; the 4×4-everywhere floor is 11.0.
+
+One correction to section 3 came out of wiring the gaze: bgfx treats a texture created with initial data as immutable and silently ignores later updates. The density map of section 3 was created that way and filled by updates, so it always held full density everywhere: its "0.5 ms at High" was tiled rendering with no foveation. The forced tiling (the driver's rule, and the `TU_DEBUG=sysmem` measurement) stands; the gain a real density map would have in the tiled path was never actually measured. The shading rate image now avoids the trap (created empty, then filled).

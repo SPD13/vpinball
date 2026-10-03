@@ -263,13 +263,19 @@ PropEnum(PlayerVR, AskToTurnOn, "Enable VR"s, "Ask to turn on VR"s, int, 2, "Ena
 #endif
 // Foveated rendering: full shading only around the point the eyes look at, requested from the OpenXR runtime (XR_FB_foveation; on the Steam Frame the
 // runtime generates eye-tracked density maps when XR_META_foveation_eye_tracked is available and eye tracking is enabled in the headset settings).
-// Off by default: on the Steam Frame the driver only applies density maps in its tiled render path, where a heavy table's scene pass is geometry-bound,
-// so the measured gain is marginal while direct rendering of that pass is what makes native resolution affordable (docs/Steam Frame Branch.md, section 9).
-// Kept available for tables that are fragment-bound and for other drivers; inert where the runtime lacks the extension
+// On the Steam Frame the scene is foveated through a fragment shading rate image that follows the gaze, which the driver applies in its direct render
+// path (density maps force its tiled path, where a heavy table's scene pass is geometry-bound and the gain is lost): Medium by default there, 2-4 ms
+// per frame on heavy tables at native resolution (docs/Steam Frame Branch.md, section 9). Without a valid gaze the wide Low profile is used at the
+// center of the view. Off elsewhere; inert where the runtime lacks the extension
+#if defined(__STANDALONE__) && defined(ENABLE_XR)
+PropEnum(PlayerVR, Foveation, "Foveated rendering"s, "Reduce the shading quality away from the point the eyes look at, to render at a higher resolution or with heavier settings. Needs runtime support (Steam Frame); eye-tracked when the headset allows it, otherwise fixed at the center"s, int, 2, "Off"s, "Low"s, "Medium"s, "High"s);
+#else
 PropEnum(PlayerVR, Foveation, "Foveated rendering"s, "Reduce the shading quality away from the point the eyes look at, to render at a higher resolution or with heavier settings. Needs runtime support (Steam Frame); eye-tracked when the headset allows it, otherwise fixed at the center"s, int, 0, "Off"s, "Low"s, "Medium"s, "High"s);
-// Sign conventions of the gaze offsets applied to the density map (the runtime reports the gaze in normalized coordinates, Vulkan images have y down); kept as settings to be tuned on the device
+#endif
+// Sign conventions of the gaze applied to the foveation image (the runtime reports the gaze in normalized coordinates); kept as settings to be checked on a
+// headset with VPX_FOVEATION_DEBUG=1, which circles the full quality spot. On the Steam Frame (SteamVR 2.17) neither axis is mirrored (checked 2026-10-03)
 PropBool(PlayerVR, FoveationFlipX, "Foveation offset: flip X"s, "Mirror the horizontal gaze offset of the foveated rendering"s, false);
-PropBool(PlayerVR, FoveationFlipY, "Foveation offset: flip Y"s, "Mirror the vertical gaze offset of the foveated rendering"s, true);
+PropBool(PlayerVR, FoveationFlipY, "Foveation offset: flip Y"s, "Mirror the vertical gaze offset of the foveated rendering"s, false);
 PropBool(PlayerVR, FoveationEyeTracked, "Eye-tracked foveation"s, "Follow the eyes with the foveated rendering when the runtime supports it (XR_META_foveation_eye_tracked) and eye tracking is enabled in the headset settings; otherwise the full quality area is fixed at the center of the view"s, true);
 PropEnum(PlayerVR, DisplayRefreshRate, "Headset Refresh Rate"s, "Refresh rate requested from the headset when supported. Lower rates give the renderer more time per frame and avoid reprojected frames on standalone headsets"s, int, 0, "Runtime default"s, "72 Hz"s, "80 Hz"s, "90 Hz"s, "120 Hz"s);
 PropFloatDyn(PlayerVR, Orientation, "View orientation"s, "VR view orientation"s, -180.f, 180.f, 0.f);
@@ -1417,6 +1423,8 @@ PropString(Standalone, TablesPath, "Tables folder"s, "Folder of the table librar
 PropBool(Standalone, TablePickerGridView, "Table picker grid view"s, "Display the tables of the in-game table picker as a grid of images instead of a list of names"s, true);
 PropBool(Standalone, TablePickerSortAscending, "Table picker sort order"s, "Sort the tables of the in-game table picker from A to Z instead of Z to A"s, true);
 PropEnum(Standalone, TableImageFocus, "Table image focus"s, "What the images of the tables captured in VR show: the backglass, the playfield seen from above, or the whole cabinet"s, int, 0, "Backglass"s, "Table"s, "Cabinet"s);
+PropBool(Standalone, WebServerAlwaysOn, "Wi-Fi upload always on"s, "Start the web server of the table picker with the application, instead of only when it is turned on from the menu"s, false);
+PropBool(Standalone, WebServerPairing, "Wi-Fi upload pairing code"s, "Ask the browsers for the code displayed by the application before giving them access to the tables folder. When disabled, any device on the local network can add, change or delete tables."s, true);
 PropFloat(Standalone, VRMenuDistance, "VR menu distance"s, "Distance in meters between the player and the menu window in VR"s, 0.3f, 3.f, 0.8f);
 
 // Editor settings
