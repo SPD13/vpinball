@@ -78,8 +78,10 @@ public:
    VPinballLib::TableLibrary& GetTableLibrary();
 
 #ifdef VPX_TABLE_WEBSERVER
-   // Web server to manage the table library from a browser. It is never started automatically, and stopped when a table is launched.
+   // Web server to manage the table library from a browser. It runs from its activation in the table picker until the application is closed,
+   // across the lobby and the tables, and is started with the application when set to be always on (Standalone.WebServerAlwaysOn).
    WebServer& GetWebServer();
+   void StartWebServerIfAlwaysOn();
 #endif
 
    // When no PinMAME folder is defined, use a 'pinmame' folder shared by all tables inside the tables folder (created if needed),
