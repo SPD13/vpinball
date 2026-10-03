@@ -218,6 +218,10 @@ extern "C" int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, 
       isPlay |= dynamic_cast<LauncherCommand*>(cmdLine.m_command.get()) != nullptr;
       #endif
       theApp.InitInstance(isPlay);
+      #ifdef VPX_TABLE_WEBSERVER
+      if (isPlay)
+         theApp.StartWebServerIfAlwaysOn();
+      #endif
 
       // The video subsystem is initialized lazily when a window is created (see VPX::Window), so
       // headless commands (info, script/POV export, audit, tournament validation) run without a

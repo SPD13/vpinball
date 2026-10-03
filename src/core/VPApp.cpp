@@ -486,8 +486,17 @@ void VPApp::ResetLobbyRoom()
 WebServer& VPApp::GetWebServer()
 {
    if (m_webServer == nullptr)
+   {
       m_webServer = std::make_unique<WebServer>();
+      m_webServer->SetPairingRequired(m_settings.GetStandalone_WebServerPairing());
+   }
    return *m_webServer;
+}
+
+void VPApp::StartWebServerIfAlwaysOn()
+{
+   if (m_settings.GetStandalone_WebServerAlwaysOn() && !GetWebServer().IsRunning())
+      GetWebServer().Start();
 }
 #endif
 #endif

@@ -37,7 +37,19 @@ static constexpr const char* TABS_ITEM = "##tabs";
 static constexpr const char* SEARCH_ITEM = "##search";
 static constexpr const char* PAGER_TOP_ITEM = "##pager-top";
 static constexpr const char* PAGER_BOTTOM_ITEM = "##pager-bottom";
+static constexpr const char* PAIRING_ITEM = "##pairing";
 static constexpr const char* FILTER_LABEL = "Show: ";
+
+#ifdef VPX_TABLE_WEBSERVER
+// Whether browsers must enter the pairing code, remembered for the next sessions, and applied at once to the running server
+static void SetWebServerPairing(bool required)
+{
+   g_app->m_settings.SetStandalone_WebServerPairing(required, false);
+   g_app->m_settings.Save();
+   g_app->GetWebServer().SetPairingRequired(required);
+   PLOGI << "Wi-Fi upload pairing code " << (required ? "enabled" : "disabled");
+}
+#endif
 
 static constexpr int TABLES_PER_PAGE = 12; // Rows of 2, 3, 4 or 6 tiles, depending on the width of the menu
 
@@ -226,6 +238,13 @@ void TablePickerPage::AdjustItem(float direction, bool isInitialPress)
          SetPage((s_page + (direction < 0.f ? m_pageCount - 1 : 1)) % max(m_pageCount, 1), item->m_label);
          return;
       }
+#ifdef VPX_TABLE_WEBSERVER
+      if (item->m_label == PAIRING_ITEM)
+      {
+         SetWebServerPairing(!g_app->GetWebServer().IsPairingRequired());
+         return;
+      }
+#endif
       if (item->m_label == SEARCH_ITEM)
       {
          // Without a keyboard, the search text is entered with the navigation buttons
@@ -295,6 +314,38 @@ void TablePickerPage::RenderTabs()
    }
    ImGui::PopID();
 }
+
+#ifdef VPX_TABLE_WEBSERVER
+// The pairing code, with a switch on its right to stop asking for it. With buttons, left/right flip the switch.
+void TablePickerPage::RenderPairing()
+{
+   const bool required = g_app->GetWebServer().IsPairingRequired();
+   const InGameUIItem* const selectedItem = GetSelectedItem();
+   const bool hasFocus = m_player->m_liveUI->m_inGameUI.IsFlipperNav() && selectedItem != nullptr && selectedItem->m_label == PAIRING_ITEM;
+   ImGui::AlignTextToFramePadding();
+   ImGui::Text("Pairing code: %s", required ? m_pairingCode.c_str() : "disabled");
+   ImGui::SameLine(0.f, ImGui::GetStyle().ItemSpacing.x * 4.f);
+
+   // The switch and its state form a single button, large enough to be hit easily with a VR pointer
+   const char* const stateLabel = required ? "Required" : "Off";
+   const float height = ImGui::GetFrameHeight();
+   const ImVec2 trackSize(height * 1.8f, height);
+   const float labelSpacing = ImGui::GetStyle().ItemInnerSpacing.x;
+   const ImVec2 pos = ImGui::GetCursorScreenPos();
+   ImGui::PushID(PAIRING_ITEM);
+   if (ImGui::InvisibleButton("switch", ImVec2(trackSize.x + labelSpacing + ImGui::CalcTextSize(stateLabel).x, height)))
+      SetWebServerPairing(!required);
+   ImGui::PopID();
+   const bool isHovered = ImGui::IsItemHovered() || hasFocus;
+   ImDrawList* const drawList = ImGui::GetWindowDrawList();
+   const float radius = height * 0.5f;
+   drawList->AddRectFilled(pos, pos + trackSize, required ? IM_COL32(0, 160, 0, 255) : IM_COL32(110, 110, 110, 255), radius);
+   if (isHovered)
+      drawList->AddRect(pos, pos + trackSize, IM_COL32(0, 255, 0, 255), radius, ImDrawFlags_None, 2.f);
+   drawList->AddCircleFilled(pos + ImVec2(required ? trackSize.x - radius : radius, radius), radius - 3.f, IM_COL32_WHITE);
+   drawList->AddText(pos + ImVec2(trackSize.x + labelSpacing, (height - ImGui::GetTextLineHeight()) * 0.5f), isHovered ? IM_COL32(0, 255, 0, 255) : IM_COL32_WHITE, stateLabel);
+}
+#endif
 
 void TablePickerPage::RenderSearch()
 {
@@ -641,21 +692,29 @@ void TablePickerPage::BuildMenuTab()
    WebServer& webServer = g_app->GetWebServer();
    m_webServerUrl = webServer.GetUrl();
    m_pairingCode = webServer.GetPairingCode();
-   AddItem(std::make_unique<InGameUIItem>(webServer.IsRunning() ? "Wi-Fi upload: On"s : "Wi-Fi upload: Off"s,
-      "Manage tables from the browser of a phone or computer connected to the same network. Stopped when a table is played."s,
-      [this]()
+   // 3 modes: off, on until the application is closed (to be turned on again at the next launch), or always on (started with the application)
+   const bool alwaysOn = g_app->m_settings.GetStandalone_WebServerAlwaysOn();
+   AddItem(std::make_unique<InGameUIItem>(!webServer.IsRunning() ? "Wi-Fi upload: Off"s : alwaysOn ? "Wi-Fi upload: On (always on)"s : "Wi-Fi upload: On (ask every time)"s,
+      "Manage tables from the browser of a phone or computer connected to the same network. Once on, it stays on while tables are played. 'Ask every time' turns it on until the application is closed, 'always on' also when the application starts."s,
+      [this, alwaysOn]()
       {
          WebServer& webServer = g_app->GetWebServer();
-         if (webServer.IsRunning())
+         // Off -> On (ask every time) -> On (always on) -> Off
+         const bool startWithApp = webServer.IsRunning() && !alwaysOn;
+         if (webServer.IsRunning() && alwaysOn)
             webServer.Stop();
-         else
+         else if (!webServer.IsRunning())
             webServer.Start();
+         g_app->m_settings.SetStandalone_WebServerAlwaysOn(startWithApp, false);
+         g_app->m_settings.Save();
          RequestRebuild();
       }));
    if (webServer.IsRunning())
    {
       AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Info, m_webServerUrl.empty() ? "No network address found"s : "Open " + m_webServerUrl));
-      AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Info, "Pairing code: " + m_pairingCode));
+      AddItem(std::make_unique<InGameUIItem>(PAIRING_ITEM,
+         "Left/Right: ask, or not, for the pairing code before giving a browser access to the tables folder. Without it, any device on the local network can add, change or delete tables."s,
+         [this](int, const InGameUIItem*) { RenderPairing(); })).m_customHighlight = true;
    }
 #endif
 }
@@ -789,10 +848,6 @@ void TableActionsPage::BuildPage()
    AddItem(std::make_unique<InGameUIItem>(isRunning ? "Restart"s : "Play"s, ""s,
       [this, tablePath = library.GetFullPath(*table)]()
       {
-#ifdef VPX_TABLE_WEBSERVER
-         if (g_app->GetWebServer().IsRunning())
-            g_app->GetWebServer().Stop();
-#endif
          g_app->m_nextTableFilename = tablePath;
          m_player->SetCloseState(Player::CS_CLOSE_CAPTURE_SCREENSHOT);
       }));

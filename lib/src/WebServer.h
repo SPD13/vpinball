@@ -29,6 +29,7 @@ public:
    // When pairing is required, the API is only served to browsers that entered the code displayed by the application.
    // This is the default for the desktop application, as the server has no other access control and listens on the local network.
    void SetPairingRequired(bool required) { m_pairingRequired = required; }
+   bool IsPairingRequired() const { return m_pairingRequired; }
    string GetPairingCode();
 
 private:
@@ -65,9 +66,9 @@ private:
    std::unique_ptr<std::thread> m_pThread;
    string m_url;
 #ifdef __LIBVPINBALL__
-   bool m_pairingRequired = false;
+   std::atomic<bool> m_pairingRequired = false;
 #else
-   bool m_pairingRequired = true;
+   std::atomic<bool> m_pairingRequired = true; // Read by the server thread, changed from the UI
 #endif
    std::mutex m_pairingMutex;
    string m_pairingCode;
