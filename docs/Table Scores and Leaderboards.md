@@ -2,7 +2,7 @@
 
 The standalone player records the score of every game played on a table of its library, under the name of the player wearing the headset, and keeps a leaderboard per table. Players are chosen in the lobby; the scores are shown in the lobby after each table and in a Scores tab, and are managed from a browser through the web server (Scores page). This is part of the `steam-frame` work (branch `leaderboards`), written for the Steam Frame but built into every desktop standalone build (macOS, Linux, windows-mingw).
 
-Nothing has to be entered by hand: the score is read from the table while it runs. That is the hard part, because tables keep their scores in very different places. This document explains how it is done, how the scores are stored and shown, and how to fix a table whose scores are not found.
+Nothing has to be entered by hand: the score is read from the table while it runs. That is the hard part, because tables keep their scores in very different places. This document explains how it is done, how the scores are stored and shown, and how to fix a table whose scores are not found. Section 12 is the field guide for that last part: the test harness that plays a library unattended, how to read its results, the probing techniques that find where a table keeps its scores and when its games end, and what was learned on the 46 tables of the Steam Frame library (appendix A).
 
 ## 1. What the player gets
 
@@ -47,7 +47,7 @@ Each source gives a *reading*: the scores of the players (player 1 first), the n
 
 | Name (stored in `source`) | What is read | Tables covered | In game signal |
 |---|---|---|---|
-| `pinmame` | The RAM of the emulated machine, through the **memory map** of its ROM (`game_state` of the [Pinball Memory Maps](https://github.com/tomlogic/pinmame-nvram-maps) project): one state per player score, `player_count`, `game_over` | ROM tables whose map has a `game_state` section (WPC, System 11, Bally, Stern, Gottlieb...: 379 of the 391 bundled maps, 1531 ROM names in the index) | `game_over` flag of the machine |
+| `pinmame` | The RAM of the emulated machine, through the **memory map** of its ROM (`game_state` of the [Pinball Memory Maps](https://github.com/tomlogic/pinmame-nvram-maps) project): one state per player score, `player_count`, `game_over` | ROM tables whose map has a `game_state` section (WPC, System 11, Bally, Stern, Gottlieb...: 383 395 1534 of the  bundled maps,  ROM names in the index) | `game_over` flag of the machine; the player count back to 0; the 'game on' solenoid named by a rule |
 | `b2s` | What the script sends to the B2S backglass server: `B2SSetScorePlayer` (scores of players 1 to 6), `B2SSetCanPlay` (players), `B2SSetGameOver` | Most EM and original tables (`If B2SOn Then Controller.B2SSetScorePlayer...`) | Game over light (`B2SSetGameOver`) |
 | `ultradmd` | The scores of the UltraDMD scoreboard (`DisplayScoreboard(cPlayers, highlighted, s1..s4, ...)`), as FlexDMD implements UltraDMD | Original tables built on UltraDMD | none |
 | `script` | Global variables of the table script with the usual names (below) | EM and original tables without the above | `bGameInPlay`-like or `GameOver`-like variable |
@@ -55,7 +55,12 @@ Each source gives a *reading*: the scores of the players (player 1 first), the n
 
 **How each is read:**
 
-- **pinmame.** The PinMAME plugin loads the memory map of the running ROM and exposes its entries as controller *states* of a "Game States" source, described by their path in the map (`game_state\scores\Player 1`, `game_state\player_count\...`, `game_state\game_over\...`). The tracker gets the ROM name from the controller's `gameId` (`pinmame::<rom>`), enumerates the states with `CTLPI_STATE_GET_SRC_MSG`, keeps those three kinds, and reads them through their `GetState` callbacks (any integer, float or text format). The states are dropped and enumerated again whenever the plugin announces a change (`CTLPI_STATE_ON_SRC_CHG_MSG`). Maps are looked up next to the table, then in the PinMAME folder, then, new, in the maps bundled with the application (section 4).
+- **pinmame.** The PinMAME plugin loads the memory map of the running ROM and exposes its entries as controller *states* of a "Game States" source, described by their path in the map (`game_state\scores\Player 1`, `game_state\player_count\...`, `game_state\game_over\...`). The tracker gets the ROM name from the controller's `gameId` (`pinmame::<rom>`), enumerates the states with `CTLPI_STATE_GET_SRC_MSG`, keeps those three kinds, and reads them through their `GetState` callbacks (any integer, float or text format). The states are dropped and enumerated again whenever the plugin announces a change (`CTLPI_STATE_ON_SRC_CHG_MSG`), and once more when the ROM is known, as its rule may name a solenoid to read. Maps are looked up next to the table, then in the PinMAME folder, then, new, in the maps bundled with the application (section 5).
+
+  The machine tells whether a game runs in three ways, the later overriding the earlier:
+  - the `game_over` entry of the map;
+  - the **player count**: once the machine has shown players in the session, no player (0, or a value outside 1..6, as maps with an `offset` read 256 when no game runs) means no game. Some `game_over` entries do not work: the one of Bally Evel Knievel reads the game over lamp, which stays off, while its player count goes back to 0 at the end of the game (section 12.6);
+  - the **game on solenoid** named by the rule of the ROM (`gameOnSolenoid`, section 4), read from the "VPinMAME Solenoids" states of the plugin, numbered like in the scripts' `SolCallback`. It is the flipper enable output: on while a ball is played, off between balls (drain, bonus count, tilt: up to 6 s seen) and after the game. The game is over once it stays off **20 s** (`GAME_ON_OFF_DELAY`), which also lets the end of game bonus, counted after the flippers went off, into the score. Stern SAM machines have no game over in their maps; PinMAME emulates their 'GameOn' as solenoid 33 (`SAM_FASTFLIPSOL`) from a per-ROM RAM address (`fastflipaddr` in `sam.c`), so it works for the SAM ROMs that PinMAME knows.
 - **b2s.** The B2S plugins broadcast `"B2S","OnStateChange:1"` for every score (`'C'` events) and data change (`'E'` events, with the ids of the helpers: 31 `B2SSetCanPlay`, 35 `B2SSetGameOver`). The legacy B2S server broadcasts *before* it checks that a backglass is running, so this works for tables without a `.directb2s` file. Values are 32-bit, plenty for EM tables.
 - **ultradmd.** New plugin message, `plugins/plugins/ScoreboardPlugin.h`: `"Scores","OnScoreboard:1"` with a `ScoreboardEvent` (source name, players, current player, up to 8 scores of 64 bits). `UltraDMD::DisplayScoreboard` broadcasts it through `FlexDMD::BroadcastScoreboard`. Any other plugin that shows scores on behalf of a script can send it too; its `source` name is what gets stored.
 - **script.** The tracker asks the script engine for the dispatch id of each candidate name (`GetIDsOfNames`) and keeps those that read as properties (functions with the same names are left out), then reads them with `DISPATCH_PROPERTYGET`. Names tried, the first found wins:
@@ -122,12 +127,35 @@ A rule applies to the tables whose **file name contains** `file` (case insensiti
 | `players` | Script variable holding the number of players |
 | `inGame` | Script variable true while a game runs |
 | `gameOver` | Script variable true when no game runs (used instead of `inGame`) |
+| `gameOnSolenoid` | PinMAME solenoid that is on while a game is played (section 3.2), for ROMs whose map has no working game over; 33 on Stern SAM |
 
-A variable named by a rule and not found in the script is logged as a warning. The bundled file has no rule yet: they are to be added from the coverage run over the library (section 9).
+A variable named by a rule and not found in the script is logged as a warning.
+
+The bundled rules come from the coverage run over the library (section 12):
+
+| Rule | Table | Why |
+|---|---|---|
+| `{"file": "masters of the universe", "source": "script", "scores": "nvScore", "scoreBase": 1, "players": "PlayersPlayingGame", "inGame": "VpGameInPlay"}` | Masters of the Universe (custom, UltraDMD) | Its scoreboard always says 2 players, and its game flag and scores have names of their own (`Score` is an unrelated scalar) |
+| `{"rom": "twd_160h", "gameOnSolenoid": 33}` | The Walking Dead (Stern SAM) | No game over in the map; the player count is not reset at the end of a game |
+| `{"rom": "im_185ve", "gameOnSolenoid": 33}` | Iron Man Vault Edition (Stern SAM) | Same, with the map added locally (section 5) |
+| `{"rom": "potc_600as", "gameOnSolenoid": 33}` | Pirates of the Caribbean (Stern SAM) | Same |
+
+Each rule carries a `_table` comment field (ignored by the tracker) saying which table it is for and why.
 
 ## 5. Bundled memory maps
 
 `src/assets/pinmame/memmaps/` holds `index.json`, `maps/` and `platforms/` of [tomlogic/pinmame-nvram-maps](https://github.com/tomlogic/pinmame-nvram-maps), revision `7e63610`, 5 MB. They are under the **Open Database License** (database) and the **Database Contents License** (contents), Copyright Tom Collins and contributors; both licenses and a README with the attribution are in the folder and must stay with it.
+
+Four maps and two platforms were added locally, found with the probing techniques of section 12.4, and listed in `index.json`:
+
+| File | ROM | Table |
+|---|---|---|
+| `maps/stern/sam/im_185ve.map.json` | `im_185ve` | Iron Man Vault Edition (Stern SAM) |
+| `maps/stern/sam/potc_600as.map.json` | `potc_600as` | Pirates of the Caribbean (Stern SAM) |
+| `maps/peyper/sonstwar.map.json`, `platforms/peyper.json` | `sonstwar` | Star Wars (Sonic 1987) |
+| `maps/juegos-populares/faeton.map.json`, `platforms/juegos-populares.json` | `faeton` | Faeton (Juegos Populares 1985), played by Ulysse 31 |
+
+Their `_notes` say how each address was found and what was verified (the Faeton scale of 10 is inferred, section 12.6). They are candidates to send upstream.
 
 `plugins/pinmame/PinMAMEPlugin.cpp` uses them only when no `index.json` is found in the folder configured for the maps or in `<PinMAMEPath>/memmaps`, through the application path given by `GetVpxInfo`. A user can therefore still use a newer copy of the project in their PinMAME folder.
 
@@ -216,7 +244,17 @@ Names are kept on one line (tabs and line breaks become spaces) and trimmed. Del
 ## 9. Status and how it was checked
 
 - **macOS**: built and run. The capture was driven with a test table (an empty table with a script sidecar that simulates games through each source in turn: script variables, B2S, UltraDMD scoreboard, saved high scores) and a real ROM table for `pinmame`: two games in a session give two records, a game left in progress gives none, a two-player game gives player 1 to the active profile and player 2 unassigned. The lobby pages were checked from captures of the running application. The web page and its routes were checked with `curl` and in Chrome (headless Chrome for the clear actions, also at phone width).
-- **Library coverage**: a run that plays every table of the library unattended (credits, start, ball launches and flips until the game ends) and logs what each source shows is in progress on macOS; its misses will become rules in the bundled `score-rules.json`. The test code it needs is applied to the source only for the run and is not part of the commits (the scripts live in `Doc/test-hooks/` of the workspace).
+- **Library coverage** (October 2026, macOS, the 46 tables of the Frame's library with the Frame's ROMs and NVRAMs, section 12): every table was played unattended. The first pass recorded 33 tables; the misses were fixed with two tracker changes (the player count and game on solenoid signals, section 3.2), one script rule, three game on rules and four new memory maps. In the final pass **44 of the 46 tables record their games**, by source:
+
+  | Source | Tables |
+  |---|---|
+  | `pinmame` | 29, of which 4 with a map added locally and 3 with a game on rule |
+  | `script` | 14 (one with a rule) |
+  | `b2s` | 1 (Apollo) |
+
+  The two others, James Bond 007 and Street Fighter 2, could not be played to the end by the autoplay (the ball is not launched, or gets stuck); their scores and game start are read, their end of game is not verified. Every recorded score was checked against the final value of its source and, where the table shows it, against the screen (Apollo's reels, "GAME OVER" and "MATCH" at the moment of the record). Two-player games were checked on a ROM table (Attack from Mars: 125,301,850 and 286,554,310) and a script table (Blade Runner 2049: 826,820 and 879,100): player 1 goes to the active profile, player 2 to nobody. Appendix A lists every table.
+
+  The test code is applied to the source only for the runs and is not part of the commits (`Doc/test-hooks/` of the workspace, section 12).
 - **Steam Frame**: not yet run there. To check: B2S tables without a `.directb2s` file, the VR keyboard in the name entry, the result page in the headset.
 
 ## 10. Known limits
@@ -225,6 +263,10 @@ Names are kept on one line (tabs and line breaks become spaces) and trimmed. Del
 - B2S and UltraDMD carry 32-bit scores (the tracker stores 64 bits); modern ROM tables go through the memory maps instead.
 - The `highscore` fallback only catches games whose score entered the table's high score list, and cannot tell the players apart.
 - The `high_scores` section of the memory maps is not used (only `game_state`).
+- A game ended by the game on solenoid is recorded 20 s after its end (`GAME_ON_OFF_DELAY`); leaving the table within those 20 s discards it, as a game in progress.
+- The scale of 10 of Juegos Populares Faeton (Ulysse 31) is inferred, not read on its display (section 12.6).
+- James Bond 007 and Street Fighter 2 could not be played to the end unattended: their scores and game start are read, their end of game is not verified.
+- Two players could not always be started on the Stern SAM tables by the autoplay; their player 2 address is verified on Iron Man only (players 3 and 4 follow the stride on every local map).
 - The pages are served over plain HTTP, like the rest of the web server; the scores routes are behind the pairing code when it is on.
 - The Visual Studio project files were not updated; the CMake build lists the new files (`ScoreStore` and `ScoreTracker` in `VPX_STANDALONE_SOURCES`, `ScoresPage` in `VPX_SOURCES`).
 
@@ -237,10 +279,19 @@ lib/src/ScoreStore.h, ScoreStore.cpp            profiles and scores, profiles.js
 src/core/ScoreTracker.h, ScoreTracker.cpp       score capture
 plugins/plugins/ScoreboardPlugin.h              "Scores","OnScoreboard:1" plugin message
 src/ui/live/ingameui/ScoresPage.h, .cpp         profiles page, leaderboards, result page
-src/assets/scores/score-rules.json              per table rules (empty for now)
-src/assets/pinmame/memmaps/                     Pinball Memory Maps (ODbL / DbCL)
+src/assets/scores/score-rules.json              per table rules (section 4)
+src/assets/pinmame/memmaps/                     Pinball Memory Maps (ODbL / DbCL), plus 4 maps and 2 platforms added locally (section 5)
 src/assets/web/scores.html, scores.js           Scores page of the web server
 docs/Table Scores and Leaderboards.md           this document
+```
+
+Test tools, outside the repository (workspace `Doc/test-hooks/`, section 12):
+
+```
+score-coverage-hooks.py                         temporary test code (autoplay, logs of every source, screenshots); apply / remove
+score-coverage.py                               plays the library unattended, one result per table
+score-coverage-report.py                        sums up a run
+score-probe.py                                  probe memory maps: make, analyze (scores), states (game state)
 ```
 
 Modified:
@@ -260,3 +311,199 @@ src/assets/web/tables.html, tables.js, vpx.html Scores link, "Show scores"
 src/assets/web/styles.css                       scores page
 make/CMakeLists_sources.txt                     new sources
 ```
+
+## 12. Probing tables: how to make a new table record its scores
+
+This section is the field guide for the next tables. It explains how the library was tested, how to tell why a table records nothing, the techniques that find where a table keeps its scores and when its games end, and what was learned on the way. Everything here was used on the 46 tables of the Steam Frame library in October 2026 (results in appendix A).
+
+The tools are test code, kept out of the repository in the workspace folder `Doc/test-hooks/` (next to `vpinball/`):
+
+| Tool | What it does |
+|---|---|
+| `score-coverage-hooks.py apply\|remove` | Adds (or removes) temporary code to `player.h/.cpp` and `ScoreTracker.h/.cpp`, marked `TEMP-COVERAGE-TEST`: autoplay, the log of every source, screenshots. Never committed: run `remove` before committing, and check `git diff`. `player.cpp` is CRLF, the script keeps it so |
+| `score-coverage.py` | Plays tables of the library one after the other (or several side by side) without anyone at the controls and collects, per table, the log, a `result.json` and a screenshot |
+| `score-coverage-report.py` | Sums up a run: per table, the status, the source, the end of game signal, the score, and the sources that disagree |
+| `score-probe.py make\|analyze\|states` | Builds probe memory maps (12.4), finds the score addresses in a probe run, and the bytes of the game state (player count, ball, game flag) |
+
+### 12.1 The test harness
+
+**Unattended play.** With `VPX_TEST_COVERAGE=1`, the hook plays the table through the input actions (`InputAction::SetDirectState`, as if keys were pressed):
+
+1. waits for the machine to boot (`VPX_TEST_START_AT`, 25 s by default: Data East, Sega and Gottlieb System 3 ROMs need 10 to 20 s),
+2. adds 2 credits, presses Start once per player (`VPX_TEST_PLAYERS`, presses 2.5 s apart). If no reading of any source changed 12 s after Start, the machine did not take the credits: credits and Start again, up to 3 times (it cannot add a player, as no game started),
+3. then, every 5 s, pulls the plunger (`VPX_TEST_PULL_MS`, 1.2 s by default) and flips both flippers. The ball drains after a while, so games end on their own in 1 to 4 minutes; the flips also answer the high score entry,
+4. quits 4 s after the tracker recorded a game, or at the timeout (`VPX_TEST_TIMEOUT`, 480 s), with a screenshot of the window (`end.png` or `timeout.png`, in `VPX_TEST_SHOTS`).
+
+**What the log gets** (on top of the normal `[Scores]` lines):
+
+- `COVERAGE-READ`: the reading of **every** source each time one changes, not only of the primary one: `| pinmame [538000,0,0,0] p1 over | b2s [5] gameover | script [0] p1 | sol on | tracker in game`. `p1` is the player count, `in`/`over` the in game signal of the source, `sol` the game on solenoid when a rule names one, `tracker` the state of the state machine. This is what tells *why* a game was or was not recorded.
+- `COVERAGE-SAVE`: every `SaveValue` of the script, with its time (high scores saved at game over, or only at exit).
+- `COVERAGE-TEST`: start pressed, game started, recorded, quit.
+
+**The driver** (`score-coverage.py <out> [--jobs N] [--only <uuid8 or name>...] [--players N] [--pull-ms uuid8=ms] [--start-at uuid8=s] [--timeout s]`):
+
+- reads the library of the Frame (`frame-tables.json` in `<out>`: a copy of `tables.json` from the Frame's preferences), so the tables keep the Frame's uuids;
+- plays them from `~/Documents/VPinballX/FrameTables`, the Mac copy of the Frame's tables folder. A table missing there is downloaded from the Frame for its test and deleted afterwards (`ssh steamos@frame.local "tar -cf - <entry>" | tar -xf -`: the library is 7.3 GB and the Mac had 8 GB free);
+- gives each table its own preferences folder (`-PrefPath`): a copy of the Mac settings with a 800x450 window, `PinMAMEPath` on `FrameTables/pinmame` (a copy of the Frame's `pinmame` folder: ROMs, NVRAMs, `alias.txt`), the Frame's `tables.json`, and a profile "Autotest". The tables never touch the user's own scores or settings;
+- mutes the sound (`SDL_AUDIO_DRIVER=dummy`);
+- writes `<out>/<uuid8>/{vpinball.log, result.json, end.png|timeout.png}` and `<out>/summary.json`.
+
+Three tables side by side take about 45 minutes for the 46 tables. Run it under `caffeinate -dims`.
+
+### 12.2 Reading a result: why does a table record nothing?
+
+Start from the session line of the log (`score-coverage-report.py <out>` prints them all), then look at the `COVERAGE-READ` lines:
+
+| Session line | `COVERAGE-READ` shows | Cause | Fix |
+|---|---|---|---|
+| `no score source found (rom: xyz)` | nothing, or only `script [0]` | ROM table without memory map (or a map without `game_state`), no B2S, no script variable | A memory map (12.4) |
+| `no score source found (rom: none)` | nothing | Original table with unusual variable names, no B2S | Read the script (12.3), then a `scores`/`inGame` rule |
+| `scores seen from X but no finished game`, `No end of game signal was found` | scores rising, then frozen; `tracker in game` forever | The source has no in game signal (UltraDMD, SAM maps), or the signal is not used by this table | A script variable (`inGame` rule), or the game on solenoid (12.5) |
+| same, with a signal | the signal never changes, e.g. `in` before Start was even pressed | A broken flag in the map | Check the player count (12.6); a rule with another signal |
+| `Game ended without its scores being reset at its start` | the first game shows the previous game's scores | Normal at boot (restored NVRAM); a problem only if it happens to every game | The score source is not reset by the table: rule with another source |
+| no session line, `quit: timeout` | the score stops rising early, `tracker in game` | The autoplay could not play (ball stuck, not launched) | Look at `timeout.png`; longer `--pull-ms`; not a tracker problem |
+| `start never pressed` in the report | | The app crashed or was closed | `~/Library/Logs/DiagnosticReports/VPinballX_BGFX-*.ips` |
+| no finished game, `quit: timeout` | **one** line only, the previous game's scores, never changing | The machine never started a game: most likely the credits were lost (a window took the focus while they were added), or the emulation was frozen (the Mac slept) | Run again (the hook retries Start); `caffeinate` |
+
+And always check that the recorded score is right: `score-coverage-report.py` compares it with the last value of every other source; the screenshot often shows the score (backglass reels, "GAME OVER", "MATCH": the timing of the end too).
+
+### 12.3 Technique: read the table script
+
+For original tables and EM tables, the script tells where the scores are. Extract it without opening the editor:
+
+```
+VPinballX_BGFX -PrefPath <scratch prefs> -ExtractVBS <table.vpx>      # writes <table>.vbs next to the table
+```
+
+Then look for:
+
+- the declarations: `grep -n -i "^\s*dim\b.*\(game\|score\|player\|ball\|tilt\)"`;
+- the subs that start and end a game: `ResetForNewGame`, `EndOfGame`, `GameOver`, and the variable they set (`VpGameInPlay = TRUE` / `false`);
+- where points are added: `Score(CurrentPlayer) = Score(CurrentPlayer) + points`, `nvScore(...)`;
+- what is sent to displays: `B2SSetScorePlayer`, `DisplayScoreboard`, `PuPlayer`, `DMD`...;
+- for ROM tables, `Const cGameName = "xyz"` and `LoadVPM ... "sam.vbs"`: the ROM and the platform. Such a table keeps its scores only in the emulated machine; the script will not help.
+
+The rule then names the variables (`scores`, `scoreBase`, `players`, `inGame` or `gameOver`, `source`). Check the base of the arrays: `Dim nvScore(4)` used from 1 is `scoreBase: 1`.
+
+### 12.4 Technique: find the scores in the memory of a ROM (probe maps)
+
+When a ROM has no memory map, the tracker can be pointed at many addresses at once, and the one that behaves like a score is the score. The trick is that the PinMAME plugin loads any map it is given: a *probe map* lists hundreds of candidate addresses as if they were the scores of players 1 to N. The coverage log then prints all their values through the game.
+
+1. **Know the machine.** The platform file (`platforms/*.json`) gives the CPU, the byte order and where the RAM and NVRAM are. Without one (Peyper, Juegos Populares), read the PinMAME driver (`pinmame/src/wpc/<driver>.c`): the `MEMORY_WRITE_START` table names the RAM range saved as NVRAM (`MWA_RAM, &generic_nvram`), and the `INITGAME`/`CORE_GAMEDEFNV` lines which driver a ROM uses. Write a platform file like the others.
+2. **Pick the range and the shape.**
+   - 32-bit machines (Stern SAM, Spike) keep scores as 4-byte little endian integers. Probe every 4 bytes (`int4`). On SAM, the scores are in the NVRAM, near `0x021109E4`-`0x02110AA0`; probing `0x021108F0`-`0x02110B7C` (164 candidates) found them.
+   - 8-bit machines keep digits: packed BCD, or one digit per byte, in RAM. Probe every byte of the RAM (`byte`, 2048 candidates for 2 KB); the analysis decodes the windows. The hook logs such large probes as changes only (the log rolls at 5 MB).
+3. **Build the probe folder and play:**
+
+   ```
+   score-probe.py make <folder> <rom> <platform> <first> <last> int4|byte [--platform-file <json>] [--player-count 0x02110900]
+   cp -R <folder> ~/Documents/VPinballX/FrameTables/pinmame/memmaps
+   caffeinate -dims score-coverage.py <out> --players 2 --only <uuid8>
+   rm -rf ~/Documents/VPinballX/FrameTables/pinmame/memmaps        # at once: it replaces the bundled maps of every ROM
+   ```
+
+   The folder is a full copy of the bundled maps plus the probe, because a `memmaps` folder with an `index.json` in the PinMAME folder hides the bundled maps of **all** ROMs (section 5). Play 2 players, so that player 1 and player 2 can be told apart.
+4. **Analyze the scores:** `score-probe.py analyze <out>/<uuid8>/result.json <first> int4|byte [--any-step]` lists the candidates that were reset to 0 at the start of the game and then only rose (in multiples of 10, unless `--any-step`). For `byte` probes, it decodes every window of 3-4 bytes as packed BCD (both byte orders) and of 6-7 bytes as one digit per byte. The score of player 1 rises during the balls of player 1 only, player 2's during theirs. The value before the reset is the previous game's score, which is a check in itself. When several overlapping windows match, dump the bytes around them over time (as in 12.6, Star Wars) to see where each score starts and ends: two scores that touch tell the length.
+5. **Find the game state:** `score-probe.py states <result.json> <first> <before> <game from> <game to> <after>` lists the bytes whose values during the game never occur in attract mode: the player count (0, then 1, 2 at each Start, 0 at the end), the current player and ball, a game in progress flag. Give it the time of the Start press (`before`), a window surely in game, and a time surely after the end. A player count or flag that goes back to 0 at the end is the `game_over` of the map (`"encoding": "bool", "invert": true`) and the end of game signal.
+6. **Find the scale:** the score in memory is not always the score on the display. Look at the display layout of the driver (`core_tLCDLayout` in `<driver>games.c`): a digit of the display fed by a constant segment, not by the memory, is a fixed trailing 0, so the map needs `"scale": 10`. The map format has `scale` (501 bundled maps use 10); libpinmame applies it.
+7. **Write the map**: the addresses of players 3 and 4 follow the stride found between 1 and 2. Write `maps/<maker>/<platform>/<rom>.map.json` with `_notes` saying how each address was found and what was verified, add the ROM to `index.json` (sorted, as the file is), add a new platform file if needed, copy the assets into the app (the Mac build copies them only when it links), and play a normal game: the session line must say `recorded from pinmame` with the score of the screen.
+
+**Byte order of BCD.** libpinmame reverses `int` and `bcd` values on a platform declared `"endian": "little"`. 8-bit ROMs often keep BCD digits most significant first even on a little endian CPU (both Z80 games here): give such entries `"endian": "big"`.
+
+The NVRAM file is a second, offline check: PinMAME writes `<PinMAMEPath>/nvram/<rom>.nv` when the table is left, and on SAM its offset *n* is the address `0x02100000 + n`. The last game's scores are in it: `python3 -c "import struct;d=open('x.nv','rb').read();print(hex(d.find(struct.pack('<I', 594730))))"` gave `0x10a9c`, the address `0x02110A9C` of the TWD map.
+
+### 12.5 Technique: find the end of the games
+
+A score is only recorded when the end of its game is seen, so a source without an end of game signal records nothing (except when the next game starts). In order of preference:
+
+1. **The `game_over` entry of the memory map**, when it works.
+2. **The player count of the map** goes back to 0 at the end of the game on many machines (Bally, Data East, Sega, Gottlieb, Stern Whitestar: checked on 16 tables). The tracker uses it by itself (section 3.2). It does *not* on Stern SAM, which keeps the last game's count.
+3. **The game on (flipper enable) solenoid** (`gameOnSolenoid` rule). Every machine cuts the flippers when no ball is played. In the `COVERAGE-READ` lines (`sol on`/`sol off`), it is on during each ball, off for 1 to 6 s between balls, and off for good at the end. On SAM it is solenoid 33; for another platform, look in the PinMAME driver for the GameOn output (`core.h`: "GameOn") and in the table script for the `SolCallback` that drives `vpmFlips` or the flipper relay.
+4. **A script variable** (`inGame`/`gameOver` rule), for script and UltraDMD tables: the one `EndOfGame` sets.
+5. **The backglass game over light** (`B2SSetGameOver`), automatic for B2S tables that use it.
+
+The session line of the log names the signal that ended the game: `end of game from the game over flag of the machine`, `... from no player on the machine`, `... from the game on solenoid of the machine`, `... from a script variable`, `... from the game over light of the backglass`, `... from the scores saved by the script`, `... from the scores reset by the next game`.
+
+Score saves (`SaveValue` at game over) are a fallback signal for tables without any of these, but many tables save only when they are left (`Table1_Exit`), which is too late (Masters of the Universe).
+
+### 12.6 Discoveries
+
+About the tables and the machines:
+
+- **The same original-table template is everywhere.** 13 of the 14 script tables of the library (JP Salas, nFozzy, Marty02, Ext2k conversions and others) use `Score()`, `PlayersPlayingGame` and `bGameInPlay`. The usual names of section 3.2 cover them with no rule.
+- **A memory map flag can be dead.** Bally Evel Knievel (`evelknie`, map `as-2518-17/system-rom-20`) reads `game_over` from the game over lamp (`0x20C` mask `0x4`), which never changed in VPX, so its games never ended. Its player count does go back to 0 at the end: hence the player count signal. 49 bundled maps read a lamp for `game_over`; they may need the same.
+- **Stern SAM maps have no game over** at all, and their player count (`0x02110900`, shared by every SAM game) is not reset at the end of a game. Their scores are 4-byte integers in the NVRAM from `0x021109E4` on several ROMs (Tron, Iron Man, Pirates; 4-byte stride), elsewhere on others (TWD `0x02110A9C` with an 8-byte stride): the layout is per ROM. PinMAME's 'GameOn' fast flips solenoid 33 is their end of game signal.
+- **The end of game bonus comes after the flippers are cut**: Pirates added 100,000 four seconds after its game on solenoid went off. Hence the 20 s delay before a game on signal ends a game: the score is taken at that moment.
+- **Machines boot with garbage or with the last game.** At start, maps show the previous game's scores, sometimes "in game" with a player count, for a fraction of a second (Robocop, Playboy, Attack from Mars). The rule "a game must have been seen at zero" (section 3.4) keeps these out.
+- **Attract modes blink the scores.** After a game, Bally Evel Knievel shows its last score on all four displays, blinking with zeros. A tracker without end of game signal would read that as games starting and ending: a trusted signal avoids it.
+- **Scoreboards do not always tell the players**: the UltraDMD scoreboard of Masters of the Universe always says 2 players. The script's `PlayersPlayingGame` is right.
+- **Some tables cannot be played unattended**: James Bond 007 (Gottlieb 1980, timed play) and Street Fighter 2 (ball stuck after the first points) never finished a game with the autoplay. Their scores and game start are read correctly; their end of game was not checked. Others get a ball stuck now and then (The Simpsons once in four games): one failed run of a table that passed before is not a regression, run it again.
+- **Single-player machines** ignore the second Start (Apollo, Williams 1967). The Stern SAM tables sometimes ignored a second Start 2.5 s after the first, and took it 0.7 s after: a 2-player autoplay is not guaranteed.
+- **Spanish 8-bit machines** (Peyper/Sonic Star Wars, Juegos Populares Faeton/Ulysse 31) have no maps and no platform files upstream. Both keep their whole state in 2 KB of battery-backed RAM: scores as 3 bytes of BCD per player on a 3-byte stride, a player count that goes back to 0 at the end, and 7-digit displays that show the 6 digits of memory followed by a fixed 0 (`scale: 10`). For Peyper the fixed 0 is in the driver (segment 36); for Juegos Populares it is inferred (6 digits in memory, no room for a 7th) and should be checked against the display on the Frame, where the backglass shows it.
+- **The memory map probe needs the machine to be the only thing changing**: in attract mode a machine copies a score to every display (Faeton shows one score on the four players), blinks scores, or shows high scores. Only readings taken after the Start press say which address is whose score.
+
+About the test setup (these cost time; avoid them):
+
+- **VPX pauses a table whose window has no focus** (`Player::IsPlaying` checks `m_playfieldWnd->IsFocused()`). Side by side, only the focused table runs, and the others time out. The hook bypasses the focus when `VPX_TEST_COVERAGE` is set.
+- **Machines that never start a game.** Once, the three SAM tables of a run never started a game: their readings did not change from the first one. In the one log looked at, the window had lost the focus to a table starting next to it at the very moment the credits were added, so the credits were most likely dropped (not proven: the same tables started at the first try in the next run). Hence the Start retry of the hook, which had not had to fire yet when this was written.
+- **The Mac goes to sleep under a long run** even with VPX's display assertion, freezing the emulation (481 s of game in 23 minutes). Run under `caffeinate -dims`. After one wake, libpinmame crashed with `SIGBUS` in `dcs_speedup` (the DCS sound board of WPC-95 machines like Attack from Mars). That is a PinMAME problem to watch on the Frame, which sleeps when the headset is not worn.
+- **macOS `rsync` is openrsync**: no `--protect-args`, and spaces in remote paths break it. Use `ssh ... tar`.
+- **`pkill -f "VPinballX_BGFX -PrefPath"` kills every test instance**, including another session's: stop your own process by its PID.
+- **`pgrep -f <script>` in a wait loop matches the wait loop itself** (its command line contains the name): wait on the PID.
+- **Screenshots**: `RenderDevice::OnScreenshotCaptured` erases the file name but leaves `m_screenshotWindow`, so the render loop asks BGFX for a screenshot again every frame afterwards ("Screenshot capture timed out. Requesting it again"), reading `m_screenshotFilename[i]` of an empty vector. Upstream code; the hook takes its screenshot only just before quitting.
+- **A `memmaps` folder in the PinMAME folder hides the bundled maps** of every ROM (12.4).
+- **The Mac build copies `src/assets` into the app only when the binary links**: after changing only maps or rules, `cmake -E copy_directory src/assets build/VPinballX_BGFX.app/Contents/Resources/assets`.
+- **The log rolls over at 5 MB with no backup kept** (`RollingFileAppender` in `Logger.cpp`). A probe of 2048 bytes printed in full at every change filled it, and the start of the game was lost. The hook therefore prints probe readings (more than 64 values) as the changes since the previous line, `pinmame* [index:value,...]`, which `score-probe.py` rebuilds.
+
+## Appendix A. Coverage of the Steam Frame library (October 2026)
+
+Final pass on macOS, one unattended game per table (section 12). "Score" is the score recorded in that game, checked against the last value of the source. Tables without an entry in the last column needed nothing.
+
+| Table | ROM | Source | End of game | Score | Fix |
+|---|---|---|---|---:|---|
+| Ace Of Speed 1.1 | mousn_l4 | pinmame | the game over flag of the machine | 147,020 |  |
+| Addams Family (Bally 1992) | taf_l7 | pinmame | the game over flag of the machine | 1,031,000 |  |
+| Apollo (Williams 1967) | - | b2s | the game over light of the backglass | 2,500 |  |
+| Attack from Mars Minimal (Bally 1995) | afm_113b | pinmame | the game over flag of the machine | 307,665,730 |  |
+| Austin Powers (Stern 2001) | austin | pinmame | the game over flag of the machine | 16,102,470 |  |
+| Blade Runner 2049 | - | script | a script variable | 697,000 |  |
+| BleachVR | - | script | a script variable | 8,410,590 |  |
+| Bond 60th Dr.No | - | script | a script variable | 35,081,110 |  |
+| Bram Stoker's Dracula (Williams 1993) | drac_l1 | pinmame | the game over flag of the machine | 4,409,220 |  |
+| Evel Knievel (Bally 1977) | evelknie | pinmame | no player on the machine | 11,740 | Player count end signal (its game over lamp flag never changes) |
+| Friday the 13th | - | script | a script variable | 119,150 |  |
+| Ghostbusters slimer 2.1 | - | script | a script variable | 353,610 |  |
+| Godzilla (Sega 1998) | godzilla | pinmame | the game over flag of the machine | 4,356,820 |  |
+| Indiana Jones - The Pinball Adventure (Williams 1993) | ij_l7 | pinmame | the game over flag of the machine | 3,561,000 |  |
+| Iron Man Minimal (Stern 2010) | im_185ve | pinmame | the game on solenoid of the machine | 1,513,190 | New map (probe) + game on solenoid rule (SAM) |
+| James Bond 007 (Gottlieb 1980) | jamesb | - | - | - | Not played to the end by the autoplay (ball not launched): end of game not verified |
+| JAWS 50Th Anniversary (Original 2025) | - | script | a script variable | 1,762,100 |  |
+| JohnWick (BABAYAGA Pinball edition, 2023) (VR ROOM Minimal) Sphere | - | script | a script variable | 30,030 |  |
+| Masters of the Universe-custom (VR ROOM edition) | - | script | a script variable | 220,000 | Script rule (nvScore, VpGameInPlay) |
+| Maverick (Data East 1994) | mav_402 | pinmame | the game over flag of the machine | 50,776,570 |  |
+| One Piece | - | script | a script variable | 3,532,740 |  |
+| Pirates of the Caribbean | potc_600as | pinmame | the game on solenoid of the machine | 2,045,020 | New map (probe) + game on solenoid rule (SAM) |
+| Playboy 35th Anniversary (Data East 1989) v4.3 JP Salas, Ext2k VRROOM | play_a24 | pinmame | the game over flag of the machine | 26,300 |  |
+| Pokemon Pinball | - | script | a script variable | 550,440 |  |
+| Robocop (Data East 1989) | robo_a34 | pinmame | the game over flag of the machine | 91,200 |  |
+| Room Rocky (Gottlieb 1982) | rocky | pinmame | the game over flag of the machine | 20,850 |  |
+| Scooby Doo 2022 | - | script | a script variable | 3,818,360 |  |
+| South Park (Sega 1999) | sprk_103 | pinmame | the game over flag of the machine | 8,821,040 |  |
+| Space Cadet (Original 2021) | - | script | a script variable | 163,250 |  |
+| Star Wars (Sonic 1987) | sonstwar | pinmame | the game over flag of the machine | 2,277,000 | New platform and map (RAM probe), scale 10 |
+| Star Wars Trilogy | swtril43 | pinmame | the game over flag of the machine | 1,410,290 |  |
+| Stargate Minimal (Gottlieb 1995) | stargat5 | pinmame | the game over flag of the machine | 10,269,180 |  |
+| Starship Troopers (Sega 1997) | startrp2 | pinmame | the game over flag of the machine | 4,171,910 |  |
+| Street Fighter 2 | sfight2 | - | - | - | Not played to the end by the autoplay (ball stuck): end of game not verified |
+| Super Mario Bros v 1.2 | smb | pinmame | the game over flag of the machine | 1,571,360 |  |
+| Super Mario Bros. Mushroom World (Gottlieb 1992) | smbmush | pinmame | the game over flag of the machine | 4,113,330 |  |
+| Terminator 3 Rise of the Machines | term3 | pinmame | the game over flag of the machine | 4,873,670 |  |
+| The Flintstones | fs_lx5 | pinmame | the game over flag of the machine | 9,102,310 |  |
+| The Lost World Jurassic Park (Sega 1997) | jplstw22 | pinmame | the game over flag of the machine | 624,230 |  |
+| The Mandalorian | - | script | a script variable | 191,930 |  |
+| The Simpsons (Data East 1990) | simp | pinmame | the game over flag of the machine | 127,180 |  |
+| The Walking Dead | twd_160h | pinmame | the game on solenoid of the machine | 1,992,150 | Game on solenoid rule (SAM) |
+| Tmnt | tmnt_104 | pinmame | the game over flag of the machine | 312,000 |  |
+| Twilight Zone | tz_94ch | pinmame | the game over flag of the machine | 4,800,000 |  |
+| Ulysse 31 | faeton | pinmame | the game over flag of the machine | 151,980 | New platform and map for the Faeton ROM (RAM probe), scale 10 inferred |
+| Wrath of Olympus (Original 2022) | - | script | a script variable | 3,919,270 |  |

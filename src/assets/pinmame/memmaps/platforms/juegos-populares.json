@@ -1,0 +1,16 @@
+{
+  "_notes": [
+    "Juegos Populares (Spain) games: Z80, 2KB of RAM at 0x4000-0x47FF, all of it saved as NVRAM (PinMAME jp.c, JP_writemem; later games use JP2_writemem at 0x6000).",
+    "Added locally for the leaderboards of VPX."
+  ],
+  "cpu": "Z80",
+  "endian": "little",
+  "memory_layout": [
+    {
+      "label": "NVRAM",
+      "address": "0x4000",
+      "size": "0x800",
+      "type": "nvram"
+    }
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "_notes": [
+    "Locally added for the leaderboards of VPX -- upstream pinmame-nvram-maps has no map for Juegos Populares games.",
+    "Found by watching every byte of the RAM (0x4000-0x47FF) through an automated 2-player game (Doc/test-hooks/score-probe.py).",
+    "Scores: 3 bytes of packed BCD, most significant first, from 0x43CF on a 3-byte stride. 0x43CF and 0x43D2 went to 0 at the start",
+    "and rose with players 1 and 2 only (final 25,870 / 20,543 in memory, the end of game bonus included); players 3 and 4 follow",
+    "the stride (in attract mode the machine copies one score to the four slots 0x43CF-0x43DA).",
+    "scale 10: inferred, not seen on a display. The ROM drives 7-digit displays (jpDisp7) but keeps 6 digits per player with no room",
+    "for a 7th, so the 7th is a constant: a trailing 0, as on the Peyper/Sonic 7-digit games, and as the 6-digit faeton6d ROM suggests.",
+    "player_count 0x43EE (0, then 1 and 2 at each start, 0 at the end of the game: game_over), current_player 0x43EF, current_ball 0x440A."
+  ],
+  "_fileformat": 0.7,
+  "_metadata": {
+    "version": 1,
+    "license": "Open Data Commons Open Database License (ODbL) v1.0",
+    "platform": "juegos-populares",
+    "roms": [
+      "faeton"
+    ]
+  },
+  "game_state": {
+    "scores": [
+      {
+        "label": "Player 1",
+        "encoding": "bcd",
+        "endian": "big",
+        "length": 3,
+        "scale": 10,
+        "start": "0x43CF"
+      },
+      {
+        "label": "Player 2",
+        "encoding": "bcd",
+        "endian": "big",
+        "length": 3,
+        "scale": 10,
+        "start": "0x43D2"
+      },
+      {
+        "label": "Player 3",
+        "encoding": "bcd",
+        "endian": "big",
+        "length": 3,
+        "scale": 10,
+        "start": "0x43D5"
+      },
+      {
+        "label": "Player 4",
+        "encoding": "bcd",
+        "endian": "big",
+        "length": 3,
+        "scale": 10,
+        "start": "0x43D8"
+      }
+    ],
+    "player_count": {
+      "label": "Players",
+      "encoding": "int",
+      "start": "0x43EE"
+    },
+    "current_player": {
+      "label": "Player",
+      "encoding": "int",
+      "start": "0x43EF"
+    },
+    "current_ball": {
+      "label": "Ball",
+      "encoding": "int",
+      "start": "0x440A"
+    },
+    "game_over": {
+      "_notes": "player_count == 0",
+      "label": "Game Over",
+      "encoding": "bool",
+      "start": "0x43EE",
+      "invert": true
+    }
+  }
+}

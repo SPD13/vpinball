@@ -1,0 +1,52 @@
+{
+  "_notes": [
+    "Locally added for the leaderboards of VPX -- upstream pinmame-nvram-maps has no map for Iron Man.",
+    "Found by watching 164 candidate addresses (0x021108F0-0x02110B7C, 4-byte ints) through an automated 2-player game:",
+    "0x021109E4 held the previous game's 1,409,790, went to 0 at start and rose with player 1 only; 0x021109E8 rose from 0",
+    "with player 2 only (final 1,019,850 / 1,542,400). Same base and 4-byte stride as trn_174h; players 3 and 4 follow the stride.",
+    "player_count at 0x02110900, the one address shared by every SAM game checked; it read 2 during the game.",
+    "No game over flag: the leaderboards use the 'GameOn' fast flips solenoid 33 of PinMAME (score-rules.json)."
+  ],
+  "_fileformat": 0.7,
+  "_metadata": {
+    "version": 1,
+    "license": "Open Data Commons Open Database License (ODbL) v1.0",
+    "platform": "stern-sam",
+    "roms": [
+      "im_185ve"
+    ]
+  },
+  "game_state": {
+    "player_count": {
+      "label": "Player Count",
+      "encoding": "int",
+      "start": "0x02110900"
+    },
+    "scores": [
+      {
+        "label": "Player 1",
+        "encoding": "int",
+        "length": 4,
+        "start": "0x021109E4"
+      },
+      {
+        "label": "Player 2",
+        "encoding": "int",
+        "length": 4,
+        "start": "0x021109E8"
+      },
+      {
+        "label": "Player 3",
+        "encoding": "int",
+        "length": 4,
+        "start": "0x021109EC"
+      },
+      {
+        "label": "Player 4",
+        "encoding": "int",
+        "length": 4,
+        "start": "0x021109F0"
+      }
+    ]
+  }
+}

@@ -22,6 +22,7 @@ constexpr auto POLL_PERIOD = std::chrono::milliseconds(250);
 constexpr int POLLS_TO_START_GAME = 2; // In game signals bounce (ball changes, tilt...), so changes must last before being trusted
 constexpr int POLLS_TO_END_GAME = 6;
 constexpr auto GAME_START_ZERO_WINDOW = std::chrono::seconds(3); // Scores must be seen at zero this long before a game starts, or during it
+constexpr auto GAME_ON_OFF_DELAY = std::chrono::seconds(20); // The game on solenoid (flipper enable) is also off between balls: the game is over once it stays off
 
 // Usual names of the script variables, the first one found is used
 const char* const SCRIPT_SCORES[] = { "Score", "Scores", "PlayerScore", "PlayerScores", "PScore", "PlayersScore" };
@@ -293,7 +294,7 @@ void ScoreTracker::Poll()
       bool* trusted;
       const char* name;
    };
-   const Signal machine { pinmame ? pinmame->inGame : std::nullopt, &m_machineSignalTrusted, "the game over flag of the machine" };
+   const Signal machine { pinmame ? pinmame->inGame : std::nullopt, &m_machineSignalTrusted, m_pmSignalName };
    const Signal variable { script ? script->inGame : std::nullopt, &m_scriptSignalTrusted, "a script variable" };
    const Signal light { m_b2sGameOver ? std::optional<bool>(!*m_b2sGameOver) : std::nullopt, &m_b2sSignalTrusted, "the game over light of the backglass" };
    vector<Signal> signals;
@@ -470,7 +471,8 @@ void ScoreTracker::RecordGame(const vector<int64_t>& scores, int playerCount, So
 // Rules (score-rules.json)
 //
 // {"rules":[{"file":"part of the table file name","rom":"romname","disable":true,"source":"pinmame|b2s|ultradmd|script|highscore",
-//            "scores":"script variable","scoreBase":0,"players":"script variable","inGame":"script variable","gameOver":"script variable"}]}
+//            "scores":"script variable","scoreBase":0,"players":"script variable","inGame":"script variable","gameOver":"script variable",
+//            "gameOnSolenoid":33}]}
 
 void ScoreTracker::LoadRules(bool romKnown)
 {
@@ -502,6 +504,7 @@ void ScoreTracker::LoadRules(bool romKnown)
             m_rule.inGame = rule.value("inGame", m_rule.inGame);
             m_rule.gameOver = rule.value("gameOver", m_rule.gameOver);
             m_rule.scoreBase = rule.value("scoreBase", m_rule.scoreBase);
+            m_rule.gameOnSolenoid = rule.value("gameOnSolenoid", m_rule.gameOnSolenoid);
          }
       }
       catch (const std::exception& e)
@@ -531,6 +534,7 @@ void ScoreTracker::RefreshRom()
          m_rom = gameId.substr(9);
          PLOGI << "[Scores] ROM: " << m_rom;
          LoadRules(true);
+         m_pinmameStatesDirty = true; // The rule of the ROM may tell more states to use
          return;
       }
    }
@@ -544,6 +548,7 @@ void ScoreTracker::OnStateSrcChanged(const unsigned int, void* userData, void*)
    me->m_pmScores.clear();
    me->m_pmPlayerCount.reset();
    me->m_pmGameOver.reset();
+   me->m_pmGameOn.reset();
 }
 
 void ScoreTracker::RefreshPinMAMEStates()
@@ -552,6 +557,7 @@ void ScoreTracker::RefreshPinMAMEStates()
    m_pmScores.clear();
    m_pmPlayerCount.reset();
    m_pmGameOver.reset();
+   m_pmGameOn.reset();
    const MsgPluginAPI* msgApi = &m_player->m_pluginManager.GetMsgAPI();
    for (const StateSrcId& src : PinballPlugin::Controller::GetCtrlItems<StateSrcId>(msgApi, m_player->m_pluginAPI.GetVPXEndPointId(), m_getStateSrcMsgId))
    {
@@ -568,6 +574,11 @@ void ScoreTracker::RefreshPinMAMEStates()
          else if (desc.starts_with("game_state\\game_over\\"))
             m_pmGameOver = state;
       }
+      // Solenoids numbered like in the scripts (SolCallback)
+      if (m_rule.gameOnSolenoid > 0 && src.name && string(src.name) == "VPinMAME Solenoids")
+         for (unsigned int i = 0; i < src.nStates; i++)
+            if (src.stateDefs[i].mappingId == static_cast<uint32_t>(m_rule.gameOnSolenoid) && src.stateDefs[i].GetState)
+               m_pmGameOn = src.stateDefs[i];
    }
    if (!m_pmScores.empty())
       PLOGI << "[Scores] Memory map of the ROM: " << m_pmScores.size() << " player score(s)" << (m_pmGameOver ? ", game over flag" : ", no game over flag")
@@ -582,10 +593,32 @@ std::optional<ScoreTracker::Reading> ScoreTracker::ReadPinMAME()
    for (const StateDef& state : m_pmScores)
       reading.scores.push_back(ReadStateInt(state).value_or(0));
    if (m_pmPlayerCount)
-      reading.playerCount = static_cast<int>(ReadStateInt(*m_pmPlayerCount).value_or(0));
+   {
+      // Maps with an offset give 256 when no game is played
+      const int64_t players = ReadStateInt(*m_pmPlayerCount).value_or(0);
+      reading.playerCount = (players >= 1 && players <= SCOREPI_MAX_PLAYERS) ? static_cast<int>(players) : 0;
+   }
    if (m_pmGameOver)
       if (const std::optional<int64_t> gameOver = ReadStateInt(*m_pmGameOver))
          reading.inGame = *gameOver == 0;
+   // Some game over flags do not work (the game over lamp of Bally Evel Knievel stays off): machines that tell their players only
+   // have players during a game
+   m_pmSignalName = "the game over flag of the machine";
+   if (reading.playerCount > 0)
+      m_pmPlayersSeen = true;
+   else if (m_pmPlayersSeen && reading.inGame == true)
+   {
+      reading.inGame = false;
+      m_pmSignalName = "no player on the machine";
+   }
+   if (m_pmGameOn)
+   {
+      m_pmSignalName = "the game on solenoid of the machine";
+      const auto now = std::chrono::steady_clock::now();
+      if (ReadStateInt(*m_pmGameOn).value_or(0) != 0)
+         m_pmGameOnLastOn = now;
+      reading.inGame = m_pmGameOnLastOn && now - *m_pmGameOnLastOn < GAME_ON_OFF_DELAY;
+   }
    return reading;
 }
 

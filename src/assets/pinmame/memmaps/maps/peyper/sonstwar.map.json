@@ -1,0 +1,74 @@
+{
+  "_notes": [
+    "Locally added for the leaderboards of VPX -- upstream pinmame-nvram-maps has no map for Peyper/Sonic games.",
+    "Found by watching every byte of the RAM (0x6000-0x67FF) through an automated 2-player game (Doc/test-hooks/score-probe.py).",
+    "Scores: 3 bytes of packed BCD, most significant first, from 0x6150 on a 3-byte stride. 0x6150 and 0x6153 went to 0 at the start",
+    "and rose with players 1 and 2 only (final 228,600 / 338,700 in memory); players 3 and 4 follow the stride.",
+    "scale 10: the 7-digit displays show the 6 digits of the memory followed by a constant 0 (sonicDisp7 in PinMAME peypergames.c:",
+    "the 7th digit is segment 36, set to 0 by peyper.c).",
+    "player_count 0x6137 (0, then 1 and 2 at each start, 0 at the end); 0x60D4 is 1 during a game and 0 otherwise (game_over);",
+    "current_ball 0x60D8 (1-3, 4 after the game)."
+  ],
+  "_fileformat": 0.7,
+  "_metadata": {
+    "version": 1,
+    "license": "Open Data Commons Open Database License (ODbL) v1.0",
+    "platform": "peyper",
+    "roms": [
+      "sonstwar"
+    ]
+  },
+  "game_state": {
+    "scores": [
+      {
+        "label": "Player 1",
+        "encoding": "bcd",
+        "endian": "big",
+        "length": 3,
+        "scale": 10,
+        "start": "0x6150"
+      },
+      {
+        "label": "Player 2",
+        "encoding": "bcd",
+        "endian": "big",
+        "length": 3,
+        "scale": 10,
+        "start": "0x6153"
+      },
+      {
+        "label": "Player 3",
+        "encoding": "bcd",
+        "endian": "big",
+        "length": 3,
+        "scale": 10,
+        "start": "0x6156"
+      },
+      {
+        "label": "Player 4",
+        "encoding": "bcd",
+        "endian": "big",
+        "length": 3,
+        "scale": 10,
+        "start": "0x6159"
+      }
+    ],
+    "player_count": {
+      "label": "Players",
+      "encoding": "int",
+      "start": "0x6137"
+    },
+    "current_ball": {
+      "label": "Ball",
+      "encoding": "int",
+      "start": "0x60D8"
+    },
+    "game_over": {
+      "_notes": "1 while a game is played",
+      "label": "Game Over",
+      "encoding": "bool",
+      "start": "0x60D4",
+      "invert": true
+    }
+  }
+}

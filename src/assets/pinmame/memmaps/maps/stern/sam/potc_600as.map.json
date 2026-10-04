@@ -1,0 +1,52 @@
+{
+  "_notes": [
+    "Locally added for the leaderboards of VPX -- upstream pinmame-nvram-maps has no map for Pirates of the Caribbean.",
+    "Found by watching 164 candidate addresses (0x021108F0-0x02110B7C, 4-byte ints) through automated games: 0x021109E4",
+    "held the previous game's 2,052,520, went to 0 at start and rose through the game (final 2,359,130, including the end of",
+    "game bonus). Players 2 to 4 follow the 4-byte stride of trn_174h and im_185ve.",
+    "player_count at 0x02110900, the one address shared by every SAM game checked.",
+    "No game over flag: the leaderboards use the 'GameOn' fast flips solenoid 33 of PinMAME (score-rules.json)."
+  ],
+  "_fileformat": 0.7,
+  "_metadata": {
+    "version": 1,
+    "license": "Open Data Commons Open Database License (ODbL) v1.0",
+    "platform": "stern-sam",
+    "roms": [
+      "potc_600as"
+    ]
+  },
+  "game_state": {
+    "player_count": {
+      "label": "Player Count",
+      "encoding": "int",
+      "start": "0x02110900"
+    },
+    "scores": [
+      {
+        "label": "Player 1",
+        "encoding": "int",
+        "length": 4,
+        "start": "0x021109E4"
+      },
+      {
+        "label": "Player 2",
+        "encoding": "int",
+        "length": 4,
+        "start": "0x021109E8"
+      },
+      {
+        "label": "Player 3",
+        "encoding": "int",
+        "length": 4,
+        "start": "0x021109EC"
+      },
+      {
+        "label": "Player 4",
+        "encoding": "int",
+        "length": 4,
+        "start": "0x021109F0"
+      }
+    ]
+  }
+}

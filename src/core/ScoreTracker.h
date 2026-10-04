@@ -62,6 +62,7 @@ private:
       Source source = Source::None;
       string scores, players, inGame, gameOver;
       int scoreBase = -1;
+      int gameOnSolenoid = 0; // PinMAME solenoid that is on while a game is played (flipper enable, like the 'GameOn' solenoid 33 of Stern SAM)
    };
 
    void Poll();
@@ -94,7 +95,10 @@ private:
    // pinmame
    bool m_pinmameStatesDirty = true;
    vector<StateDef> m_pmScores;
-   std::optional<StateDef> m_pmPlayerCount, m_pmGameOver;
+   std::optional<StateDef> m_pmPlayerCount, m_pmGameOver, m_pmGameOn;
+   bool m_pmPlayersSeen = false; // The machine showed players: no player afterwards means that no game is played
+   const char* m_pmSignalName = "the game over flag of the machine"; // What tells the machine's in game state, for the log
+   std::optional<std::chrono::steady_clock::time_point> m_pmGameOnLastOn; // Last time the game on solenoid was on
 
    // b2s
    bool m_b2sActive = false;
