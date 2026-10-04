@@ -23,6 +23,7 @@
 #include "TableMiscPage.h"
 #include "TableOptionsPage.h"
 #include "TablePickerPage.h"
+#include "ScoresPage.h"
 #include "TableRulesPage.h"
 #include "VRSettingsPage.h"
 #include "SystemInfoPage.h"
@@ -58,6 +59,8 @@ InGameUI::InGameUI(LiveUI &liveUI)
    AddPage("misc/message"s, []() { return std::make_unique<MessagePage>(); });
 #ifdef __STANDALONE__
    AddPage("tables/picker"s, []() { return std::make_unique<TablePickerPage>(); });
+   AddPage("profiles"s, []() { return std::make_unique<ProfilesPage>(); });
+   AddPage("scores/result"s, []() { return std::make_unique<ScoreResultPage>(); });
 #endif
 }
 

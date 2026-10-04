@@ -14,6 +14,11 @@ class BaseTexture;
 namespace VPX::InGameUI
 {
 
+// Keyboard drawn with buttons, for VR where there is no keyboard: keys change 'text' at once (up to 'maxLength' bytes). With 'capitalizeWords',
+// letters are uppercase at the start of words and lowercase elsewhere, otherwise always lowercase. Returns true when 'Done' is pressed
+// ('withDone' adds this key).
+bool RenderVirtualKeyboard(string& text, size_t maxLength, bool capitalizeWords, bool withDone);
+
 // Lists the tables of the application's table library, to switch table without leaving the player
 class TablePickerPage final : public InGameUIPage
 {
@@ -51,7 +56,6 @@ private:
    void BuildMenuTab();
    void KeepThumbnails(const ankerl::unordered_dense::set<string>& displayedTables);
    void RenderSearch();
-   void RenderVirtualKeyboard();
    bool m_virtualKeyboard = false; // Shown under the search field in VR, where there is no keyboard, from its activation until 'Done'
    void RenderPager(const char* item);
    void RenderPairing();
@@ -60,16 +64,18 @@ private:
    int m_reselectDelay = 0;
 
    uint64_t m_revision = 0;
+   uint64_t m_scoresRevision = 0; // Of the profiles and scores, shown by the player item and the Scores tab
    bool m_scanning = false;
    string m_webServerUrl;
    string m_pairingCode;
 };
 
-// Text entry with the 4 navigation buttons, like the initials of an arcade high score: left/right select a character, which is then added
+// Text entry with the 4 navigation buttons, like the initials of an arcade high score: left/right select a character, which is then added.
+// A virtual keyboard is also shown, for pointers (VR controllers, mouse).
 class TextEntryPage final : public InGameUIPage
 {
 public:
-   TextEntryPage(const string& title, const string& text, const std::function<void(const string&)>& onSave, bool allowEmpty = false);
+   TextEntryPage(const string& title, const string& text, const std::function<void(const string&)>& onSave, bool allowEmpty = false, size_t maxLength = 64);
 
    void AdjustItem(float direction, bool isInitialPress) override;
 
@@ -80,6 +86,7 @@ private:
    size_t m_charIndex = 0;
    const std::function<void(const string&)> m_onSave;
    const bool m_allowEmpty;
+   const size_t m_maxLength;
 };
 
 // Actions on a table of the library: play, rename, reset settings, delete

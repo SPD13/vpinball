@@ -1,0 +1,469 @@
+{
+  "_notes": [
+    "Bally MPU AS-2518-35 (with U6 System ROM: 720-30_6.716)",
+    "6-digit score display",
+    "Game                          Mfg    Date   IPDB   OPDB",
+    "----------------------------  -----  ----   ----   ----",
+    "KISS                          Bally  1979   1386   1225",
+    "Paragon                       Bally  1979   1755    296",
+    "Playboy                       Bally  1978   1823    175",
+    "Sexy Girl                     Arkon  1980   2106   1058",
+    "Supersonic                    Bally  1979   2455   1881",
+    "Star Trek                     Bally  1979   2355    473",
+    "Voltan Escapes Cosmic Doom    Bally  1979   2744    134",
+    "Originally compiled by Francis De Brabandere."
+  ],
+  "_fileformat": 0.8,
+  "_metadata": {
+    "version": 5,
+    "copyright": [
+      "Copyright (C) 2024 by Francis De Brabandere <francisdb@gmail.com>",
+      "Copyright (C) 2025 by Tom Collins <tom@scorbit.io>"
+    ],
+    "license": "Open Data Commons Open Database License (ODbL) v1.0",
+    "platform": "bally-35-6K",
+    "roms": [
+      "kiss",
+      "paragon",
+      "playboy",
+      "sexygirl",
+      "sst",
+      "startrek",
+      "voltan"
+    ],
+    "values": {
+      "_notes": [
+        "DIP switch settings verified against the Bally Kiss (#1152-E), Star Trek (#1148-E) and Paragon manuals.",
+        "Switches 22-24 and 29-31 are game-specific features and are not included here; see the game's manual.",
+        "incentive: X@Y means X credits paid on the Yth coin"
+      ],
+      "off_on": [
+        "off",
+        "on"
+      ],
+      "pricing": [
+        "incentive: 1@1, 2@2 (3/2)",
+        "incentive: 1@1, 2@2 (3/2)",
+        "1 credit/coin",
+        "1 credit/2 coins",
+        "2 credits/coin",
+        "2 credits/2 coins",
+        "3 credits/coin",
+        "3 credits/2 coins",
+        "4 credits/coin",
+        "4 credits/2 coins",
+        "5 credits/coin",
+        "5 credits/2 coins",
+        "6 credits/coin",
+        "6 credits/2 coins",
+        "7 credits/coin",
+        "7 credits/2 coins",
+        "8 credits/coin",
+        "8 credits/2 coins",
+        "9 credits/coin",
+        "9 credits/2 coins",
+        "10 credits/coin",
+        "10 credits/2 coins",
+        "11 credits/coin",
+        "11 credits/2 coins",
+        "12 credits/coin",
+        "12 credits/2 coins",
+        "13 credits/coin",
+        "13 credits/2 coins",
+        "14 credits/coin",
+        "14 credits/2 coins",
+        "15 credits/coin",
+        "15 credits/2 coins"
+      ],
+      "pricing_chute2": [
+        "same as chute 1",
+        "1 credit/coin",
+        "2 credits/coin",
+        "3 credits/coin",
+        "4 credits/coin",
+        "5 credits/coin",
+        "6 credits/coin",
+        "7 credits/coin",
+        "8 credits/coin",
+        "9 credits/coin",
+        "10 credits/coin",
+        "11 credits/coin",
+        "12 credits/coin",
+        "13 credits/coin",
+        "14 credits/coin",
+        "15 credits/coin"
+      ]
+    }
+  },
+  "game_state": {
+    "credits": {
+      "label": "Credits",
+      "start": "0x02D5",
+      "length": 2,
+      "encoding": "bcd"
+    },
+    "scores": [
+      {
+        "label": "Player 1",
+        "start": "0x021E",
+        "encoding": "bcd",
+        "length": 6
+      },
+      {
+        "label": "Player 2",
+        "start": "0x0224",
+        "encoding": "bcd",
+        "length": 6
+      },
+      {
+        "label": "Player 3",
+        "start": "0x022A",
+        "encoding": "bcd",
+        "length": 6
+      },
+      {
+        "label": "Player 4",
+        "start": "0x0230",
+        "encoding": "bcd",
+        "length": 6
+      }
+    ],
+    "final_scores": [
+      {
+        "label": "Final P1",
+        "start": "0x023D",
+        "encoding": "bcd",
+        "length": 6
+      },
+      {
+        "label": "Final P2",
+        "start": "0x0243",
+        "encoding": "bcd",
+        "length": 6
+      },
+      {
+        "label": "Final P3",
+        "start": "0x0249",
+        "encoding": "bcd",
+        "length": 6
+      },
+      {
+        "label": "Final P4",
+        "start": "0x024F",
+        "encoding": "bcd",
+        "length": 6
+      }
+    ],
+    "current_ball": {
+      "label": "Current Ball",
+      "start": "0x12",
+      "encoding": "bcd"
+    },
+    "player_count": {
+      "label": "Players",
+      "start": "0x13",
+      "encoding": "bcd"
+    },
+    "current_player": {
+      "label": "Current Player",
+      "start": "0x14",
+      "encoding": "bcd"
+    },
+    "ball_count": {
+      "label": "Ball Count",
+      "encoding": "dipsw",
+      "offsets": [
+        16
+      ],
+      "values": [
+        3,
+        5
+      ]
+    },
+    "max_credits": {
+      "label": "Max Credits",
+      "encoding": "dipsw",
+      "offsets": [
+        19,
+        18,
+        17
+      ],
+      "values": [
+        5,
+        10,
+        15,
+        20,
+        25,
+        30,
+        35,
+        40
+      ]
+    },
+    "game_over": {
+      "_notes": "reading 'game over' lamp",
+      "label": "Game Over",
+      "start": "0x20C",
+      "encoding": "bool",
+      "mask": "0x4",
+      "invert": true
+    },
+    "tilted": {
+      "_notes": "reading 'tilt' lamp",
+      "label": "Tilted",
+      "start": "0x20C",
+      "encoding": "bool",
+      "mask": "0x8",
+      "invert": true
+    }
+  },
+  "high_scores": [
+    {
+      "label": "High Score",
+      "short_label": "HS",
+      "score": {
+        "start": "0x02CF",
+        "encoding": "bcd",
+        "length": 6
+      }
+    }
+  ],
+  "audits": {
+    "Bookkeeping functions": {
+      "05": {
+        "label": "Current Credits",
+        "start": "0x02D5",
+        "length": 6,
+        "encoding": "bcd",
+        "min": 0,
+        "max": 40
+      },
+      "06": {
+        "label": "Total Plays (Paid and Free Games)",
+        "start": "0x02DB",
+        "length": 6,
+        "encoding": "bcd",
+        "min": 0,
+        "max": 999999
+      },
+      "07": {
+        "label": "Total Replays (Free Games)",
+        "start": "0x02E1",
+        "length": 6,
+        "encoding": "bcd",
+        "min": 0,
+        "max": 999999
+      },
+      "08": {
+        "label": "HSTD Achieved",
+        "start": "0x02E7",
+        "length": 6,
+        "encoding": "bcd",
+        "min": 0,
+        "max": 999999
+      },
+      "09": {
+        "label": "Coin Chute #1",
+        "start": "0x02ED",
+        "length": 6,
+        "encoding": "bcd",
+        "min": 0,
+        "max": 999999
+      },
+      "10": {
+        "label": "Coin Chute #2",
+        "start": "0x02F3",
+        "length": 6,
+        "encoding": "bcd",
+        "min": 0,
+        "max": 999999
+      },
+      "11": {
+        "label": "Coin Chute #3",
+        "start": "0x02F9",
+        "length": 6,
+        "encoding": "bcd",
+        "min": 0,
+        "max": 999999
+      }
+    }
+  },
+  "adjustments": {
+    "High score functions": {
+      "01": {
+        "label": "Replay Level 1",
+        "start": "0x02BD",
+        "encoding": "bcd",
+        "length": 6,
+        "min": 0,
+        "max": 999000,
+        "default": 0,
+        "special_values": {
+          "0": "OFF"
+        },
+        "multiple_of": 10000
+      },
+      "02": {
+        "label": "Replay Level 2",
+        "start": "0x02C3",
+        "encoding": "bcd",
+        "length": 6,
+        "min": 0,
+        "max": 999000,
+        "default": 0,
+        "special_values": {
+          "0": "OFF"
+        },
+        "multiple_of": 10000
+      },
+      "03": {
+        "label": "Replay Level 3",
+        "start": "0x02C9",
+        "encoding": "bcd",
+        "length": 6,
+        "min": 0,
+        "max": 999000,
+        "default": 0,
+        "special_values": {
+          "0": "OFF"
+        },
+        "multiple_of": 10000
+      },
+      "04": {
+        "label": "High score to date",
+        "start": "0x02CF",
+        "encoding": "bcd",
+        "length": 6,
+        "min": 0,
+        "max": 999000
+      }
+    }
+  },
+  "dip_switches": {
+    "1-5": {
+      "_notes": "Full pricing table from the manuals; X/2 coins settings pay all credits on the 2nd coin. The 3/2 incentive pays 1 credit on the 1st coin and 2 on the 2nd if no scoring occurred in between (1 otherwise).",
+      "label": "Coin Chute #1 (hinge side) Credits/Coin",
+      "encoding": "dipsw",
+      "offsets": [
+        5,
+        4,
+        3,
+        2,
+        1
+      ],
+      "values": "pricing"
+    },
+    "6-7": {
+      "label": "High Score to Date Award",
+      "encoding": "dipsw",
+      "offsets": [
+        7,
+        6
+      ],
+      "values": [
+        "no award",
+        "1 credit",
+        "2 credits",
+        "3 credits"
+      ]
+    },
+    "8,32": {
+      "_notes": "Switches 8 and 32 select one of four melody/noise/chime sets; which sounds map to which setting is game-specific, see the game's manual.",
+      "label": "Sound Option",
+      "encoding": "dipsw",
+      "offsets": [
+        8,
+        32
+      ],
+      "values": [
+        "sound setting 1",
+        "sound setting 2",
+        "sound setting 3",
+        "sound setting 4"
+      ]
+    },
+    "9-13": {
+      "_notes": "Full pricing table from the manuals; X/2 coins settings pay all credits on the 2nd coin. The 3/2 incentive pays 1 credit on the 1st coin and 2 on the 2nd if no scoring occurred in between (1 otherwise).",
+      "label": "Coin Chute #3 Credits/Coin",
+      "encoding": "dipsw",
+      "offsets": [
+        13,
+        12,
+        11,
+        10,
+        9
+      ],
+      "values": "pricing"
+    },
+    "14-15": {
+      "label": "High Score / Special Award Mode",
+      "encoding": "dipsw",
+      "offsets": [
+        15,
+        14
+      ],
+      "values": [
+        "no award",
+        "novelty (points)",
+        "extra ball",
+        "replay"
+      ]
+    },
+    "16": {
+      "label": "Balls per Game",
+      "encoding": "dipsw",
+      "offsets": [
+        16
+      ],
+      "values": [
+        3,
+        5
+      ]
+    },
+    "17-19": {
+      "label": "Maximum Credits",
+      "encoding": "dipsw",
+      "offsets": [
+        19,
+        18,
+        17
+      ],
+      "values": [
+        5,
+        10,
+        15,
+        20,
+        25,
+        30,
+        35,
+        40
+      ]
+    },
+    "20": {
+      "label": "Credits Displayed",
+      "encoding": "dipsw",
+      "offsets": [
+        20
+      ],
+      "values": "off_on"
+    },
+    "21": {
+      "label": "Match Feature",
+      "encoding": "dipsw",
+      "offsets": [
+        21
+      ],
+      "values": "off_on"
+    },
+    "25-28": {
+      "label": "Coin Chute #2 Credits/Coin",
+      "encoding": "dipsw",
+      "offsets": [
+        28,
+        27,
+        26,
+        25
+      ],
+      "values": "pricing_chute2"
+    }
+  }
+}

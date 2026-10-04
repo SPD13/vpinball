@@ -54,6 +54,15 @@ private:
    void TableFavorite(struct mg_connection *c, struct mg_http_message* hm);
    void TableName(struct mg_connection *c, struct mg_http_message* hm);
    void TableDelete(struct mg_connection *c, struct mg_http_message* hm);
+   // Leaderboards, for the scores page: the scores with the profiles, deletion and assignment of scores, profiles management
+   void Scores(struct mg_connection *c, struct mg_http_message* hm);
+   void ScoreDelete(struct mg_connection *c, struct mg_http_message* hm);
+   void ScoresClear(struct mg_connection *c, struct mg_http_message* hm);
+   void ScoreAssign(struct mg_connection *c, struct mg_http_message* hm);
+   void ProfileAdd(struct mg_connection *c, struct mg_http_message* hm);
+   void ProfileRename(struct mg_connection *c, struct mg_http_message* hm);
+   void ProfileDelete(struct mg_connection *c, struct mg_http_message* hm);
+   void ProfileActive(struct mg_connection *c, struct mg_http_message* hm);
 
    void AddLogEntry(const string& formattedLog);
    void BroadcastLogEntry(const string& formattedLog);

@@ -38,6 +38,7 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include "lib/src/TableLibrary.h"
+#include "lib/src/ScoreStore.h"
 #ifdef VPX_TABLE_WEBSERVER
 #include "lib/src/WebServer.h"
 #include "lib/src/ZipUtils.h"
@@ -277,6 +278,27 @@ VPinballLib::TableLibrary& VPApp::GetTableLibrary()
    return *m_tableLibrary;
 }
 
+VPinballLib::ScoreStore& VPApp::GetScoreStore()
+{
+   if (m_scoreStore == nullptr)
+   {
+      VPinballLib::ScoreStore::Config config;
+      config.profilesPath = m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences, "profiles.json");
+      config.scoresPath = m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences, "scores.json");
+      config.log = [](VPinballLib::ScoreStore::LogLevel level, const string& message)
+      {
+         switch (level)
+         {
+         case VPinballLib::ScoreStore::LogLevel::Info: PLOGI << "ScoreStore: " << message; break;
+         case VPinballLib::ScoreStore::LogLevel::Warn: PLOGW << "ScoreStore: " << message; break;
+         case VPinballLib::ScoreStore::LogLevel::Error: PLOGE << "ScoreStore: " << message; break;
+         }
+      };
+      m_scoreStore = std::make_unique<VPinballLib::ScoreStore>(std::move(config));
+   }
+   return *m_scoreStore;
+}
+
 // Same definition as the one of the PinMAME plugin, which reads its value when it is loaded
 static VPX::Properties::PropertyRegistry::PropId GetPinMAMEPathPropId()
 {
@@ -489,6 +511,7 @@ WebServer& VPApp::GetWebServer()
    {
       m_webServer = std::make_unique<WebServer>();
       m_webServer->SetPairingRequired(m_settings.GetStandalone_WebServerPairing());
+      GetScoreStore(); // Created here, as the web server thread uses it
    }
    return *m_webServer;
 }

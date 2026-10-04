@@ -23,6 +23,7 @@ Changes a player sees, in the standalone builds (details in the numbered section
 - **No "controller detected" prompt for the VR controllers**: Steam Input also presents the Frame controllers as an Xbox gamepad; in VR, VPX no longer asks to set up a layout for it, since the controllers already work through OpenXR (section 7).
 - **Eye-tracked foveated rendering, exclusive to this branch and to the Steam Frame build**: full shading only around the point the eyes look at, following the headset's eye tracker, through a fragment shading rate image that the Frame's driver applies in its fast direct render path: 2–4 ms per frame on heavy tables at native 2160×2160 per eye, on by default (Medium); a "Foveated rendering" level (Off / Low / Medium / High), an "Eye-tracked" switch and a status line in the VR settings page. Not in upstream Visual Pinball, and inert on Windows and macOS, whose builds lack the Vulkan driver support and the bgfx patches (section 9, and `Doc/foveated-rendering.md` for the full technical reference).
 - **Steadier chrome, smoother edges**: specular anti-aliasing in the material shader stops the shiny parts from sparkling when the image is resampled every frame, on every platform; the headset builds also default to Standard FXAA, the only anti-aliasing within the Frame's budget at native resolution (section 12, `docs/Image Quality on the Steam Frame.md`).
+- **Scores and leaderboards**: the score of every game played on a library table is recorded automatically, for the player chosen in the lobby ("Player: <name>"), with a result screen (rank, personal best, table record) when the lobby comes back, a Scores tab with the leaderboard of each table, the 10 best scores in each table's page, and a Scores page in the browser to filter, reassign, delete or clear scores (with confirmation) and manage the players (section 14, `docs/Table Scores and Leaderboards.md`).
 - **Dynamic resolution in the headset**: the rendering resolution follows the GPU time of the frames, between a minimum and the table's resolution, so heavy tables and a hot headset keep their frame rate instead of judder on head movements, and light tables keep the full sharpness; a switch, a target and a minimum in the VR settings page, with a status line (section 13).
 
 ## Status
@@ -32,6 +33,7 @@ Changes a player sees, in the standalone builds (details in the numbered section
 | Table library, table picker, launcher mode, web upload, shared ROM folder | Built and run on macOS arm64. Checked through automated tests, scripted runs with frame captures of the real application, and `curl` for the web server. On Windows, the table picker was tested by hand (tabs, thumbnail grid, favorite stars, pager arrows, search box); other parts are not yet driven by a person for every feature (see each section). On the Steam Frame (2026-10-01), the lobby, the Wi-Fi upload and uploaded tables were used in the headset. The tables page of the web server (2026-10-03) was run on macOS, its routes checked with `curl` and the page driven in Chrome; it is deployed on the Frame but not yet used there. |
 | OpenXR, Valve Frame controller profile, Vulkan extension filter, VR menu panel and pointer | **Run in VR on Windows with a PSVR2** (SteamVR 2.17), in the `windows-mingw` build with `ENABLE_XR=ON` (2026-09-27), which is standalone + OpenXR + Vulkan like the Frame build. Linux ARM64: rebuilt with everything on 2026-09-28 and **run in the headset on the Steam Frame on 2026-10-01** after the driver workaround of section 7: OpenXR runtime found, Frame controller profile accepted with its 32 bindings, lobby and tables displayed (details in `Doc/steam-frame-port-plan.md`, section 6). Not yet checked there: launch from the Steam library, pointer and buttons, performance. |
 | Eye-tracked foveated rendering (Steam Frame only) | **Works in the headset on the Steam Frame (2026-10-01)**: the sharp zone follows the eyes on both axes, confirmed with the head moving while the eyes stay on an object. With a density map the gain was ≈ 0.5 ms per frame at High, because on Turnip a density map forces the tiled render path, where the scene pass is geometry-bound (geometry re-processed per bin); rendering the scene pass directly instead takes the frame from 14.0 to 9.1 ms at native 2160×2160 (`TU_AUTOTUNE_ALGO=profiled`). **Since 2026-10-03 the scene is foveated through a fragment shading rate image that follows the gaze ray, which the driver applies in the direct path: Addams Family 14.3 → 11.2 ms at High, 11.3 at Medium (the default); Ghostbusters 11.3 → 9.2 with a fixed image**, measurements and mechanism in `Doc/foveated-rendering.md`, sections 7 and 10. |
+| Scores and leaderboards (branch `leaderboards`, 2026-10-03/04) | Built and run on macOS arm64: capture checked with a test table simulating each source and with a ROM table, lobby pages from captures of the application, web page and routes with `curl` and Chrome. A coverage run over the whole library is in progress. Not yet run on the Steam Frame. |
 | Windows | `windows-mingw` (with or without `ENABLE_XR`): built and used with GCC 16 (MSYS2 UCRT64), Debug. Visual Studio build: built and run in VR in Debug with Vulkan, without the launcher (see "Build variants"). |
 | iOS / Android library builds | Not compiled. Shared files they use were changed (`WebServer`, `InGameUIPage`, `VPApp`, `player`); see "Effects on existing builds". |
 
@@ -241,11 +243,24 @@ Addams Family at 2160×2160 costs 13.5–17 ms on the Frame, over the 13.9 ms pe
 
 Found on the first run: the runtime's recommended size (80 %) is not a low enough floor for Addams on a hot GPU (hence the minimum setting), and SteamVR doubles the predicted display period when it throttles the application to half rate after missed frames, which must not be taken as the budget (the shortest period of the session is).
 
+## 14. Scores and leaderboards (branch `leaderboards`, 2026-10-03/04)
+
+Files: `src/core/ScoreTracker.h/.cpp`, `lib/src/ScoreStore.h/.cpp`, `src/ui/live/ingameui/ScoresPage.h/.cpp` (new), `plugins/plugins/ScoreboardPlugin.h` (new), `src/assets/scores/score-rules.json` (new), `src/assets/pinmame/memmaps/` (new), `src/assets/web/scores.html/.js` (new), `src/core/player.h/.cpp`, `src/core/ScriptGlobalTable.cpp`, `src/core/VPApp.h/.cpp`, `src/core/AppCommands.cpp`, `lib/src/TableLibrary.h/.cpp`, `lib/src/WebServer.h/.cpp`, `plugins/flexdmd/FlexDMD.h/.cpp`, `plugins/flexdmd/UltraDMD.cpp`, `plugins/pinmame/PinMAMEPlugin.cpp`, `src/ui/live/ingameui/InGameUI.cpp`, `TablePickerPage.h/.cpp`, `src/assets/web/tables.html/.js`, `vpx.html`, `styles.css`, `make/CMakeLists_sources.txt`. The full description, from the capture to the routes, is in **`docs/Table Scores and Leaderboards.md`**.
+
+- **Capture** (`ScoreTracker`, one per table of the library played, not for the lobby nor files outside the library): every 250 ms it reads several sources and uses the most reliable one that shows a score: the RAM of the emulated machine through the `game_state` memory map of its ROM (`pinmame`), the scores the script sends to the B2S server (`b2s`, works without a `.directb2s`), the UltraDMD scoreboard (`ultradmd`, through a new `"Scores","OnScoreboard:1"` plugin message broadcast by FlexDMD), global variables of the script with the usual names (`script`), and, when nothing else showed a score, the high scores the script saves with `SaveValue` (`highscore`). A game ends on the machine's game over flag, a game in play variable or the backglass game over light (each trusted only once it said a game runs, and debounced), or, without signal, when the script saves a score or the next game resets the scores. A game is recorded only if its scores were seen at zero near its start (NVRAM and scripts restore the last game's scores at boot); a game left in progress is discarded. Player 1 gets the active profile, the other players' scores are stored unassigned. One `[Scores]` line per session in the log tells what was found, or why nothing was.
+- **Rules** for the tables the heuristics miss: `score-rules.json` in `assets/scores` (bundled, still empty) and in the preferences folder, matched on the table file name or the ROM: `disable`, the `source` to use, or the names of the script variables (`scores`, `scoreBase`, `players`, `inGame`, `gameOver`).
+- **Memory maps**: the [Pinball Memory Maps](https://github.com/tomlogic/pinmame-nvram-maps) are bundled in `assets/pinmame/memmaps` (ODbL / DbCL, licenses and attribution in the folder; 391 maps, 379 with `game_state`, 1531 ROM names) and used by the PinMAME plugin when no map is found along the table or in the PinMAME folder.
+- **Storage** (`ScoreStore`, thread safe, revision counter for polling): `profiles.json` (players, active player) and `scores.json` (one entry per player and game: table uuid, path, name, ROM, profile, slot, players, score, date, duration, source) in the preferences folder, written to a temporary file then renamed. One leaderboard per table file; equal scores ordered by date. Deleting a player keeps their scores, unassigned.
+- **Lobby**: "Player: <name>" at the top of the picker opens the profiles page (choose, or add with the keyboard; it opens by itself the first time without any player); a **Scores** tab between Favorites and MENU (tab names shortened to fit on one line in VR) lists the tables with scores and opens their leaderboard (all scores or best per player, up to 50 rows, Play); a table's page shows its 10 best scores; back from a table, a **result page** shows each game's score, rank and place among the players, "New personal best!" or "New record of the table!", and the leaderboard around it, with "Save under a new player..." when nobody was selected. The VR keyboard of the search is now a reusable function, also shown by `TextEntryPage` for names.
+- **Web**: a **Scores** page (header link on every page, "Show scores" in each table's menu) with table and player filters, All scores / Best per player views, give a score to another player, delete one, **clear the scores of a table or all of them** (confirmation dialog, typing `DELETE` for all), and the players panel (add, rename, delete, set active); it polls every 3 s. Routes `/scores`, `/score-delete`, `/score-assign`, `/scores-clear` (`uuid` or `all=1`, never an empty uuid), `/profile-add`, `/profile-rename`, `/profile-delete`, `/profile-active`, behind pairing, 404 in the mobile builds; `/info` reports `scores`.
+- **To check on the Steam Frame**: B2S tables without backglass file, the name entry with the VR keyboard, the result page in the headset; then rules for the tables the library coverage run finds without score.
+
 ## Effects on existing builds
 
 - `-Play`, the editor and the Visual Studio build behave as before, except for the OpenXR changes that apply everywhere: the Vulkan extension filter, the extra controller inputs and default mappings, the menu panel and pointer, and the upstream VR fixes of section 8.
 - The dynamic resolution plumbing (render scale on passes and targets) is inert outside VR: the scale stays 1 and every view rect and texture coordinate is what it was.
 - Every build with the bgfx renderer gets the specular anti-aliasing of the material shader (section 12), except through Direct3D 11/12 until the shader headers are regenerated on Windows.
+- Standalone desktop builds record the scores of the library tables they play (`profiles.json`, `scores.json` in the preferences folder) and their PinMAME plugin falls back to the bundled memory maps (section 14); the table picker gets a Scores tab and a player item.
 - Standalone desktop builds get a "Tables" entry at the top of the in-game menu. When a table starts they create `VPinballX/Tables/pinmame/roms` in the documents folder, unless a PinMAME folder is already defined or `~/.pinmame/roms` exists (section 6).
 - iOS/Android library builds: uploads are staged in `.upload`; `InGameUIPage` has the tile code; the home page of the web server stays the file manager, the tables routes answer 404 and `/info` reports `tableLibrary: false`, so the file manager hides its link to the tables page; no other intended change.
 - The Visual Studio project files (`make/*.vcxproj`) were not updated. None of the new files is needed by a non-standalone build; the CMake build lists them.
@@ -257,6 +272,17 @@ New:
 ```
 lib/src/TableLibrary.h
 lib/src/TableLibrary.cpp
+lib/src/ScoreStore.h
+lib/src/ScoreStore.cpp
+src/core/ScoreTracker.h
+src/core/ScoreTracker.cpp
+plugins/plugins/ScoreboardPlugin.h
+src/ui/live/ingameui/ScoresPage.h
+src/ui/live/ingameui/ScoresPage.cpp
+src/assets/scores/score-rules.json
+src/assets/pinmame/memmaps/
+src/assets/web/scores.html
+src/assets/web/scores.js
 src/assets/web/tables.html
 src/assets/web/tables.js
 src/ui/live/ingameui/TablePickerPage.h
@@ -270,6 +296,7 @@ third-party/include/cgltf/cgltf.h
 docs/Steam Frame Branch.md
 docs/Foveated Rendering on the Steam Frame.md
 docs/Image Quality on the Steam Frame.md
+docs/Table Scores and Leaderboards.md
 ```
 
 Modified:
@@ -284,12 +311,17 @@ platforms/linux-aarch64/bgfx-turnip-descriptor-pool.patch   descriptor pools wit
 platforms/linux-aarch64/bgfx-fragment-density-map.patch     fragment density map attachments and offsets (section 9)
 platforms/linux-aarch64/bgfx-fragment-shading-rate.patch   fragment shading rate attachments, the foveation path used on the Frame (section 9)
 platforms/linux-x64/external.sh         OpenXR loader
-lib/src/WebServer.h, WebServer.cpp      desktop use, pairing, staged uploads, tables routes, tables page as home page
-src/assets/web/app.js, vpx.html         pairing prompt, Upload Folder, missing ROMs, ROM folder link, Tables | Files switch
-src/assets/web/styles.css               missing ROMs, ROM folder link, upload banner, tables page
-src/core/AppCommands.h, AppCommands.cpp -Launcher, table switching, lobby
+lib/src/WebServer.h, WebServer.cpp      desktop use, pairing, staged uploads, tables routes, tables page as home page, scores and profiles routes
+lib/src/TableLibrary.h, .cpp            FindTable (library table of a file, for the scores)
+src/assets/web/app.js, vpx.html         pairing prompt, Upload Folder, missing ROMs, ROM folder link, Tables | Scores | Files switch
+src/assets/web/tables.html, tables.js   Scores link, "Show scores" in the table menu
+src/assets/web/styles.css               missing ROMs, ROM folder link, upload banner, tables page, scores page
+src/core/ScriptGlobalTable.cpp          SaveValue forwarded to the score tracker
+plugins/flexdmd/FlexDMD.h, .cpp, UltraDMD.cpp   UltraDMD scoreboard broadcast for the scores
+plugins/pinmame/PinMAMEPlugin.cpp       bundled memory maps as last resort
+src/core/AppCommands.h, AppCommands.cpp -Launcher, table switching, lobby, result or profiles page when the lobby opens
 src/core/main.cpp                       launcher counts as play mode, web server started with the application when always on
-src/core/VPApp.h, VPApp.cpp             table library, web server (pairing and always-on settings), ROM folder, lobby path
+src/core/VPApp.h, VPApp.cpp             table library, web server (pairing and always-on settings), ROM folder, lobby path, score store, last session result
 src/core/Settings_properties.inl        Standalone settings (including WebServerPairing, WebServerAlwaysOn), VR autodetect and Standard FXAA defaults on standalone OpenXR builds
 src/shaders/bgfx/material.sh, fs_ball.sc   specular anti-aliasing (section 12)
 src/shaders/bgfx/fs_basic.sc, fs_ball.sc   clip-space lookups scaled for the dynamic resolution (section 13)
@@ -302,7 +334,7 @@ src/renderer/Renderer.cpp               scaled frame, flagged targets, scale uni
 src/renderer/RenderProbe.cpp, Sampler.cpp   flagged probe targets, re-activation with the scale
 src/ui/live/ingameui/VRSettingsPage.cpp foveation and dynamic resolution items
 src/input/XRInputHandler.h              eye gaze pose action and interaction profile (foveated rendering)
-src/core/player.h, player.cpp           table image on close
+src/core/player.h, player.cpp           table image on close, score tracker
 src/input/InputManager.h, .cpp          quit action captures the image in launcher mode, no layout prompt for the VR virtual gamepad
 src/input/SDLInputHandler.h             VR virtual gamepad detection, joystick vendor/product ids logged
 src/input/XRInputHandler.h              Frame controller, aim poses, analog read
@@ -311,7 +343,8 @@ src/renderer/Renderer.h, Renderer.cpp   controller models drawn in VR
 src/renderer/XRVulkanBackend.h          run-time libvulkan on Linux, extension filter
 src/ui/live/LiveUI.h, LiveUI.cpp        pointer fed to ImGui, menu rendered while closing for the table image
 src/ui/live/ingameui/HomePage.cpp       "Tables" entry
-src/ui/live/ingameui/InGameUI.h, .cpp   page registration, accessors
+src/ui/live/ingameui/InGameUI.h, .cpp   page registration (profiles, scores/result), accessors
+src/ui/live/ingameui/TablePickerPage.h, .cpp   player item, Scores tab, top scores, reusable VR keyboard
 src/ui/live/ingameui/InGameUIItem.h     tile image and toggle
 src/ui/live/ingameui/InGameUIPage.h, .cpp  tile layout
 ```
@@ -319,4 +352,4 @@ src/ui/live/ingameui/InGameUIPage.h, .cpp  tile layout
 ## Working on this branch
 
 - The repository mixes LF and CRLF files and has no `.gitattributes`. On Windows, set `git config --global core.autocrlf false` before cloning, and use editors and tools that preserve line endings.
-- User data is never part of the repository: tables, ROMs, `VPinballX.ini`, `tables.json` and `table-stats.json` live in the user's documents and preferences folders. Keep it that way: check `git status` before committing, and never add `.vpx` tables other than upstream's own assets, `.directb2s`, ROM zips or `.ini` files.
+- User data is never part of the repository: tables, ROMs, `VPinballX.ini`, `tables.json`, `table-stats.json`, `profiles.json` and `scores.json` live in the user's documents and preferences folders. Keep it that way: check `git status` before committing, and never add `.vpx` tables other than upstream's own assets, `.directb2s`, ROM zips or `.ini` files.

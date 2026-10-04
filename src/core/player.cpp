@@ -11,6 +11,9 @@
 
 #include "core/editablereg.h"
 #include "core/VPApp.h"
+#ifdef __STANDALONE__
+#include "core/ScoreTracker.h"
+#endif
 #include "core/VPXPluginAPIImpl.h"
 #include "parts/ball.h"
 #include "parts/flasher.h"
@@ -826,6 +829,21 @@ Player::Player(PinTable *const table, const PlayMode playMode)
    // Signal plugins before performing static prerendering. The only thing not fully initialized is the physics (is this ok ?)
    m_pluginAPI.OnGameStart();
 
+#ifdef __STANDALONE__
+   // Scores are recorded for the tables of the library (leaderboards), not for the lobby. The result of a previous table that was not
+   // shown (tables played one after the other without going back to the lobby) is dropped.
+   if (!m_isLobby)
+      g_app->m_lastSessionResult.reset();
+   if (playMode == PlayMode::Play && !m_isLobby)
+   {
+      if (const std::optional<VPinballLib::Table> libraryTable = g_app->GetTableLibrary().FindTable(m_ptable->m_filename))
+      {
+         m_scoreTracker = std::make_unique<ScoreTracker>(this, *libraryTable);
+         m_scoreTracker->Start();
+      }
+   }
+#endif
+
    // Open UI if requested (this also disables static prerendering, so must be done before performing it)
    if (playMode == PlayMode::EditPOV)
       m_liveUI->OpenInGameUI("settings/pov"s);
@@ -917,6 +935,12 @@ Player::~Player()
    PLOGI << "Closing player...";
    g_app->m_lastTableCloseTime = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 
+#ifdef __STANDALONE__
+   // Last look at the scores while PinMAME and the script still run
+   if (m_scoreTracker)
+      m_scoreTracker->Finish();
+#endif
+
    // Signal plugins early since most fields will become invalid
    m_pluginAPI.OnGameEnd();
 
@@ -927,6 +951,17 @@ Player::~Player()
       if (m_detectScriptHang && g_pvp)
          g_pvp->PostWorkToWorkerThread(HANG_SNOOP_STOP, NULL);
    }
+
+#ifdef __STANDALONE__
+   // High scores saved by the Exit event of the script, then the scores of the session for the lobby
+   if (m_scoreTracker)
+   {
+      m_scoreTracker->LateFinish();
+      if (!m_scoreTracker->GetRecordedScoreIds().empty())
+         g_app->m_lastSessionResult = VPApp::SessionResult { m_scoreTracker->GetTableUuid(), m_scoreTracker->GetRecordedScoreIds() };
+      m_scoreTracker = nullptr;
+   }
+#endif
 
    delete m_liveUI;
    m_liveUI = nullptr;
@@ -2345,6 +2380,11 @@ void Player::PrepareFrame()
 
    m_logicProfiler.NewFrame(m_time_msec);
    m_logicProfiler.EnterProfileSection(FrameProfiler::PROFILE_PREPARE_FRAME);
+
+#ifdef __STANDALONE__
+   if (m_scoreTracker)
+      m_scoreTracker->Update();
+#endif
 
    m_overall_frames++; // This causes the next VPinMAME <-> VPX sync to update light status which can be heavy since it needs to perform PWM integration of all lights
    m_lastKnownGoodCounter++;

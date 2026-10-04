@@ -2,10 +2,12 @@
 
 #include "core/stdafx.h"
 #include "TablePickerPage.h"
+#include "ScoresPage.h"
 
 #ifdef __STANDALONE__
 
 #include "core/VPApp.h"
+#include "lib/src/ScoreStore.h"
 #include "lib/src/TableLibrary.h"
 #ifdef VPX_TABLE_WEBSERVER
 #include "lib/src/WebServer.h"
@@ -25,8 +27,8 @@ namespace VPX::InGameUI
 {
 
 // State of the picker, kept while the application runs (the page is recreated each time it is opened)
-enum class PickerTab { All, Recent, NewlyAdded, MostPlayed, Favorites, Menu }; // Menu: the options of the library and the application, instead of a list
-static constexpr const char* TAB_NAMES[] = { "All", "Recent", "Newly added", "Most played", "Favorites", "MENU" };
+enum class PickerTab { All, Recent, NewlyAdded, MostPlayed, Favorites, Scores, Menu }; // Scores: the leaderboards, Menu: the options of the library and the application, instead of a list
+static constexpr const char* TAB_NAMES[] = { "All", "Recent", "New", "Most played", "Favorites", "Scores", "MENU" }; // Short names: the tabs fit on one line in VR
 static PickerTab s_tab = PickerTab::All;
 static string s_search;
 static int s_page = 0;
@@ -178,7 +180,7 @@ void TablePickerPage::Render(float elapsedS)
 
    // Scans run on a worker thread (they may import large files) and are also triggered outside of this page
    const TableLibrary& library = g_app->GetTableLibrary();
-   if (m_revision != library.GetRevision() || m_scanning != library.IsScanning())
+   if (m_revision != library.GetRevision() || m_scanning != library.IsScanning() || m_scoresRevision != g_app->GetScoreStore().GetRevision())
       RequestRebuild();
 #ifdef VPX_TABLE_WEBSERVER
    // The pairing code is renewed after failed attempts
@@ -371,14 +373,22 @@ void TablePickerPage::RenderSearch()
    }
    ImGui::PopStyleVar();
    if (m_virtualKeyboard)
-      RenderVirtualKeyboard();
+   {
+      // Keys add to the search (not to the text field, which loses the focus when a key is clicked), which filters the list at once
+      string search = s_search;
+      if (RenderVirtualKeyboard(search, 64, false, true))
+         m_virtualKeyboard = false;
+      if (search != s_search)
+         SetSearch(search);
+   }
    ImGui::PopID();
 }
 
-void TablePickerPage::RenderVirtualKeyboard()
+bool RenderVirtualKeyboard(string& text, size_t maxLength, bool capitalizeWords, bool withDone)
 {
-   // Keys add to the search (not to the text field, which loses the focus when a key is clicked), which filters the list at once
    static constexpr const char* rows[] = { "1234567890", "QWERTYUIOP", "ASDFGHJKL'", "ZXCVBNM-&." };
+   const bool upperCase = capitalizeWords && (text.empty() || text.back() == ' ');
+   bool done = false;
    const ImGuiStyle& style = ImGui::GetStyle();
    const float spacing = style.ItemSpacing.x;
    const float keyWidth = (ImGui::GetContentRegionAvail().x - 9.f * spacing) / 10.f;
@@ -391,35 +401,37 @@ void TablePickerPage::RenderVirtualKeyboard()
       {
          if (key != row)
             ImGui::SameLine(0.f, spacing);
-         const char label[2] = { *key, '\0' };
+         const char c = upperCase ? *key : static_cast<char>(std::tolower(static_cast<unsigned char>(*key)));
+         const char label[2] = { c, '\0' };
          ImGui::PushID(*key);
-         if (ImGui::Button(label, ImVec2(keyWidth, keyHeight)) && s_search.size() < 64)
-            SetSearch(s_search + static_cast<char>(std::tolower(static_cast<unsigned char>(*key))));
+         if (ImGui::Button(label, ImVec2(keyWidth, keyHeight)) && text.size() < maxLength)
+            text += c;
          ImGui::PopID();
       }
    }
-   // Last row: space over 4 keys, then delete, clear and done over 2 keys each
+   // Last row: space over 4 keys (6 without done), then delete, clear and done over 2 keys each
    const float wideKey = 2.f * keyWidth + spacing;
-   if (ImGui::Button("Space", ImVec2(2.f * wideKey + spacing, keyHeight)) && s_search.size() < 64)
-      SetSearch(s_search + ' ');
+   if (ImGui::Button("Space", ImVec2(withDone ? 2.f * wideKey + spacing : 3.f * wideKey + 2.f * spacing, keyHeight)) && text.size() < maxLength)
+      text += ' ';
    ImGui::SameLine(0.f, spacing);
-   if (ImGui::Button(ICON_FK_ARROW_LEFT " Delete", ImVec2(wideKey, keyHeight)) && !s_search.empty())
+   if (ImGui::Button(ICON_FK_ARROW_LEFT " Delete", ImVec2(wideKey, keyHeight)) && !text.empty())
    {
       // A whole UTF-8 character
-      string search = s_search;
-      while (!search.empty() && (static_cast<unsigned char>(search.back()) & 0xC0) == 0x80)
-         search.pop_back();
-      if (!search.empty())
-         search.pop_back();
-      SetSearch(search);
+      while (!text.empty() && (static_cast<unsigned char>(text.back()) & 0xC0) == 0x80)
+         text.pop_back();
+      if (!text.empty())
+         text.pop_back();
    }
    ImGui::SameLine(0.f, spacing);
    if (ImGui::Button("Clear", ImVec2(wideKey, keyHeight)))
-      SetSearch(string());
-   ImGui::SameLine(0.f, spacing);
-   if (ImGui::Button(ICON_FK_CHECK " Done", ImVec2(wideKey, keyHeight)))
-      m_virtualKeyboard = false;
+      text.clear();
+   if (withDone)
+   {
+      ImGui::SameLine(0.f, spacing);
+      done = ImGui::Button(ICON_FK_CHECK " Done", ImVec2(wideKey, keyHeight));
+   }
    ImGui::PopID();
+   return done;
 }
 
 void TablePickerPage::RenderPager(const char* item)
@@ -442,6 +454,7 @@ void TablePickerPage::BuildPage()
    TableLibrary& library = g_app->GetTableLibrary();
    m_revision = library.GetRevision();
    m_scanning = library.IsScanning();
+   m_scoresRevision = g_app->GetScoreStore().GetRevision();
    const bool gridView = g_app->m_settings.GetStandalone_TablePickerGridView();
    const bool sortAscending = g_app->m_settings.GetStandalone_TablePickerSortAscending();
    vector<LibraryTable> tables = library.GetTables(s_tab != PickerTab::All || sortAscending);
@@ -483,6 +496,7 @@ void TablePickerPage::BuildPage()
       std::erase_if(tables, [](const LibraryTable& table) { return !table.favorite; });
       emptyMessage = "No favorite yet: use the star of a table, or 'Add to favorites' in its page";
       break;
+   case PickerTab::Scores:
    case PickerTab::Menu:
       break;
    }
@@ -517,6 +531,14 @@ void TablePickerPage::BuildPage()
    {
       KeepThumbnails({});
       BuildMenuTab();
+      return;
+   }
+   // Who is playing, for the leaderboards
+   AddPlayerItem(*this);
+   if (s_tab == PickerTab::Scores)
+   {
+      KeepThumbnails({});
+      BuildLeaderboardList(*this);
       return;
    }
    AddItem(std::make_unique<InGameUIItem>(SEARCH_ITEM, "Type a few letters of the name of a table. Without a keyboard, Left/Right open a text entry page."s, [this](int, const InGameUIItem*) { RenderSearch(); }));
@@ -723,11 +745,12 @@ void TablePickerPage::BuildMenuTab()
 static constexpr const char* CHARACTER_LABEL = "Character: ";
 static constexpr std::string_view TEXT_ENTRY_CHARACTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz0123456789-'&!().,";
 
-TextEntryPage::TextEntryPage(const string& title, const string& text, const std::function<void(const string&)>& onSave, bool allowEmpty)
-   : InGameUIPage(title, "Left/Right select a character, which is then added to the text"s, SaveMode::None)
+TextEntryPage::TextEntryPage(const string& title, const string& text, const std::function<void(const string&)>& onSave, bool allowEmpty, size_t maxLength)
+   : InGameUIPage(title, "Type on the keyboard, or with buttons: Left/Right select a character, which is then added to the text"s, SaveMode::None)
    , m_text(text)
    , m_onSave(onSave)
    , m_allowEmpty(allowEmpty)
+   , m_maxLength(maxLength)
 {
 }
 
@@ -754,11 +777,22 @@ void TextEntryPage::BuildPage()
    const char c = TEXT_ENTRY_CHARACTERS[m_charIndex];
    const string displayedChar = c == ' ' ? "space"s : string(1, c);
    AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Header, m_text + '_'));
+   AddItem(std::make_unique<InGameUIItem>("##keyboard"s, "Pointer: click the keys"s,
+      [this](int, const InGameUIItem*)
+      {
+         string text = m_text;
+         RenderVirtualKeyboard(text, m_maxLength, true, false);
+         if (text != m_text)
+         {
+            m_text = text;
+            RequestRebuild();
+         }
+      })).m_customHighlight = true;
    AddItem(std::make_unique<InGameUIItem>(CHARACTER_LABEL + "< "s + displayedChar + " >", "Left/Right: previous/next character"s, []() { /* Handled by AdjustItem as it depends on the direction */ }));
    AddItem(std::make_unique<InGameUIItem>("Add '" + displayedChar + '\'', ""s,
       [this, c]()
       {
-         if (m_text.size() < 64)
+         if (m_text.size() < m_maxLength)
             m_text += c;
          // Words usually are capitalized: propose lowercase after a letter, uppercase after a space
          if (c == ' ')
@@ -869,24 +903,27 @@ void TableActionsPage::BuildPage()
       }));
 
    // The running table holds its files and saves its settings when closing
-   if (isRunning)
-      return;
+   if (!isRunning)
+   {
+      if (FileExists(library.GetIniPath(*table)))
+         AddItem(std::make_unique<InGameUIItem>("Reset table settings"s, "Remove the settings saved for this table (its .ini file)"s,
+            [this]()
+            {
+               const bool reset = g_app->GetTableLibrary().ResetIni(m_uuid);
+               m_player->m_liveUI->PushNotification(reset ? "Table settings were reset"s : "Failed to reset table settings"s, 3000);
+               RequestRebuild();
+            }));
 
-   if (FileExists(library.GetIniPath(*table)))
-      AddItem(std::make_unique<InGameUIItem>("Reset table settings"s, "Remove the settings saved for this table (its .ini file)"s,
+      AddItem(std::make_unique<InGameUIItem>("Delete..."s, "Remove this table from the device"s,
          [this]()
          {
-            const bool reset = g_app->GetTableLibrary().ResetIni(m_uuid);
-            m_player->m_liveUI->PushNotification(reset ? "Table settings were reset"s : "Failed to reset table settings"s, 3000);
+            m_confirmDelete = true;
             RequestRebuild();
          }));
+   }
 
-   AddItem(std::make_unique<InGameUIItem>("Delete..."s, "Remove this table from the device"s,
-      [this]()
-      {
-         m_confirmDelete = true;
-         RequestRebuild();
-      }));
+   // The scores to beat, before playing
+   AddTopScores(*this, m_uuid, 10);
 }
 
 }

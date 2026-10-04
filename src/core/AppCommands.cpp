@@ -7,7 +7,9 @@
 #include "core/TournamentFile.h"
 #include "core/VPApp.h"
 #include "core/editablereg.h"
+#include "lib/src/ScoreStore.h"
 #include "lib/src/TableLibrary.h"
+#include "ui/live/ingameui/ScoresPage.h"
 #include "parts/Material.h"
 #include "parts/pintable.h"
 #include "parts/PartGroup.h"
@@ -297,7 +299,18 @@ void PlayTableCommand::Play(bool openTablePicker)
    auto player = std::make_unique<Player>(table, Player::PlayMode::Play);
 #ifdef __STANDALONE__
    if (openTablePicker)
+   {
       player->m_liveUI->OpenInGameUI("tables/picker"s);
+      // Back from a table: the scores of its games and their rank. Otherwise, the first time without any player, ask who is playing.
+      static bool s_profileAsked = false;
+      if (g_app->m_lastSessionResult)
+      {
+         VPX::InGameUI::ScoreResultPage::SetResult(*std::exchange(g_app->m_lastSessionResult, std::nullopt));
+         player->m_liveUI->m_inGameUI.Navigate("scores/result"s);
+      }
+      else if (!std::exchange(s_profileAsked, true) && g_app->GetScoreStore().GetProfiles().empty())
+         player->m_liveUI->m_inGameUI.Navigate("profiles"s);
+   }
 #endif
    player->GameLoop();
    player = nullptr;

@@ -378,6 +378,8 @@ set(VPX_SOURCES
    src/ui/live/ingameui/TableOptionsPage.cpp
    src/ui/live/ingameui/TablePickerPage.h
    src/ui/live/ingameui/TablePickerPage.cpp
+   src/ui/live/ingameui/ScoresPage.h
+   src/ui/live/ingameui/ScoresPage.cpp
    src/ui/live/ingameui/TableRulesPage.h
    src/ui/live/ingameui/TableRulesPage.cpp
    src/ui/live/ingameui/VRSettingsPage.h
@@ -782,6 +784,11 @@ set(VPX_STANDALONE_SOURCES
 
    lib/src/TableLibrary.h
    lib/src/TableLibrary.cpp
+   lib/src/ScoreStore.h
+   lib/src/ScoreStore.cpp
+
+   src/core/ScoreTracker.h
+   src/core/ScoreTracker.cpp
 )
 
 # Web server used to manage tables from a browser

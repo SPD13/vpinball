@@ -1,0 +1,9 @@
+{
+  "_comment": [
+    "Per table rules for the leaderboards, for the tables whose scores are not found or not ended right by the heuristics (see src/core/ScoreTracker.h).",
+    "A rule applies to the tables whose file name contains 'file', or which run the ROM 'rom'. Users can add their own in score-rules.json in the preferences folder.",
+    "Fields: disable (no scores recorded), source (pinmame, b2s, ultradmd, script, highscore), scores / players / inGame / gameOver (names of script variables), scoreBase (0 or 1, first index of the scores array).",
+    "Example: {\"file\": \"my original table\", \"source\": \"script\", \"scores\": \"PlayerScores\", \"scoreBase\": 1, \"inGame\": \"GameRunning\"}"
+  ],
+  "rules": []
+}

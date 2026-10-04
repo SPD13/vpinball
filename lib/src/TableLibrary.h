@@ -76,6 +76,8 @@ public:
    // Tables sorted by name (case insensitive)
    std::vector<Table> GetTables(bool ascending = true) const;
    std::optional<Table> GetTable(const std::string& uuid) const;
+   // Table of a file of the tables folder (nothing for files outside of the library)
+   std::optional<Table> FindTable(const std::filesystem::path& fullPath);
 
    // Incremented each time the table list changes, for UIs that poll
    uint64_t GetRevision() const { return m_revision.load(); }

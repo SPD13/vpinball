@@ -5,7 +5,7 @@
 #include "Settings.h"
 #include "FileLocator.h"
 
-namespace VPinballLib { class TableLibrary; }
+namespace VPinballLib { class TableLibrary; class ScoreStore; }
 class WebServer; // Only with VPX_TABLE_WEBSERVER, defined by the macOS, Linux and windows-mingw builds (mobile builds have their own instance)
 namespace VPX { class Window; }
 class VRDevice;
@@ -77,6 +77,16 @@ public:
    // Tables managed by the application (in-game table picker), created on first use
    VPinballLib::TableLibrary& GetTableLibrary();
 
+   // Player profiles and the scores of their games (profiles.json, scores.json), created on first use
+   VPinballLib::ScoreStore& GetScoreStore();
+   // Scores recorded while playing the last table, shown by the lobby when it gets back (see ScoreTracker), then cleared
+   struct SessionResult
+   {
+      string tableUuid;
+      vector<string> scoreIds;
+   };
+   std::optional<SessionResult> m_lastSessionResult;
+
 #ifdef VPX_TABLE_WEBSERVER
    // Web server to manage the table library from a browser. It runs from its activation in the table picker until the application is closed,
    // across the lobby and the tables, and is started with the application when set to be always on (Standalone.WebServerAlwaysOn).
@@ -138,6 +148,7 @@ private:
 
 #ifdef __STANDALONE__
    std::unique_ptr<VPinballLib::TableLibrary> m_tableLibrary;
+   std::unique_ptr<VPinballLib::ScoreStore> m_scoreStore;
    bool m_isSharedPinMAMEFolderApplied = false;
 #ifdef VPX_TABLE_WEBSERVER
    std::unique_ptr<WebServer> m_webServer;

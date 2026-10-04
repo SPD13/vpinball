@@ -258,6 +258,8 @@ void UltraDMD::DisplayVersionInfo()
 
 void UltraDMD::DisplayScoreboard(int cPlayers, int highlightedPlayer, int score1, int score2, int score3, int score4, const string& lowerLeft, const string& lowerRight)
 {
+   const int64_t scores[4] = { score1, score2, score3, score4 };
+   m_pFlexDMD->BroadcastScoreboard("ultradmd", cPlayers, highlightedPlayer, scores, 4);
    m_pScoreBoard->SetNPlayers(cPlayers);
    m_pScoreBoard->SetHighlightedPlayer(highlightedPlayer);
    m_pScoreBoard->SetScore(score1, score2, score3, score4);

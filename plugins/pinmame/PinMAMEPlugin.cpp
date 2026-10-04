@@ -373,6 +373,16 @@ MSGPI_EXPORT void MSGPIAPI PinMAMEPluginLoad(const uint32_t sessionId, const Msg
          pinmamePath = pinMAMEPathProp_Get();
       if (memmapPath.empty())
          memmapPath = std::filesystem::path(pinMAMEPathProp_Get()) / "memmaps"sv;
+      // Last resort: the maps bundled with the application (https://github.com/tomlogic/pinmame-nvram-maps), which expose the scores of
+      // the games to the leaderboards of VPX (see ScoreTracker)
+      if (std::error_code ec; !std::filesystem::exists(memmapPath / "index.json"sv, ec) && vpxApi != nullptr)
+      {
+         VPXInfo vpxInfo;
+         vpxApi->GetVpxInfo(&vpxInfo);
+         const std::filesystem::path bundledPath = std::filesystem::path(vpxInfo.path) / "assets"sv / "pinmame"sv / "memmaps"sv;
+         if (std::filesystem::exists(bundledPath / "index.json"sv, ec))
+            memmapPath = bundledPath;
+      }
 
       // Custom platforms defaults
       #if (defined(__APPLE__) && ((defined(TARGET_OS_IOS) && TARGET_OS_IOS) || (defined(TARGET_OS_TV) && TARGET_OS_TV))) || defined(__ANDROID__)

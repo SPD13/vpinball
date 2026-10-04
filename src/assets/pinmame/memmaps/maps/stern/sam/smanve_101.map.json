@@ -1,0 +1,237 @@
+{
+  "_fileformat": 0.7,
+  "_metadata": {
+    "version": 5,
+    "license": "Open Data Commons Open Database License (ODbL) v1.0",
+    "platform": "stern-sam",
+    "roms": [
+      "smanve_100",
+      "smanve_101",
+      "smanve_101c"
+    ]
+  },
+  "game_state": {
+    "player_count": {
+      "label": "Player Count",
+      "encoding": "int",
+      "start": "0x02110900"
+    },
+    "current_player": {
+      "label": "Player",
+      "encoding": "int",
+      "start": "0x00032AB8"
+    },
+    "current_ball": {
+      "label": "Ball",
+      "encoding": "int",
+      "start": "0x00032AB9"
+    },
+    "scores": [
+      {
+        "label": "Player 1",
+        "encoding": "int",
+        "length": 4,
+        "start": "0x021109E4"
+      },
+      {
+        "label": "Player 2",
+        "encoding": "int",
+        "length": 4,
+        "start": "0x021109E8"
+      },
+      {
+        "label": "Player 3",
+        "encoding": "int",
+        "length": 4,
+        "start": "0x021109EC"
+      },
+      {
+        "label": "Player 4",
+        "encoding": "int",
+        "length": 4,
+        "start": "0x021109F0"
+      }
+    ]
+  },
+  "high_scores": [
+    {
+      "label": "Grand Champion",
+      "initials": {
+        "start": "0x02102b80",
+        "encoding": "ch",
+        "null": "terminate",
+        "length": 11
+      },
+      "score": {
+        "start": "0x02102b98",
+        "encoding": "int",
+        "length": 4
+      }
+    },
+    {
+      "label": "First Place",
+      "initials": {
+        "start": "0x02102ba0",
+        "encoding": "ch",
+        "null": "terminate",
+        "length": 11
+      },
+      "score": {
+        "start": "0x02102bb8",
+        "encoding": "int",
+        "length": 4
+      }
+    },
+    {
+      "label": "Second Place",
+      "initials": {
+        "start": "0x02102bc0",
+        "encoding": "ch",
+        "null": "terminate",
+        "length": 11
+      },
+      "score": {
+        "start": "0x02102bd8",
+        "encoding": "int",
+        "length": 4
+      }
+    },
+    {
+      "label": "Third Place",
+      "initials": {
+        "start": "0x02102be0",
+        "encoding": "ch",
+        "null": "terminate",
+        "length": 11
+      },
+      "score": {
+        "start": "0x02102bf8",
+        "encoding": "int",
+        "length": 4
+      }
+    },
+    {
+      "label": "Fourth Place",
+      "initials": {
+        "start": "0x02102c00",
+        "encoding": "ch",
+        "null": "terminate",
+        "length": 11
+      },
+      "score": {
+        "start": "0x02102c18",
+        "encoding": "int",
+        "length": 4
+      }
+    }
+  ],
+  "mode_champions": [
+    {
+      "label": "Combo Champion",
+      "initials": {
+        "start": "0x02102c20",
+        "encoding": "ch",
+        "null": "terminate",
+        "length": 11
+      },
+      "counter": {
+        "start": "0x02102c38",
+        "encoding": "int",
+        "length": 4
+      }
+    },
+    {
+      "label": "Best Combo Champion",
+      "initials": {
+        "start": "0x02102c40",
+        "encoding": "ch",
+        "null": "terminate",
+        "length": 11
+      },
+      "counter": {
+        "start": "0x02102c5a",
+        "encoding": "int",
+        "length": 1
+      }
+    },
+    {
+      "label": "Spider Champion",
+      "initials": {
+        "start": "0x02102c60",
+        "encoding": "ch",
+        "null": "terminate",
+        "length": 11
+      },
+      "counter": {
+        "start": "0x02102c78",
+        "encoding": "int",
+        "length": 4
+      }
+    },
+    {
+      "label": "Spider Sense Champion",
+      "initials": {
+        "start": "0x02102c80",
+        "encoding": "ch",
+        "null": "terminate",
+        "length": 11
+      },
+      "score": {
+        "start": "0x02102c98",
+        "encoding": "int",
+        "length": 4
+      }
+    },
+    {
+      "label": "Battle Royale Champion",
+      "initials": {
+        "start": "0x02102ca0",
+        "encoding": "ch",
+        "null": "terminate",
+        "length": 11
+      },
+      "score": {
+        "start": "0x02102cb8",
+        "encoding": "int",
+        "length": 4
+      }
+    },
+    {
+      "label": "Super Hero Champion",
+      "initials": {
+        "start": "0x02102cc0",
+        "encoding": "ch",
+        "null": "terminate",
+        "length": 11
+      },
+      "score": {
+        "start": "0x02102cd8",
+        "encoding": "int",
+        "length": 4
+      }
+    },
+    {
+      "label": "Best Bonus Champion",
+      "initials": {
+        "start": "0x02102ce0",
+        "encoding": "ch",
+        "null": "terminate",
+        "length": 11
+      },
+      "score": {
+        "start": "0x02102cf8",
+        "encoding": "int",
+        "length": 4
+      }
+    }
+  ],
+  "_notes": [
+    "game_state added locally, from a 4-player game driven through the cabinet's streamer.",
+    "current_player and current_ball are adjacent in CPU RAM at 0x00032AB8 and 0x00032AB9, player low",
+    "and ball high, the shape every Stern SAM game measured uses.",
+    "Scores are 4 bytes on 4-byte centres from 0x021109E4. The sweep also offered 0x00036470 in CPU",
+    "RAM, reading 251,000 / 250,500 / 250,500 / 251,500 -- four plausible, evenly spaced, monotonic",
+    "values, and wrong. Scores are in NVRAM on every SAM game measured, which is what rejects it.",
+    "player_count at 0x02110900, the one address every SAM game shares."
+  ]
+}

@@ -705,6 +705,19 @@ bool TableLibrary::RecordPlay(const fs::path& fullPath)
    }, false);
 }
 
+std::optional<Table> TableLibrary::FindTable(const fs::path& fullPath)
+{
+   std::lock_guard operationLock(m_operationMutex);
+   if (!m_loaded)
+      LoadJson();
+   if (!IsInsideTables(fullPath))
+      return std::nullopt;
+   const string relativePath = RelativePath(fullPath);
+   std::lock_guard lock(m_mutex);
+   const auto it = std::find_if(m_tables.begin(), m_tables.end(), [&](const Table& table) { return table.path == relativePath; });
+   return it == m_tables.end() ? std::nullopt : std::optional<Table>(*it);
+}
+
 std::optional<int> TableLibrary::FuzzyScore(const string& query, const string& text)
 {
    // Each word of the query is searched on its own, so that they can be given in any order ('mars attack' finds 'Attack from Mars')

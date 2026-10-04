@@ -14,6 +14,7 @@
 #include "VPinballLib.h"
 #else
 #include "TableLibrary.h"
+#include "ScoreStore.h"
 #endif
 #include "ZipUtils.h"
 
@@ -31,6 +32,7 @@
 #endif
 #include <filesystem>
 #include <map>
+#include <set>
 #include <algorithm>
 
 using json = nlohmann::json;
@@ -111,7 +113,8 @@ void WebServer::EventHandler(struct mg_connection *c, int ev, void *ev_data)
 
       // Everything but the static web page needs a paired browser
       static constexpr const char* apiRoutes[] = { "/info", "/status", "/files", "/download", "/upload", "/delete", "/folder", "/extract", "/command", "/log-stream", "/rename", "/move", "/missing-roms",
-         "/tables", "/table-image", "/table-favorite", "/table-name", "/table-delete" };
+         "/tables", "/table-image", "/table-favorite", "/table-name", "/table-delete",
+         "/scores", "/score-delete", "/scores-clear", "/score-assign", "/profile-add", "/profile-rename", "/profile-delete", "/profile-active" };
       const bool isApi = std::any_of(std::begin(apiRoutes), std::end(apiRoutes), [hm](const char* route) { return mg_match(hm->uri, mg_str(route), NULL); });
       if (mg_match(hm->uri, mg_str("/pair"), NULL))
          webServer->Pair(c, hm);
@@ -155,6 +158,22 @@ void WebServer::EventHandler(struct mg_connection *c, int ev, void *ev_data)
          webServer->TableName(c, hm);
       else if (mg_match(hm->uri, mg_str("/table-delete"), NULL))
          webServer->TableDelete(c, hm);
+      else if (mg_match(hm->uri, mg_str("/scores"), NULL))
+         webServer->Scores(c, hm);
+      else if (mg_match(hm->uri, mg_str("/score-delete"), NULL))
+         webServer->ScoreDelete(c, hm);
+      else if (mg_match(hm->uri, mg_str("/scores-clear"), NULL))
+         webServer->ScoresClear(c, hm);
+      else if (mg_match(hm->uri, mg_str("/score-assign"), NULL))
+         webServer->ScoreAssign(c, hm);
+      else if (mg_match(hm->uri, mg_str("/profile-add"), NULL))
+         webServer->ProfileAdd(c, hm);
+      else if (mg_match(hm->uri, mg_str("/profile-rename"), NULL))
+         webServer->ProfileRename(c, hm);
+      else if (mg_match(hm->uri, mg_str("/profile-delete"), NULL))
+         webServer->ProfileDelete(c, hm);
+      else if (mg_match(hm->uri, mg_str("/profile-active"), NULL))
+         webServer->ProfileActive(c, hm);
       else {
          struct mg_http_serve_opts opts = {};
 
@@ -433,7 +452,8 @@ void WebServer::Info(struct mg_connection *c, struct mg_http_message* hm)
 #else
    constexpr bool hasTableLibrary = true; // The tables page manages it
 #endif
-   json j = {{"version", VP_VERSION_STRING_FULL_LITERAL}, {"extractableExtensions", ZipUtils::GetExtractableExtensions()}, {"tableLibrary", hasTableLibrary}};
+   json j = {{"version", VP_VERSION_STRING_FULL_LITERAL}, {"extractableExtensions", ZipUtils::GetExtractableExtensions()}, {"tableLibrary", hasTableLibrary},
+      {"scores", hasTableLibrary}}; // Leaderboards of the tables of the library
    string response = j.dump();
    mg_http_reply(c, STATUS_OK, HEADER_JSON, "%s", response.c_str());
 }
@@ -787,6 +807,260 @@ void WebServer::TableDelete(struct mg_connection *c, struct mg_http_message* hm)
    }
    PLOGI.printf("Table deleted: %s (%s)", table->name.c_str(), table->path.c_str());
    SetLastUpdate(); // Files are gone: the file manager refreshes
+   mg_http_reply(c, STATUS_OK, "", RESPONSE_OK);
+#endif
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Leaderboards: the scores recorded at the end of the games (see ScoreTracker), and the profiles of the players
+
+#ifndef __LIBVPINBALL__
+static bool IsPost(struct mg_connection *c, struct mg_http_message* hm)
+{
+   if (mg_strcmp(hm->method, mg_str("POST")) == 0)
+      return true;
+   mg_http_reply(c, STATUS_METHOD_NOT_ALLOWED, "", "%s", RESPONSE_METHOD_NOT_ALLOWED);
+   return false;
+}
+
+// A query parameter, which must be given (even empty) unless 'optional'. Replies an error and returns nothing when it is missing.
+static std::optional<string> GetParameter(struct mg_connection *c, struct mg_http_message* hm, const char* name, bool optional = false)
+{
+   char buffer[512];
+   if (mg_http_var(hm->query, mg_str(name)).buf == nullptr) {
+      if (optional)
+         return string();
+      mg_http_reply(c, STATUS_BAD_REQUEST, "", "%s", RESPONSE_BAD_REQUEST);
+      return std::nullopt;
+   }
+   if (mg_http_get_var(&hm->query, name, buffer, sizeof(buffer)) < 0) {
+      mg_http_reply(c, STATUS_BAD_REQUEST, "", "%s", RESPONSE_BAD_REQUEST);
+      return std::nullopt;
+   }
+   return string(buffer);
+}
+
+// A name of profile on one line, without the spaces around it (callers limit it to 32 characters, as the lobby shows them in lists)
+static string CleanProfileName(string name)
+{
+   std::replace_if(name.begin(), name.end(), [](char ch) { return ch == '\r' || ch == '\n' || ch == '\t'; }, ' ');
+   name.erase(0, name.find_first_not_of(' '));
+   name.erase(name.find_last_not_of(' ') + 1);
+   return name;
+}
+#endif
+
+// GET: the profiles, the tables (of the library, and the ones which are gone but still have scores), and all the scores, best first, with their rank on their table
+void WebServer::Scores(struct mg_connection *c, struct mg_http_message* hm)
+{
+#ifdef __LIBVPINBALL__
+   mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+#else
+   VPinballLib::ScoreStore& store = g_app->GetScoreStore();
+   const uint64_t revision = store.GetRevision(); // Before reading, so that a change made meanwhile is seen at the next poll
+   const std::vector<VPinballLib::Score> scores = store.GetScores();
+   const std::optional<VPinballLib::Profile> active = store.GetActiveProfile();
+
+   std::map<string, int> scoreCounts;
+   for (const VPinballLib::Score& score : scores)
+      scoreCounts[score.profileId]++;
+   json profiles = json::array();
+   for (const VPinballLib::Profile& profile : store.GetProfiles())
+      profiles.push_back({ { "id", profile.id }, { "name", profile.name }, { "createdAt", profile.createdAt }, { "scoreCount", scoreCounts[profile.id] } });
+
+   json tables = json::array();
+   std::set<string> knownTables;
+   for (const VPinballLib::Table& table : g_app->GetTableLibrary().GetTables()) {
+      knownTables.insert(table.uuid);
+      tables.push_back({ { "uuid", table.uuid }, { "name", table.name }, { "inLibrary", true } });
+   }
+
+   json list = json::array();
+   std::map<string, int> ranks;
+   for (const VPinballLib::Score& score : scores) {
+      if (knownTables.insert(score.tableUuid).second)
+         tables.push_back({ { "uuid", score.tableUuid }, { "name", score.tableName }, { "inLibrary", false } });
+      list.push_back({
+         { "id", score.id },
+         { "tableUuid", score.tableUuid },
+         { "profileId", score.profileId },
+         { "playerSlot", score.playerSlot },
+         { "playerCount", score.playerCount },
+         { "score", score.score },
+         { "playedAt", score.playedAt },
+         { "durationSec", score.durationSec },
+         { "source", score.source },
+         { "rank", ++ranks[score.tableUuid] } });
+   }
+   const string response = json {
+      { "revision", revision },
+      { "activeProfileId", active ? active->id : string() },
+      { "profiles", profiles },
+      { "tables", tables },
+      { "scores", list } }.dump();
+   mg_http_reply(c, STATUS_OK, HEADER_JSON, "%s", response.c_str());
+#endif
+}
+
+// POST with 'id'
+void WebServer::ScoreDelete(struct mg_connection *c, struct mg_http_message* hm)
+{
+#ifdef __LIBVPINBALL__
+   mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+#else
+   if (!IsPost(c, hm))
+      return;
+   const std::optional<string> id = GetParameter(c, hm, "id");
+   if (!id)
+      return;
+   VPinballLib::ScoreStore& store = g_app->GetScoreStore();
+   const std::optional<VPinballLib::Score> score = store.GetScore(*id);
+   if (!score || !store.DeleteScore(*id)) {
+      mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+      return;
+   }
+   PLOGI.printf("Score deleted: %s on %s", VPinballLib::ScoreStore::FormatScore(score->score).c_str(), score->tableName.c_str());
+   mg_http_reply(c, STATUS_OK, "", RESPONSE_OK);
+#endif
+}
+
+// POST with 'uuid' to delete the scores of a table, or with 'all=1' to delete all the scores (an empty uuid is refused, so that a page which lost its table
+// can not delete everything): replies the number of deleted scores as JSON
+void WebServer::ScoresClear(struct mg_connection *c, struct mg_http_message* hm)
+{
+#ifdef __LIBVPINBALL__
+   mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+#else
+   if (!IsPost(c, hm))
+      return;
+   const std::optional<string> uuid = GetParameter(c, hm, "uuid", true);
+   const std::optional<string> all = uuid ? GetParameter(c, hm, "all", true) : std::nullopt;
+   if (!all)
+      return;
+   if (uuid->empty() == (*all != "1")) {
+      mg_http_reply(c, STATUS_BAD_REQUEST, "", "%s", RESPONSE_BAD_REQUEST);
+      return;
+   }
+   const size_t count = g_app->GetScoreStore().ClearScores(*uuid);
+   if (uuid->empty())
+      PLOGI.printf("All scores cleared: %zu deleted", count);
+   else
+      PLOGI.printf("Scores of table %s cleared: %zu deleted", uuid->c_str(), count);
+   const string response = json { { "deleted", count } }.dump();
+   mg_http_reply(c, STATUS_OK, HEADER_JSON, "%s", response.c_str());
+#endif
+}
+
+// POST with 'id' and 'profile' (empty: the score belongs to nobody)
+void WebServer::ScoreAssign(struct mg_connection *c, struct mg_http_message* hm)
+{
+#ifdef __LIBVPINBALL__
+   mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+#else
+   if (!IsPost(c, hm))
+      return;
+   const std::optional<string> id = GetParameter(c, hm, "id");
+   const std::optional<string> profile = id ? GetParameter(c, hm, "profile") : std::nullopt;
+   if (!profile)
+      return;
+   if (!g_app->GetScoreStore().AssignScore(*id, *profile)) {
+      mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+      return;
+   }
+   mg_http_reply(c, STATUS_OK, "", RESPONSE_OK);
+#endif
+}
+
+// POST with 'name': replies the new profile as JSON, or 409 if the name is already used
+void WebServer::ProfileAdd(struct mg_connection *c, struct mg_http_message* hm)
+{
+#ifdef __LIBVPINBALL__
+   mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+#else
+   if (!IsPost(c, hm))
+      return;
+   const std::optional<string> name = GetParameter(c, hm, "name");
+   if (!name)
+      return;
+   const string cleanName = CleanProfileName(*name);
+   if (cleanName.empty() || cleanName.size() > 32) {
+      mg_http_reply(c, STATUS_BAD_REQUEST, "", "%s", RESPONSE_BAD_REQUEST);
+      return;
+   }
+   const std::optional<VPinballLib::Profile> profile = g_app->GetScoreStore().AddProfile(cleanName);
+   if (!profile) {
+      mg_http_reply(c, STATUS_CONFLICT, "", RESPONSE_CONFLICT);
+      return;
+   }
+   const string response = json { { "id", profile->id }, { "name", profile->name } }.dump();
+   mg_http_reply(c, STATUS_OK, HEADER_JSON, "%s", response.c_str());
+#endif
+}
+
+// POST with 'id' and 'name': 409 if the name is used by another profile
+void WebServer::ProfileRename(struct mg_connection *c, struct mg_http_message* hm)
+{
+#ifdef __LIBVPINBALL__
+   mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+#else
+   if (!IsPost(c, hm))
+      return;
+   const std::optional<string> id = GetParameter(c, hm, "id");
+   const std::optional<string> name = id ? GetParameter(c, hm, "name") : std::nullopt;
+   if (!name)
+      return;
+   const string cleanName = CleanProfileName(*name);
+   if (cleanName.empty() || cleanName.size() > 32) {
+      mg_http_reply(c, STATUS_BAD_REQUEST, "", "%s", RESPONSE_BAD_REQUEST);
+      return;
+   }
+   VPinballLib::ScoreStore& store = g_app->GetScoreStore();
+   if (!store.GetProfile(*id)) {
+      mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+      return;
+   }
+   if (!store.RenameProfile(*id, cleanName)) {
+      mg_http_reply(c, STATUS_CONFLICT, "", RESPONSE_CONFLICT);
+      return;
+   }
+   mg_http_reply(c, STATUS_OK, "", RESPONSE_OK);
+#endif
+}
+
+// POST with 'id': its scores are kept, and belong to nobody afterward
+void WebServer::ProfileDelete(struct mg_connection *c, struct mg_http_message* hm)
+{
+#ifdef __LIBVPINBALL__
+   mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+#else
+   if (!IsPost(c, hm))
+      return;
+   const std::optional<string> id = GetParameter(c, hm, "id");
+   if (!id)
+      return;
+   if (!g_app->GetScoreStore().DeleteProfile(*id)) {
+      mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+      return;
+   }
+   mg_http_reply(c, STATUS_OK, "", RESPONSE_OK);
+#endif
+}
+
+// POST with 'id': the profile to which the next scores are given
+void WebServer::ProfileActive(struct mg_connection *c, struct mg_http_message* hm)
+{
+#ifdef __LIBVPINBALL__
+   mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+#else
+   if (!IsPost(c, hm))
+      return;
+   const std::optional<string> id = GetParameter(c, hm, "id");
+   if (!id)
+      return;
+   if (!g_app->GetScoreStore().SetActiveProfile(*id)) {
+      mg_http_reply(c, STATUS_NOT_FOUND, "", RESPONSE_NOT_FOUND);
+      return;
+   }
    mg_http_reply(c, STATUS_OK, "", RESPONSE_OK);
 #endif
 }
