@@ -19,6 +19,7 @@ RenderTarget* RenderTarget::current_render_target = nullptr;
 RenderTarget* RenderTarget::GetCurrentRenderTarget() { return current_render_target; }
 
 int RenderTarget::current_render_layer = 0; // For layered render targets (stereo, cubemaps,...)
+float RenderTarget::current_render_scale = 1.f;
 int RenderTarget::GetCurrentRenderLayer() { return current_render_layer; }
 
 RenderTarget::RenderTarget(RenderDevice* const rd, const SurfaceType type, const int width, const int height, const colorFormat format)
@@ -225,6 +226,9 @@ RenderTarget::RenderTarget(RenderDevice* const rd, const SurfaceType type, const
          exit(-1);
       }
       bgfx::setName(m_framebuffer, name.c_str());
+      #ifdef BGFX_RESOLVE_FRAGMENT_DENSITY_MAP
+      m_plainFramebuffer = m_framebuffer;
+      #endif
    }
 
    // Create ancillary framebuffers to be able to blit & render from/to the other layers
@@ -549,8 +553,66 @@ RenderTarget::RenderTarget(RenderDevice* const rd, const SurfaceType type, const
 #endif
 }
 
+#if defined(ENABLE_BGFX) && defined(BGFX_RESOLVE_FRAGMENT_DENSITY_MAP)
+void RenderTarget::SetFragmentDensityMap(bgfx::TextureHandle map, bool shadingRate)
+{
+   if (!bgfx::isValid(m_plainFramebuffer))
+      return;
+   if (!bgfx::isValid(map))
+   {
+      m_framebuffer = m_plainFramebuffer;
+      return;
+   }
+   const auto cached = m_fdmFramebuffers.find(map.idx);
+   if (cached != m_fdmFramebuffers.end())
+   {
+      m_framebuffer = cached->second;
+      return;
+   }
+   // Same attachments as the plain frame buffer, plus the density map (or shading rate image), which bgfx keeps out of the color targets
+   std::array<bgfx::Attachment, 3> attachments;
+   uint8_t n = 0;
+   attachments[n++].init(m_color_tex, bgfx::Access::Write, 0, m_nLayers, 0, BGFX_RESOLVE_NONE);
+   if (m_has_depth)
+      attachments[n++].init(IsMSAA() ? m_msaaResolveDepthTex : m_depth_tex, bgfx::Access::Write, 0, m_nLayers, 0, BGFX_RESOLVE_NONE);
+   #ifdef BGFX_RESOLVE_FRAGMENT_SHADING_RATE
+   if (shadingRate)
+      attachments[n++].init(map, bgfx::Access::Read, 0, 1, 0, BGFX_RESOLVE_FRAGMENT_SHADING_RATE); // One layer, shared by the eyes
+   else
+   #endif
+   attachments[n++].init(map, bgfx::Access::Read, 0, m_nLayers, 0, BGFX_RESOLVE_FRAGMENT_DENSITY_MAP);
+   const bgfx::FrameBufferHandle fb = bgfx::createFrameBuffer(n, attachments.data());
+   const char* const kind = shadingRate ? "fragment shading rate image" : "fragment density map";
+   if (!bgfx::isValid(fb))
+   {
+      PLOGE << "Failed to create the frame buffer of " << m_name << " with a " << kind << "; foveated rendering disabled for it";
+      m_fdmFramebuffers[map.idx] = m_plainFramebuffer;
+      m_framebuffer = m_plainFramebuffer;
+      return;
+   }
+   bgfx::setName(fb, (m_name + " (foveated)").c_str());
+   PLOGI << "Foveated rendering: " << kind << " attached to " << m_name << " (" << m_width << 'x' << m_height << ", " << m_nLayers << " layers)";
+   m_fdmFramebuffers[map.idx] = fb;
+   m_framebuffer = fb;
+}
+
+void RenderTarget::SetFragmentDensityMapOffsets(const int32_t* offsetsXY, int nLayers)
+{
+   if (bgfx::isValid(m_framebuffer) && m_framebuffer.idx != m_plainFramebuffer.idx)
+      bgfx::setFragmentDensityMapOffsets(m_framebuffer, offsetsXY, static_cast<uint8_t>(min(nLayers, m_nLayers)));
+}
+#endif
+
 RenderTarget::~RenderTarget()
 {
+   #if defined(ENABLE_BGFX) && defined(BGFX_RESOLVE_FRAGMENT_DENSITY_MAP)
+   for (const auto& [idx, fb] : m_fdmFramebuffers)
+      if (bgfx::isValid(fb) && fb.idx != m_plainFramebuffer.idx)
+         bgfx::destroy(fb);
+   m_fdmFramebuffers.clear();
+   if (bgfx::isValid(m_plainFramebuffer))
+      m_framebuffer = m_plainFramebuffer;
+   #endif
 #if defined(ENABLE_BGFX)
    if (bgfx::isValid(m_framebuffer))
       bgfx::destroy(m_framebuffer);
@@ -625,7 +687,9 @@ void RenderTarget::UpdateDepthSampler(bool insideBeginEnd)
 RenderTarget* RenderTarget::Duplicate(const string& name, const bool shareDepthSurface)
 {
    assert(!m_is_back_buffer);
-   return new RenderTarget(m_rd, m_type, name, m_width, m_height, m_format, m_has_depth, m_nMSAASamples, "Failed to duplicate render target", shareDepthSurface ? this : nullptr);
+   RenderTarget* const copy = new RenderTarget(m_rd, m_type, name, m_width, m_height, m_format, m_has_depth, m_nMSAASamples, "Failed to duplicate render target", shareDepthSurface ? this : nullptr);
+   copy->m_dynamicResolution = m_dynamicResolution;
+   return copy;
 }
 
 void RenderTarget::CopyTo(RenderTarget* const dest, const bool copyColor, const bool copyDepth,
@@ -751,21 +815,22 @@ void RenderTarget::CopyTo(RenderTarget* const dest, const bool copyColor, const 
 #endif
 }
 
-void RenderTarget::Activate(const int layer)
+void RenderTarget::Activate(const int layer, const float renderScale)
 {
-   if (current_render_target == this && current_render_layer == layer)
+   if (current_render_target == this && current_render_layer == layer && current_render_scale == renderScale)
       return;
    current_render_target = this;
    current_render_layer = layer;
+   current_render_scale = renderScale;
 
    #if defined(ENABLE_BGFX)
    m_rd->NextView();
-   #ifdef _DEBUG
-   bgfx::setViewName(m_rd->m_activeViewId, m_name.c_str());
-   #endif
+   if (m_rd->m_nameViews)
+      m_rd->SetViewName(m_rd->m_activeViewId, m_name);
    // Either bind all layers for instanced rendering or the only requested one for normal rendering (one pass per layer)
    bgfx::setViewFrameBuffer(m_rd->m_activeViewId, (layer == -1 || m_nLayers == 1) ? m_framebuffer : m_framebuffer_layers[layer]);
-   bgfx::setViewRect(m_rd->m_activeViewId, 0, 0, m_width, m_height);
+   // Dynamic resolution: the top left part of the target (clears apply to the view rect as well)
+   bgfx::setViewRect(m_rd->m_activeViewId, 0, 0, static_cast<uint16_t>(GetScaledWidth(renderScale)), static_cast<uint16_t>(GetScaledHeight(renderScale)));
    m_needResolve = true;
 
    #elif defined(ENABLE_OPENGL)
@@ -805,12 +870,14 @@ void RenderTarget::ResolveMSAADepth()
    assert(bgfx::isValid(m_msaaDepthResolveFramebuffer));
    RenderTarget* previousRenderTarget = current_render_target;
    int previousRenderLayer = current_render_layer;
+   const float previousRenderScale = current_render_scale;
    current_render_target = nullptr;
    current_render_layer = -1;
    m_rd->NextView();
-   bgfx::setViewName(m_rd->m_activeViewId, (m_name + ".Resolve").c_str());
+   if (m_rd->m_nameViews)
+      m_rd->SetViewName(m_rd->m_activeViewId, m_name + ".Resolve");
    bgfx::setViewFrameBuffer(m_rd->m_activeViewId, m_msaaDepthResolveFramebuffer);
-   bgfx::setViewRect(m_rd->m_activeViewId, 0, 0, m_width, m_height);
+   bgfx::setViewRect(m_rd->m_activeViewId, 0, 0, static_cast<uint16_t>(GetScaledWidth(previousRenderScale)), static_cast<uint16_t>(GetScaledHeight(previousRenderScale)));
 
    auto quad = m_rd->GetQuadMeshBuffer();
    vec4 layer(0.f, 0.f, 0.f, 0.f);
@@ -825,7 +892,7 @@ void RenderTarget::ResolveMSAADepth()
    bgfx::setState(BGFX_STATE_PT_TRISTRIP | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_ALWAYS);
    bgfx::submit(m_rd->m_activeViewId, m_rd->m_FBShader->GetProgramHandle(ShaderTechnique::fb_resolve_depth_msaa));
 
-   previousRenderTarget->Activate(previousRenderLayer);
+   previousRenderTarget->Activate(previousRenderLayer, previousRenderScale);
    m_needResolve = false;
 }
 #endif

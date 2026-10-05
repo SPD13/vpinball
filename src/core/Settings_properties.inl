@@ -183,8 +183,16 @@ PropFloat(Player, AAFactor, "Full Scene Anti Aliasing"s,
 PropEnum(Player, MSAASamples, "MSAA level"s,
    "Set the amount of MSAA samples.\nMSAA can help reduce geometry aliasing at the cost of performance and GPU memory.\nThis can improve image quality if not using supersampling"s, int,
    0, "Disabled"s, "4 Samples"s, "6 Samples"s, "8 Samples"s);
+#if defined(__STANDALONE__) && defined(ENABLE_XR)
+// Headset builds (Steam Frame) render 1:1 with the panel, without the supersampling a PC SteamVR setup gets from its recommended resolution, so
+// the diagonals are stair-stepped without antialiasing. Standard FXAA is the only option within the frame budget of heavy tables at 72 Hz
+// (+1.6 to 2.5 ms at 2160x2160 on the Frame, MSAA 4x +11 ms, 1.3x supersampling +5.5 ms), see docs/Image Quality on the Steam Frame.md
+PropEnum(Player, FXAA, "Post processed antialiasing"s, "Select between different antialiasing techniques that offer different quality vs performance balances"s, int, 2, "Disabled"s,
+   "Fast FXAA"s, "Standard FXAA"s, "Quality FXAA"s, "Fast NFAA"s, "Standard DLAA"s, "Quality SMAA"s, "Quality FAAA"s);
+#else
 PropEnum(Player, FXAA, "Post processed antialiasing"s, "Select between different antialiasing techniques that offer different quality vs performance balances"s, int, 0, "Disabled"s,
    "Fast FXAA"s, "Standard FXAA"s, "Quality FXAA"s, "Fast NFAA"s, "Standard DLAA"s, "Quality SMAA"s, "Quality FAAA"s);
+#endif
 PropEnum(Player, Sharpen, "Post processed sharpening"s, "Select between different sharpening techniques that offer different quality vs performance balances"s, int, 0, "Disabled"s, "CAS"s,
    "Bilateral CAS"s);
 
@@ -247,9 +255,28 @@ PropInt(Input, PlungerSensorCount, "Plunger Sensor Count"s, "Number of hardware 
 #if SDL_PLATFORM_ANDROID && defined(ENABLE_XR)
 // Android with VR is native Quest build, so force VR mode
 PropEnum(PlayerVR, AskToTurnOn, "Enable VR"s, "Ask to turn on VR"s, int, 0, "Enabled"s, "Autodetect"s, "Disabled"s);
+#elif defined(__STANDALONE__) && defined(ENABLE_XR)
+// Standalone builds with OpenXR (Steam Frame, Windows MinGW with ENABLE_XR) are meant for a headset: use it when the runtime reports one
+PropEnum(PlayerVR, AskToTurnOn, "Enable VR"s, "Ask to turn on VR"s, int, 1, "Enabled"s, "Autodetect"s, "Disabled"s);
 #else
 PropEnum(PlayerVR, AskToTurnOn, "Enable VR"s, "Ask to turn on VR"s, int, 2, "Enabled"s, "Autodetect"s, "Disabled"s);
 #endif
+// Foveated rendering: full shading only around the point the eyes look at, requested from the OpenXR runtime (XR_FB_foveation; on the Steam Frame the
+// runtime generates eye-tracked density maps when XR_META_foveation_eye_tracked is available and eye tracking is enabled in the headset settings).
+// On the Steam Frame the scene is foveated through a fragment shading rate image that follows the gaze, which the driver applies in its direct render
+// path (density maps force its tiled path, where a heavy table's scene pass is geometry-bound and the gain is lost): Medium by default there, 2-4 ms
+// per frame on heavy tables at native resolution (docs/Steam Frame Branch.md, section 9). Without a valid gaze the wide Low profile is used at the
+// center of the view. Off elsewhere; inert where the runtime lacks the extension
+#if defined(__STANDALONE__) && defined(ENABLE_XR)
+PropEnum(PlayerVR, Foveation, "Foveated rendering"s, "Reduce the shading quality away from the point the eyes look at, to render at a higher resolution or with heavier settings. Needs runtime support (Steam Frame); eye-tracked when the headset allows it, otherwise fixed at the center"s, int, 2, "Off"s, "Low"s, "Medium"s, "High"s);
+#else
+PropEnum(PlayerVR, Foveation, "Foveated rendering"s, "Reduce the shading quality away from the point the eyes look at, to render at a higher resolution or with heavier settings. Needs runtime support (Steam Frame); eye-tracked when the headset allows it, otherwise fixed at the center"s, int, 0, "Off"s, "Low"s, "Medium"s, "High"s);
+#endif
+// Sign conventions of the gaze applied to the foveation image (the runtime reports the gaze in normalized coordinates); kept as settings to be checked on a
+// headset with VPX_FOVEATION_DEBUG=1, which circles the full quality spot. On the Steam Frame (SteamVR 2.17) neither axis is mirrored (checked 2026-10-03)
+PropBool(PlayerVR, FoveationFlipX, "Foveation offset: flip X"s, "Mirror the horizontal gaze offset of the foveated rendering"s, false);
+PropBool(PlayerVR, FoveationFlipY, "Foveation offset: flip Y"s, "Mirror the vertical gaze offset of the foveated rendering"s, false);
+PropBool(PlayerVR, FoveationEyeTracked, "Eye-tracked foveation"s, "Follow the eyes with the foveated rendering when the runtime supports it (XR_META_foveation_eye_tracked) and eye tracking is enabled in the headset settings; otherwise the full quality area is fixed at the center of the view"s, true);
 PropEnum(PlayerVR, DisplayRefreshRate, "Headset Refresh Rate"s, "Refresh rate requested from the headset when supported. Lower rates give the renderer more time per frame and avoid reprojected frames on standalone headsets"s, int, 0, "Runtime default"s, "72 Hz"s, "80 Hz"s, "90 Hz"s, "120 Hz"s);
 PropFloatDyn(PlayerVR, Orientation, "View orientation"s, "VR view orientation"s, -180.f, 180.f, 0.f);
 PropFloatDyn(PlayerVR, TableX, "View Offset X"s, "VR view X offset"s, -100.f, 100.f, 0.f);
@@ -263,6 +290,17 @@ PropBool(PlayerVR, AddBackglass, "Add Backglass"s, "Add a default backglass disp
 PropFloatDyn(PlayerVR, ControllerCabYOffset, "Cabinet Y Offset"s, "Y offset to apply when using controller view centering"s, -150.f, 50.f, 0.f);
 PropFloatDyn(PlayerVR, ControllerLockbarScale, "Lockbar size ratio"s, "Lockbar size ratio to apply when using controller view centering"s, 0.5f, 2.0f, 1.f);
 PropFloatUnbounded(PlayerVR, ResFactor, "ResFactor"s, ""s, -1.f);
+// Dynamic resolution: the render scale follows the GPU time of the frames reported by the runtime (XR_META_performance_metrics), between the
+// headset's recommended size and the size chosen with ResFactor, so heavy tables keep their frame rate instead of judder on head movements and
+// light tables keep the full sharpness (see VRDevice::UpdateDynamicResolution). On by default where the counters exist (Steam Frame build).
+#if defined(__STANDALONE__) && defined(ENABLE_XR)
+PropBool(PlayerVR, DynamicResolution, "Dynamic resolution"s, "Lower the rendering resolution when a frame takes longer than the target, up to the headset's recommended resolution, and raise it back when there is room. Needs runtime support (XR_META_performance_metrics)"s, true);
+#else
+PropBool(PlayerVR, DynamicResolution, "Dynamic resolution"s, "Lower the rendering resolution when a frame takes longer than the target, up to the headset's recommended resolution, and raise it back when there is room. Needs runtime support (XR_META_performance_metrics)"s, false);
+#endif
+PropFloat(PlayerVR, DynamicResolutionTarget, "Dynamic resolution target"s, "GPU time the dynamic resolution aims for, as a fraction of the frame period (85% of 13.9 ms at 72 Hz is 11.8 ms). Lower values keep more headroom for the compositor and for the GPU slowing down as the headset heats up"s, 0.5f, 1.f, 0.85f);
+PropFloat(PlayerVR, DynamicResolutionMinScale, "Dynamic resolution minimum"s, "Lowest rendering resolution the dynamic resolution may go down to, as a fraction of the table's resolution (per axis: 70% of 2160 is 1512 pixels, half the pixels). The headset's recommended resolution is 80% on the Steam Frame"s, 0.5f, 1.f, 0.7f);
+PropBool(PlayerVR, ShowControllers, "Show controllers"s, "Show the controllers in the scene, as the headset system shows them (needs runtime support: XR_EXT_render_model)"s, true);
 PropBool(PlayerVR, LockFeetToGround, "Lock Feet to Ground"s, "Lock cabinet feet to ground. This usually feels more natural (avoid floating cabinet) but may be deactivated for example for playing mini flipper seated at a desk."s, true);
 
 // Physics override profiles
@@ -1381,6 +1419,13 @@ PropBoolDyn(PluginVNI, Enable, "Enable"s, "Enable VNI plugin"s, g_isStandalone);
 
 // Standalone
 PropEnumWithMin(Standalone, RenderingModeOverride, "Override rendering mode"s, ""s, int, -1, -1, "Default"s, "2D"s, "Stereo 3D"s, "VR"s);
+PropString(Standalone, TablesPath, "Tables folder"s, "Folder of the table library used by the in-game table picker. When empty, 'VPinballX/Tables' in the user's documents folder is used."s, ""s);
+PropBool(Standalone, TablePickerGridView, "Table picker grid view"s, "Display the tables of the in-game table picker as a grid of images instead of a list of names"s, true);
+PropBool(Standalone, TablePickerSortAscending, "Table picker sort order"s, "Sort the tables of the in-game table picker from A to Z instead of Z to A"s, true);
+PropEnum(Standalone, TableImageFocus, "Table image focus"s, "What the images of the tables captured in VR show: the backglass, the playfield seen from above, or the whole cabinet"s, int, 0, "Backglass"s, "Table"s, "Cabinet"s);
+PropBool(Standalone, WebServerAlwaysOn, "Wi-Fi upload always on"s, "Start the web server of the table picker with the application, instead of only when it is turned on from the menu"s, false);
+PropBool(Standalone, WebServerPairing, "Wi-Fi upload pairing code"s, "Ask the browsers for the code displayed by the application before giving them access to the tables folder. When disabled, any device on the local network can add, change or delete tables."s, true);
+PropFloat(Standalone, VRMenuDistance, "VR menu distance"s, "Distance in meters between the player and the menu window in VR"s, 0.3f, 3.f, 0.8f);
 
 // Editor settings
 PropIntUnbounded(Editor, WindowLeft, "WindowLeft"s, "Main window left"s, -1);

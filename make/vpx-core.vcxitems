@@ -880,6 +880,7 @@
     <ClCompile Include="$(SolutionDir)/../../src/renderer/TextureManager.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/renderer/VertexBuffer.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/renderer/ViewSetup.cpp" />
+    <ClCompile Include="$(SolutionDir)/../../src/renderer/VRControllerModels.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/renderer/VRDevice.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/renderer/Window.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/BallControl.cpp" />
@@ -941,6 +942,7 @@
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/TableRulesPage.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/VRSettingsPage.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/SystemInfoPage.cpp" />
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/MessagePage.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/win/PinTableMDI.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/win/PinTableWnd.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/win/DragPointDialogs.cpp" />
@@ -1787,6 +1789,7 @@
     <ClInclude Include="$(SolutionDir)/../../src/renderer/TextureManager.h" />
     <ClInclude Include="$(SolutionDir)/../../src/renderer/VertexBuffer.h" />
     <ClInclude Include="$(SolutionDir)/../../src/renderer/ViewSetup.h" />
+    <ClInclude Include="$(SolutionDir)/../../src/renderer/VRControllerModels.h" />
     <ClInclude Include="$(SolutionDir)/../../src/renderer/VRDevice.h" />
     <ClInclude Include="$(SolutionDir)/../../src/renderer/Window.h" />
     <ClInclude Include="$(SolutionDir)/../../src/renderer/XRGraphicBackend.h" />
@@ -1854,6 +1857,7 @@
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/TableRulesPage.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/VRSettingsPage.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/SystemInfoPage.h" />
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/MessagePage.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/win/PinTableMDI.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/win/PinTableWnd.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/win/DragPointDialogs.h" />

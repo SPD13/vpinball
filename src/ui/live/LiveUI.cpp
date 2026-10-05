@@ -281,6 +281,10 @@ void LiveUI::NewFrame()
          io.DisplayFramebufferScale.x = 1.f;
       if (io.DisplayFramebufferScale.y <= 0.f)
          io.DisplayFramebufferScale.y = 1.f;
+      // In VR, the UI is rendered to the headset eye views, so the scale of the desktop (preview) window gathered by ImGui_ImplSDL3_NewFrame
+      // does not apply (it was measured at about 40 horizontally on Windows, squeezing the UI into a few pixels wide strip)
+      if (m_renderer->m_stereo3D == STEREO_VR)
+         io.DisplayFramebufferScale = ImVec2(1.f, 1.f);
       switch (m_player->m_renderer->m_stereo3Denabled ? m_player->m_renderer->m_stereo3D : STEREO_OFF)
       {
       // Render is a vertically squashed view which is stretched back by the display
@@ -308,6 +312,55 @@ void LiveUI::NewFrame()
       }
    }
 
+   // In VR, a controller is used as a pointer when the in-game UI is opened: move the mouse where it points to, its trigger being the left button.
+   // Navigation switches from buttons to pointer on a trigger press, or when the pointer clearly moves (a hand is never still enough to switch on any
+   // move: pointing a little further than the jitter of a held controller, from where it was when button navigation started, tells a deliberate aim).
+   #if defined(ENABLE_XR)
+   if (m_player->m_vrDevice && m_inGameUI.IsOpened())
+   {
+      float x, y, scroll;
+      bool pressed;
+      const bool pointing = m_player->m_vrDevice->GetUIPointer(x, y, pressed, scroll);
+      if (pointing)
+      {
+         io.AddMousePosEvent(x * io.DisplaySize.x, y * io.DisplaySize.y);
+         if (pressed && !m_vrPointerPressed)
+            m_inGameUI.UsePointerNav();
+         if (!m_inGameUI.IsFlipperNav())
+            m_vrPointerAnchorValid = false;
+         else if (!m_vrPointerAnchorValid)
+         {
+            m_vrPointerAnchor = ImVec2(x, y);
+            m_vrPointerAnchorValid = true;
+         }
+         else if (constexpr float moveThreshold = 0.03f; fabsf(x - m_vrPointerAnchor.x) > moveThreshold || fabsf(y - m_vrPointerAnchor.y) > moveThreshold)
+            m_inGameUI.UsePointerNav(); // Items are then highlighted when hovered
+         // The thumbstick of the pointing controller scrolls what it points at, as a mouse wheel (up to 12 notches per second). This also
+         // switches to pointer navigation, as button navigation keeps scrolling back to the selected item
+         constexpr float deadZone = 0.2f;
+         if (fabsf(scroll) > deadZone)
+         {
+            m_inGameUI.UsePointerNav();
+            io.AddMouseWheelEvent(0.f, (scroll > 0.f ? 1.f : -1.f) * (fabsf(scroll) - deadZone) / (1.f - deadZone) * 12.f * io.DeltaTime);
+         }
+      }
+      if (pressed != m_vrPointerPressed && (pointing || !pressed))
+      {
+         io.AddMouseButtonEvent(ImGuiMouseButton_Left, pressed);
+         m_vrPointerPressed = pressed;
+      }
+      m_vrPointerVisible = pointing;
+      m_vrPointerPos = ImVec2(x * io.DisplaySize.x, y * io.DisplaySize.y);
+      if (!pointing)
+         m_vrPointerAnchorValid = false;
+   }
+   else
+   {
+      m_vrPointerVisible = false;
+      m_vrPointerAnchorValid = false;
+   }
+   #endif
+
    // Enable mouse capture when dragging (needed when dragging main windows)
    {
       bool want_capture = false;
@@ -318,6 +371,8 @@ void LiveUI::NewFrame()
    }
 
    // Late mouse position update to latest (async) global state (needed when dragging main windows)
+   // Not while a VR controller points at the UI: the desktop mouse would replace the pointed position (hover would follow it, not the controller)
+   if (!m_vrPointerVisible)
    {
       SDL_Point windowPos;
       SDL_FPoint globalMouse;
@@ -340,7 +395,12 @@ void LiveUI::Render3D()
 
 void LiveUI::RenderUI()
 {
-   if (m_player == nullptr || m_player->GetCloseState() != Player::CS_PLAYING || m_rd->GetCurrentPass() == nullptr || m_player->m_playMode == Player::PlayMode::CaptureAttract)
+   if (m_player == nullptr || m_rd->GetCurrentPass() == nullptr || m_player->m_playMode == Player::PlayMode::CaptureAttract)
+      return;
+   // When closing to capture the table image, the capture waits for the in-game menu to have slid out (see Player::CaptureTableImageBeforeClosing):
+   // keep rendering it until then, but nothing else, so that it does not end up in the image
+   const bool closingForCapture = m_player->GetCloseState() == Player::CS_CLOSE_CAPTURE_SCREENSHOT;
+   if (m_player->GetCloseState() != Player::CS_PLAYING && !closingForCapture)
       return;
 
    const ImGuiIO& io = ImGui::GetIO();
@@ -348,41 +408,59 @@ void LiveUI::RenderUI()
    const int width = static_cast<int>(rotated ? io.DisplaySize.y : io.DisplaySize.x);
    const int height = static_cast<int>(rotated ? io.DisplaySize.x : io.DisplaySize.y);
 
-   UpdateTouchUI();
+   if (!closingForCapture && !IsLoadingScreenShown())
+      UpdateTouchUI();
 
    ImGui::PushFont(m_baseFont, m_baseFont->LegacySize);
 
-   // Tweak UI (aligned to playfield view, using custom flipper controls)
-   m_inGameUI.Update();
+   if (IsLoadingScreenShown())
+      RenderLoadingScreen();
+   else
+      m_inGameUI.Update(); // Tweak UI (aligned to playfield view, using custom flipper controls)
 
-   if (!m_player->IsPlaying() && !m_editorUI.IsOpened())
+   if (!closingForCapture && !IsLoadingScreenShown())
    {
-      ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 24 * m_uiScale, 4 * m_uiScale));
-      ImGui::Begin("PauseOverlay", nullptr, ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoBringToFrontOnFocus // Prevent focus issues
-            | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
-      ImGui::Text(ICON_FK_PAUSE);
-      ImGui::End();
+      // VR controller pointer
+      if (m_vrPointerVisible)
+      {
+         ImGui::GetForegroundDrawList()->AddCircleFilled(m_vrPointerPos, 7.f * m_uiScale, m_vrPointerPressed ? IM_COL32(0, 255, 0, 255) : IM_COL32(255, 255, 255, 255));
+         ImGui::GetForegroundDrawList()->AddCircle(m_vrPointerPos, 7.f * m_uiScale, IM_COL32(0, 0, 0, 255), 0, 2.f * m_uiScale);
+      }
+
+      if (!m_player->IsPlaying() && !m_editorUI.IsOpened())
+      {
+         ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 24 * m_uiScale, 4 * m_uiScale));
+         ImGui::Begin("PauseOverlay", nullptr, ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoBringToFrontOnFocus // Prevent focus issues
+               | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+         ImGui::Text(ICON_FK_PAUSE);
+         ImGui::End();
+      }
+
+      if (m_editorUI.IsOpened())
+      { // Editor UI (aligned to desktop, using traditional mouse interaction)
+         SetupImGuiStyle(true);
+         m_editorUI.RenderUI();
+         SetupImGuiStyle(false);
+      }
+      else if (!m_inGameUI.IsOpened())
+      { // No UI displayed: process ball control & throw balls
+         m_ballControl.Update(width, height);
+      }
+
+      // Display plumb state overlay
+      m_plumbOverlay.Update();
+
+      // Display notification overlays except when script has an unaligned rotation. In VR, the UI display area is a large panel of which the player
+      // looks at the in-game menu window: notifications (like the confirmation of a menu action) are stacked just above that window, not to be missed
+      float notificationsAboveY = -1.f;
+      if (m_player->m_vrDevice && m_inGameUI.IsOpened())
+         if (const float menuTop = m_inGameUI.GetActivePage()->GetWindowPos().y; menuTop > 0.1f * io.DisplaySize.y)
+            notificationsAboveY = menuTop - 10.f * m_uiScale;
+      m_notificationOverlay.Update(true, m_overlayFont, notificationsAboveY);
+
+      // Display performance overlays
+      m_perfUI.Update();
    }
-
-   if (m_editorUI.IsOpened())
-   { // Editor UI (aligned to desktop, using traditional mouse interaction)
-      SetupImGuiStyle(true);
-      m_editorUI.RenderUI();
-      SetupImGuiStyle(false);
-   }
-   else if (!m_inGameUI.IsOpened())
-   { // No UI displayed: process ball control & throw balls
-      m_ballControl.Update(width, height);
-   }
-
-   // Display plumb state overlay
-   m_plumbOverlay.Update();
-
-   // Display notification overlays except when script has an unaligned rotation
-   m_notificationOverlay.Update(true, m_overlayFont);
-
-   // Display performance overlays
-   m_perfUI.Update();
 
    ImGui::PopFont();
 
@@ -432,12 +510,26 @@ void LiveUI::RenderUI()
    const float right = (m_rotate == 1 || m_rotate == 3) ? io.DisplaySize.y : io.DisplaySize.x;
    const float bottom = (m_rotate == 1 || m_rotate == 3) ? io.DisplaySize.x : io.DisplaySize.y;
    Matrix3D matView[2];
-   matView[0] = matRotate * matTranslate * Matrix3D::MatrixOrthoOffCenterRH(0.f, right, bottom, 0.f, 0.f, 1.f);
-   if (m_rd->m_nEyes == 2)
-      matView[1] = matView[0];  
+   bool onVRPanel = false;
+   #if defined(ENABLE_XR)
+   // In VR, the UI is drawn on a panel standing in the room, placed in front of the player each time the in-game UI opens
+   if (m_player->m_vrDevice && m_rd->m_nEyes == 2)
+   {
+      if (m_inGameUI.IsOpened() && !m_vrInGameUIWasOpened)
+         m_player->m_vrDevice->RecenterUIPanel();
+      m_vrInGameUIWasOpened = m_inGameUI.IsOpened();
+      onVRPanel = m_player->m_vrDevice->GetUIPanelTransforms(right, bottom, matView);
+   }
+   #endif
+   if (!onVRPanel)
+   {
+      matView[0] = matRotate * matTranslate * Matrix3D::MatrixOrthoOffCenterRH(0.f, right, bottom, 0.f, 0.f, 1.f);
+      if (m_rd->m_nEyes == 2)
+         matView[1] = matView[0];
+   }
    m_rd->m_uiShader->SetMatrix(ShaderUniform::matWorldView, &matView[0], m_rd->m_nEyes);
    m_rd->m_uiShader->SetVector(ShaderUniform::staticColor_Alpha,
-      m_player->m_vrDevice ? ((float)m_player->m_vrDevice->GetEyeWidth() * 0.15f) : 0.f, // Stereo offset for VR (fake depth)
+      (m_player->m_vrDevice && !onVRPanel) ? ((float)m_player->m_vrDevice->GetEyeWidth() * 0.15f) : 0.f, // Stereo offset for head locked VR UI (fake depth), before the panel is placed
       0.f, // Unused
       0.f, // Unused
       // A value of 1.0 should be sdrWhite * 80, while in the WCG colorspace 80 nits is 0.5
@@ -509,7 +601,83 @@ void LiveUI::RenderUI()
       }
    }
 
+   #if defined(ENABLE_XR)
+   // Ray from the pointing controller to the dot, drawn with the UI shader on a quad of unit size, using the white pixel of the font atlas
+   if (Matrix3D rayToClip[2]; onVRPanel && m_vrPointerVisible && io.Fonts->TexRef.GetTexID() && m_player->m_vrDevice->GetUIPointerRayTransforms(rayToClip))
+   {
+      if (m_vrPointerRayMesh == nullptr)
+      {
+         auto ib = std::make_shared<IndexBuffer>(m_rd, 6, true, IndexBuffer::Format::FMT_INDEX32);
+         auto vb = std::make_shared<VertexBuffer>(m_rd, 4, nullptr, true);
+         m_vrPointerRayMesh = std::make_shared<MeshBuffer>("VRPointerRay"s, vb, ib, false);
+         uint32_t* indices;
+         m_vrPointerRayMesh->m_ib->Lock(indices);
+         constexpr uint32_t quad[] = { 0, 1, 2, 2, 1, 3 };
+         memcpy(indices, quad, sizeof(quad));
+         m_vrPointerRayMesh->m_ib->Unlock();
+      }
+      // The white pixel moves when the atlas is rebuilt, so the vertices are updated each frame. The ray fades in from the controller.
+      Vertex3D_NoTex2* vertices;
+      m_vrPointerRayMesh->m_vb->Lock(vertices);
+      for (unsigned int i = 0; i < 4; i++)
+      {
+         vertices[i].x = static_cast<float>(i & 1);
+         vertices[i].y = static_cast<float>(i >> 1);
+         vertices[i].z = (i & 1) ? 0.8f : 0.1f; // alpha
+         vertices[i].nx = vertices[i].ny = vertices[i].nz = 1.f; // white
+         vertices[i].tu = io.Fonts->TexUvWhitePixel.x;
+         vertices[i].tv = io.Fonts->TexUvWhitePixel.y;
+      }
+      m_vrPointerRayMesh->m_vb->Unlock();
+      m_rd->m_uiShader->SetMatrix(ShaderUniform::matWorldView, &rayToClip[0], 2);
+      m_rd->m_uiShader->SetVector(ShaderUniform::clip_plane, -1.f, -1.f, 2.f, 2.f); // No clipping
+      m_rd->m_uiShader->SetTexture(ShaderUniform::tex_base_color, io.Fonts->TexRef.GetTexID());
+      m_rd->DrawMesh(m_rd->m_uiShader, true, Vertex3Ds(0.f, 0.f, 0.f), static_cast<float>(depthSort), m_vrPointerRayMesh, RenderDevice::TRIANGLELIST, 0, 6);
+   }
+   #endif
+
    NewFrame();
+}
+
+// A message with a spinner in the middle of the display. Outside VR, what is behind is darkened (when the previous table closes); in VR the UI covers
+// a large panel standing in the room, so only the message window is drawn on it.
+void LiveUI::RenderLoadingScreen()
+{
+   const ImGuiIO& io = ImGui::GetIO();
+   if (m_player->m_vrDevice == nullptr)
+      ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0.f, 0.f), io.DisplaySize, IM_COL32(0, 0, 0, 160));
+
+   ImGui::PushFont(m_baseFont, m_baseFont->LegacySize * 1.5f);
+   // The size is given, as an auto resized window only gets its size on its second frame, which may be the only one displayed before closing a table
+   const float radius = ImGui::GetFontSize() * 0.75f;
+   const ImVec2 padding(ImGui::GetFontSize() * 1.2f, ImGui::GetFontSize() * 0.9f);
+   const ImVec2 textSize = ImGui::CalcTextSize(m_loadingText.c_str());
+   const ImVec2 size(padding.x * 2.f + radius * 3.f + textSize.x, padding.y * 2.f + max(radius * 2.f, textSize.y));
+   ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+   ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+   ImGui::SetNextWindowBgAlpha(0.85f);
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, ImGui::GetFontSize() * 0.5f);
+   ImGui::Begin("LoadingScreen", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing
+         | ImGuiWindowFlags_NoSavedSettings);
+
+   // Spinner: three quarters of a circle turning once per second, on a dim full circle
+   const float thickness = radius * 0.25f;
+   const ImVec2 pos = ImGui::GetCursorScreenPos();
+   const ImVec2 center(pos.x + radius, pos.y + 0.5f * (size.y - padding.y * 2.f));
+   ImDrawList* const drawList = ImGui::GetWindowDrawList();
+   drawList->AddCircle(center, radius - thickness * 0.5f, IM_COL32(255, 255, 255, 50), 32, thickness);
+   const float start = static_cast<float>(ImGui::GetTime() * (2. * M_PI));
+   drawList->PathArcTo(center, radius - thickness * 0.5f, start, start + static_cast<float>(M_PI * 1.5), 32);
+   drawList->PathStroke(IM_COL32(255, 255, 255, 255), ImDrawFlags_None, thickness);
+
+   // Message, vertically centered on the spinner
+   ImGui::SetCursorScreenPos(ImVec2(pos.x + radius * 3.f, center.y - textSize.y * 0.5f));
+   ImGui::TextUnformatted(m_loadingText.c_str());
+
+   ImGui::End();
+   ImGui::PopStyleVar(2);
+   ImGui::PopFont();
 }
 
 void LiveUI::UpdateTouchUI()
@@ -561,8 +729,32 @@ void LiveUI::OpenInGameUI(const string& page)
    m_inGameUI.Open(page);
 }
 
+void LiveUI::ShowMessage(const string& title, const string& text)
+{
+   std::lock_guard lock(m_messageMutex);
+   m_pendingMessages.emplace_back(title, text);
+}
+
+void LiveUI::ShowPendingMessage()
+{
+   if (m_editorUI.IsOpened() || m_inGameUI.IsOpened("misc/message"s))
+      return;
+   {
+      std::lock_guard lock(m_messageMutex);
+      if (m_pendingMessages.empty())
+         return;
+      std::tie(m_messageTitle, m_messageText) = m_pendingMessages.front();
+      m_pendingMessages.pop_front();
+   }
+   // Over the opened page if any, so that 'Continue' gets back to it
+   if (m_inGameUI.IsOpened())
+      m_inGameUI.Navigate("misc/message"s);
+   else
+      OpenInGameUI("misc/message"s);
+}
+
 void LiveUI::HideUI()
-{ 
+{
    m_renderer->InitLayout();
    if (m_inGameUI.IsOpened())
       m_inGameUI.Close();

@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Visual Pinball Scores</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <header class="app-header">
+      <div class="logo-container">
+        <div class="logo-title">
+          <img src="/assets/vpinball.png" alt="Visual Pinball Logo">
+          <h1>Visual Pinball Scores</h1>
+        </div>
+        <div id="version-info" class="version-info"></div>
+      </div>
+      <nav class="page-nav">
+        <a href="/" class="page-nav-item">Tables</a>
+        <a href="scores.html" class="page-nav-item current">Scores</a>
+        <a href="vpx.html" class="page-nav-item">Files</a>
+      </nav>
+    </header>
+
+    <main class="main-container scores-page">
+      <div class="tables-toolbar">
+        <div class="scores-filters">
+          <select id="scores-table" class="scores-select" aria-label="Table"></select>
+          <select id="scores-profile" class="scores-select" aria-label="Player"></select>
+        </div>
+        <div id="scores-views" class="tables-tabs" role="tablist"></div>
+      </div>
+
+      <div class="tables-summary">
+        <span id="scores-count" class="tables-count"></span>
+        <span id="scores-status" class="status-message"></span>
+        <div class="scores-clear-actions">
+          <button type="button" id="scores-clear-table" class="btn btn-secondary scores-clear-button" hidden>Clear table scores</button>
+          <button type="button" id="scores-clear-all" class="btn btn-secondary scores-clear-button" hidden>Clear all scores</button>
+        </div>
+      </div>
+
+      <div class="scores-layout">
+        <div class="tables-scroll scores-list">
+          <div id="scores-empty" class="tables-empty" hidden></div>
+          <table id="scores-table-list" class="scores-table">
+            <thead>
+              <tr>
+                <th class="scores-rank">#</th>
+                <th class="scores-value">Score</th>
+                <th>Player</th>
+                <th class="scores-table-name">Table</th>
+                <th class="scores-date">Date</th>
+                <th class="scores-actions"><span class="visually-hidden">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="scores-rows"></tbody>
+          </table>
+        </div>
+
+        <aside class="profiles-panel">
+          <div class="profiles-header">
+            <h2>Players</h2>
+            <button type="button" id="profile-add" class="btn btn-secondary">Add player</button>
+          </div>
+          <p class="profiles-hint">Scores go to the active player, chosen in the lobby of the application or here.</p>
+          <ul id="profiles-list" class="profiles-list"></ul>
+        </aside>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="score-delete-dialog" class="tables-dialog">
+    <form id="score-delete-form" method="dialog">
+      <h2>Delete this score?</h2>
+      <p id="score-delete-details" class="tables-dialog-path"></p>
+      <p class="tables-dialog-hint">It will be removed from the leaderboard. This can not be undone.</p>
+      <div class="tables-dialog-actions">
+        <button type="button" id="score-delete-cancel" class="btn btn-secondary">Cancel</button>
+        <button type="submit" class="btn btn-danger">Delete</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="scores-clear-dialog" class="tables-dialog">
+    <form id="scores-clear-form" method="dialog">
+      <h2 id="scores-clear-title">Clear the scores?</h2>
+      <p id="scores-clear-details" class="tables-dialog-path"></p>
+      <p id="scores-clear-hint" class="tables-dialog-hint"></p>
+      <div id="scores-clear-confirm" hidden>
+        <p class="tables-dialog-hint">Type <strong>DELETE</strong> to confirm.</p>
+        <input type="text" id="scores-clear-input" autocomplete="off" spellcheck="false" aria-label="Type DELETE to confirm">
+      </div>
+      <div class="tables-dialog-actions">
+        <button type="button" id="scores-clear-cancel" class="btn btn-secondary">Cancel</button>
+        <button type="submit" id="scores-clear-submit" class="btn btn-danger">Clear scores</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="score-assign-dialog" class="tables-dialog">
+    <form id="score-assign-form" method="dialog">
+      <h2>Give this score to</h2>
+      <p id="score-assign-details" class="tables-dialog-path"></p>
+      <select id="score-assign-profile" class="scores-select scores-dialog-select" aria-label="Player"></select>
+      <div class="tables-dialog-actions">
+        <button type="button" id="score-assign-cancel" class="btn btn-secondary">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="profile-name-dialog" class="tables-dialog">
+    <form id="profile-name-form" method="dialog">
+      <h2 id="profile-name-title">Add player</h2>
+      <input type="text" id="profile-name-input" maxlength="32" autocomplete="off" spellcheck="false" placeholder="Name">
+      <p id="profile-name-error" class="tables-dialog-hint scores-error" hidden></p>
+      <div class="tables-dialog-actions">
+        <button type="button" id="profile-name-cancel" class="btn btn-secondary">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="profile-delete-dialog" class="tables-dialog">
+    <form id="profile-delete-form" method="dialog">
+      <h2 id="profile-delete-title">Delete player?</h2>
+      <p id="profile-delete-hint" class="tables-dialog-hint"></p>
+      <div class="tables-dialog-actions">
+        <button type="button" id="profile-delete-cancel" class="btn btn-secondary">Cancel</button>
+        <button type="submit" class="btn btn-danger">Delete</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="scores.js"></script>
+</body>
+</html>

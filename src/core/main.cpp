@@ -213,7 +213,15 @@ extern "C" int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, 
       VPApp theApp;
       CommandLineProcessor cmdLine;
       cmdLine.ProcessCommandLine();
-      theApp.InitInstance(dynamic_cast<PlayTableCommand*>(cmdLine.m_command.get()) != nullptr);
+      bool isPlay = dynamic_cast<PlayTableCommand*>(cmdLine.m_command.get()) != nullptr;
+      #ifdef __STANDALONE__
+      isPlay |= dynamic_cast<LauncherCommand*>(cmdLine.m_command.get()) != nullptr;
+      #endif
+      theApp.InitInstance(isPlay);
+      #ifdef VPX_TABLE_WEBSERVER
+      if (isPlay)
+         theApp.StartWebServerIfAlwaysOn();
+      #endif
 
       // The video subsystem is initialized lazily when a window is created (see VPX::Window), so
       // headless commands (info, script/POV export, audit, tournament validation) run without a
@@ -259,6 +267,12 @@ int main(int argc, const char** argv) {
    sigemptyset(&sigIntHandler.sa_mask);
    sigIntHandler.sa_flags = 0;
    sigaction(SIGINT, &sigIntHandler, nullptr);
+
+   // Turnip (the Mesa Vulkan driver of Adreno GPUs, i.e. the Steam Frame) decides per render pass between tiled and direct rendering with a
+   // bandwidth estimate that picks tiling for the scene pass of heavy tables, where the geometry is then reprocessed per tile and the frame
+   // costs 50% more than with direct rendering (14 ms against 9 ms at native resolution on the Steam Frame, see docs/Steam Frame Branch.md).
+   // 'profiled' makes the driver measure both modes and keep the faster one. Read when the Vulkan device is created; a value set by the user wins.
+   setenv("TU_AUTOTUNE_ALGO", "profiled", 0);
 #endif
 
    g_argc = argc;

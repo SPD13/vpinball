@@ -3,6 +3,7 @@
 #include "common.h"
 #include "SurfaceGraphics.h"
 #include "plugins/VPXPlugin.h"
+#include "plugins/ScoreboardPlugin.h"
 #include "resources/AssetManager.h"
 #include "actors/Group.h"
 
@@ -49,6 +50,8 @@ public:
 
    bool GetRun() const { return m_run; }
    void SetRun(bool run);
+   // Let VPX know the scores shown for the players (UltraDMD scoreboard), so that it can record them at the end of the game
+   void BroadcastScoreboard(const char* source, int nPlayers, int currentPlayer, const int64_t* scores, int nScores) const;
 
    bool GetShow() const { return m_show; }
    void SetShow(bool v);
@@ -134,7 +137,9 @@ private:
    }
 
    VPXPluginAPI* m_vpxApi = nullptr;
+   const MsgPluginAPI* const m_msgApi;
    const unsigned int m_endpointId;
+   const unsigned int m_onScoreboardMsgId;
 
    uint8_t* m_rgbFrame = nullptr;
    bool m_rgbFrameDirty = true;

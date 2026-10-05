@@ -1,0 +1,200 @@
+{
+  "_notes": [
+    "Map for Atari Superman and Hercules.",
+    "Free Play (DIP SW A6) not mirrored in RAM/NVRAM.",
+    "Not entirely sure of game_over location; multiple candidates."
+  ],
+  "_fileformat": 0.8,
+  "_metadata": {
+    "version": 3,
+    "copyright": [
+      "Copyright (C) 2026 by Tom Collins <tom@scorbit.io>"
+    ],
+    "license": "Open Data Commons Open Database License (ODbL) v1.0",
+    "platform": "atari-gen2",
+    "roms": [
+      "hercules",
+      "superman"
+    ]
+  },
+  "game_state": {
+    "scores": [
+      {
+        "label": "Player 1",
+        "start": "0x08BB",
+        "encoding": "bcd",
+        "length": 7
+      },
+      {
+        "label": "Player 2",
+        "start": "0x08C2",
+        "encoding": "bcd",
+        "length": 7
+      },
+      {
+        "label": "Player 3",
+        "start": "0x08C9",
+        "encoding": "bcd",
+        "length": 7
+      },
+      {
+        "label": "Player 4",
+        "start": "0x08D0",
+        "encoding": "bcd",
+        "length": 7
+      }
+    ],
+    "credits": {
+      "label": "Credits",
+      "_notes": "also 2-nibbles of nvram at 0x800 and 0x8DB",
+      "start": "0x0065",
+      "encoding": "bcd"
+    },
+    "max_credits": {
+      "label": "Max Credits",
+      "start": "0x005C",
+      "encoding": "bcd"
+    },
+    "current_ball": {
+      "label": "Ball",
+      "start": "0x005A",
+      "encoding": "bcd"
+    },
+    "ball_count": {
+      "label": "Balls",
+      "start": "0x0058",
+      "encoding": "bcd"
+    },
+    "current_player": {
+      "label": "Player",
+      "start": "0x005B",
+      "encoding": "bcd",
+      "offset": 1
+    },
+    "player_count": {
+      "label": "Players",
+      "start": "0x0059",
+      "encoding": "bcd"
+    },
+    "game_over": {
+      "_notes": "unsure, could be 0C (40/00), 2B-2D(020000/03300F), 7D (00/10), or A0 (80/00)",
+      "label": "Game Over",
+      "start": "0x00A0",
+      "encoding": "bool"
+    }
+  },
+  "high_scores": [
+    {
+      "_notes": "0x8F7 is xor of these nibbles",
+      "label": "High Score",
+      "score": {
+        "start": "0x08DE",
+        "length": 7,
+        "encoding": "bcd"
+      }
+    }
+  ],
+  "audits": {
+    "Audits": {
+      "05": {
+        "label": "Credits",
+        "start": "0x800",
+        "length": 6,
+        "encoding": "bcd"
+      },
+      "06": {
+        "label": "Left Coins",
+        "start": "0x806",
+        "length": 6,
+        "encoding": "bcd"
+      },
+      "07": {
+        "label": "Right Coins",
+        "start": "0x80C",
+        "length": 6,
+        "encoding": "bcd"
+      },
+      "08": {
+        "label": "Total Coins",
+        "start": "0x812",
+        "length": 6,
+        "encoding": "bcd"
+      },
+      "09": {
+        "label": "Total Plays",
+        "start": "0x818",
+        "length": 6,
+        "encoding": "bcd"
+      },
+      "10": {
+        "label": "Total Replays",
+        "start": "0x81E",
+        "length": 6,
+        "encoding": "bcd"
+      },
+      "11": {
+        "label": "Game Timer",
+        "start": "0x824",
+        "length": 6,
+        "units": "minutes",
+        "encoding": "bcd"
+      },
+      "12": {
+        "label": "Specials",
+        "start": "0x82A",
+        "length": 6,
+        "encoding": "bcd"
+      },
+      "13": {
+        "label": "Extra Balls",
+        "start": "0x830",
+        "length": 6,
+        "encoding": "bcd"
+      },
+      "14": {
+        "label": "Tilts",
+        "start": "0x836",
+        "length": 6,
+        "encoding": "bcd"
+      },
+      "15": {
+        "label": "Battery Backup Errors",
+        "start": "0x83C",
+        "length": 6,
+        "encoding": "bcd"
+      }
+    }
+  },
+  "adjustments": {
+    "Adjustments": {
+      "16": {
+        "_notes": "0x8F4 is xor of these nibbles",
+        "label": "Replay Level 1",
+        "start": "0x0842",
+        "length": 7,
+        "encoding": "bcd"
+      },
+      "17": {
+        "_notes": "0x8F5 is xor of these nibbles",
+        "label": "Replay Level 2",
+        "start": "0x0849",
+        "length": 7,
+        "encoding": "bcd"
+      },
+      "18": {
+        "_notes": "0x8F6 is xor of these nibbles",
+        "label": "Replay Level 3",
+        "start": "0x0850",
+        "length": 7,
+        "encoding": "bcd"
+      },
+      "19": {
+        "_notes": "0x8F7 is xor of these nibbles",
+        "label": "High Score",
+        "start": "0x08DE",
+        "length": 7,
+        "encoding": "bcd"
+      }
+    }
+  }
+}

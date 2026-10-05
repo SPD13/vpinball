@@ -1,0 +1,102 @@
+{
+  "_notes": [
+    "Adjustment numbering is arbitrary."
+  ],
+  "_fileformat": 0.8,
+  "_metadata": {
+    "version": 2,
+    "copyright": [
+      "Copyright (C) 2026 by Tom Collins <tom@scorbit.io>"
+    ],
+    "license": "Open Data Commons Open Database License (ODbL) v1.0",
+    "platform": "atari-gen1",
+    "roms": [
+      "midearta"
+    ]
+  },
+  "game_state": {
+    "scores": [
+      {
+        "label": "Player 1",
+        "start": "0x008D",
+        "encoding": "bcd",
+        "endian": "big",
+        "length": 3
+      },
+      {
+        "label": "Player 2",
+        "start": "0x0090",
+        "encoding": "bcd",
+        "endian": "big",
+        "length": 3
+      },
+      {
+        "label": "Player 3",
+        "start": "0x0093",
+        "encoding": "bcd",
+        "endian": "big",
+        "length": 3
+      },
+      {
+        "label": "Player 4",
+        "start": "0x0096",
+        "encoding": "bcd",
+        "endian": "big",
+        "length": 3
+      }
+    ],
+    "credits": {
+      "label": "Credits",
+      "start": "0x001D",
+      "encoding": "bcd",
+      "_notes": "treat the 88 on startup as 0",
+      "special_values": {
+        "88": 0
+      }
+    },
+    "max_credits": {
+      "label": "Max Credits",
+      "start": "0x0018",
+      "encoding": "bcd"
+    },
+    "current_ball": {
+      "label": "Ball",
+      "start": "0x001C",
+      "mask": "0x07",
+      "encoding": "bcd"
+    },
+    "ball_count": {
+      "label": "Balls",
+      "start": "0x0022",
+      "encoding": "bcd",
+      "offset": -1
+    },
+    "current_player": {
+      "label": "Player",
+      "start": "0x0029",
+      "encoding": "bcd"
+    },
+    "player_count": {
+      "label": "Players",
+      "start": "0x006C",
+      "encoding": "bcd"
+    },
+    "game_over": {
+      "_notes": "true when player_count==0",
+      "label": "Game Over",
+      "start": "0x006C",
+      "encoding": "bool",
+      "invert": true
+    }
+  },
+  "adjustments": {
+    "Adjustments": {
+      "01": {
+        "label": "Replay Level",
+        "start": "0x00DA",
+        "encoding": "bcd",
+        "scale": 10000
+      }
+    }
+  }
+}

@@ -29,6 +29,7 @@ public:
    void NavigateBack();
 
    bool IsFlipperNav() const { return m_useFlipperNav; }
+   void UsePointerNav() { m_useFlipperNav = false; } // For pointers which can not be detected from mouse moves, like VR controllers
    void OnUIUpAction();
    void OnUIDownAction();
    void OnUILeftAction();
@@ -38,10 +39,11 @@ public:
    void OnUISaveChanges();
    void OnUINavigateBack();
 
+   InGameUIPage* GetActivePage() const { return m_activePages.empty() ? nullptr : m_activePages.back().get(); }
+
 private:
    void HandlePageInput();
    void HandleLegacyFlyOver();
-   InGameUIPage* GetActivePage() const { return m_activePages.empty() ? nullptr : m_activePages.back().get(); }
 
    Player *m_player;
    ImVec2 m_prevMousePos;

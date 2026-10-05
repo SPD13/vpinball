@@ -306,6 +306,13 @@ Window::Window(const string& title, const Settings& settings, VPXWindowId window
    }
 }
 
+string Window::GetConfigKey(const Settings& settings, VPXWindowId windowId)
+{
+   return std::format("{}|{}|{}x{}|{}x{}@{}/{}", settings.GetWindow_Display((int)windowId), settings.GetWindow_FullScreen(windowId), settings.GetWindow_Width(windowId),
+      settings.GetWindow_Height(windowId), settings.GetWindow_FSWidth(windowId), settings.GetWindow_FSHeight(windowId), settings.GetWindow_FSRefreshRate(windowId),
+      settings.GetWindow_FSColorDepth(windowId));
+}
+
 Window::~Window()
 {
    if (!m_isVR && !(g_isMobile && g_isIOS))

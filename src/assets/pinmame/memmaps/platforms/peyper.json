@@ -1,0 +1,16 @@
+{
+  "_notes": [
+    "Peyper and Sonic (Spain) games: Z80, 2KB of RAM at 0x6000-0x67FF, all of it saved as NVRAM (PinMAME peyper.c, PEYPER_writemem).",
+    "Added locally for the leaderboards of VPX."
+  ],
+  "cpu": "Z80",
+  "endian": "little",
+  "memory_layout": [
+    {
+      "label": "NVRAM",
+      "address": "0x6000",
+      "size": "0x800",
+      "type": "nvram"
+    }
+  ]
+}

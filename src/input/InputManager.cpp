@@ -477,10 +477,18 @@ void InputManager::ProcessInput()
    if (m_hasPendingLayoutApply)
    {
       m_hasPendingLayoutApply = false;
+      const bool isVR = m_player->m_renderer && m_player->m_renderer->m_stereo3D == STEREO_VR;
       for (auto& device : m_inputDevices)
       {
          if (!device.m_hasPendingLayoutApply)
             continue;
+         if (isVR && device.m_isVRVirtualGamepad)
+         {
+            // The VR controllers are also exposed as a virtual gamepad (Steam Input on Steam Frame), don't propose a layout for it as they are already mapped through OpenXR
+            PLOGI << "Skipping layout proposal for '" << device.m_name << "' as it is a virtual gamepad emulated from the VR controllers";
+            device.m_hasPendingLayoutApply = false;
+            continue;
+         }
          const auto noAutoLayoutId = Settings::GetRegistry().GetPropertyId("Input"s, "Device." + device.m_settingsId + ".NoAutoLayout").value();
          if (g_app->m_settings.GetBool(noAutoLayoutId))
             device.m_hasPendingLayoutApply = false;
@@ -800,7 +808,7 @@ void InputManager::CreateInputActions()
                DISPPARAMS dispparams = { rgvar, nullptr, 1, 0 };
                m_player->m_ptable->FireDispID(isPressed ? DISPID_GameEvents_KeyDown : DISPID_GameEvents_KeyUp, &dispparams);
 #ifdef __STANDALONE__
-               m_player->SetCloseState(g_isMobile ? Player::CS_CLOSE_CAPTURE_SCREENSHOT : Player::CS_CLOSE_APP);
+               m_player->SetCloseState((g_isMobile || g_app->m_launcherMode) ? Player::CS_CLOSE_CAPTURE_SCREENSHOT : Player::CS_CLOSE_APP);
 #else
                m_player->SetCloseState(Player::CS_STOP_PLAY);
 #endif

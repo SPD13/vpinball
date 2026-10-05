@@ -27,6 +27,7 @@ public:
    RenderTarget* m_rt;
    vec4 m_areaOfInterest; // if defined (not FLT_MAX), defines render clipping bounds (in clip space -1..1)
    int m_singleLayerRendering = -1; // if positive, rendering will only be performed on the corresponding layer
+   float m_renderScale = 1.f; // Dynamic resolution scale of the frame when the pass was created (see RenderDevice::BeginScaledRendering)
    string m_name;
    bool m_depthReadback = false;
    bool m_mergeable = true; // true if this pass can be merged with its precursor if they are on the same render target, leading to sorting the render commands of both passes together

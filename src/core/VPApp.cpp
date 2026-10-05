@@ -8,6 +8,8 @@
 #include "core/VPXPluginAPIImpl.h"
 #include "parts/Collection.h"
 #include "plugins/VPXPlugin.h"
+#include "renderer/VRDevice.h"
+#include "renderer/Window.h"
 
 #if defined(CRASH_HANDLER) || defined(VPX_STANDALONE_CRASH_HANDLER)
 #include "utils/CrashHandler.h"
@@ -33,6 +35,14 @@
 #include <SDL3_ttf/SDL_ttf.h>
 #include <filesystem>
 #include <libwinevbs/libwinevbs.h>
+#include <fstream>
+#include <nlohmann/json.hpp>
+#include "lib/src/TableLibrary.h"
+#include "lib/src/ScoreStore.h"
+#ifdef VPX_TABLE_WEBSERVER
+#include "lib/src/WebServer.h"
+#include "lib/src/ZipUtils.h"
+#endif
 #endif
 
 #include "parts/ball.h"
@@ -236,8 +246,287 @@ VPApp::VPApp()
    EditableRegistry::RegisterEditable<PartGroup>();
 }
 
+#ifdef __STANDALONE__
+VPinballLib::TableLibrary& VPApp::GetTableLibrary()
+{
+   if (m_tableLibrary == nullptr)
+   {
+      // The default tables folder is the user's documents folder, which must neither be scanned as a whole nor have
+      // its archives imported, so the library owns a dedicated sub folder
+      VPinballLib::TableLibrary::Config config;
+      const string tablesPath = m_settings.GetStandalone_TablesPath();
+      config.tablesPath = tablesPath.empty() ? m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Tables, std::filesystem::path("VPinballX") / "Tables") : std::filesystem::path(tablesPath);
+      config.jsonPath = m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences, "tables.json");
+#ifdef VPX_TABLE_WEBSERVER
+      config.zip = [](const std::filesystem::path& source, const std::filesystem::path& dest, VPinballLib::TableLibrary::ZipProgressCallback callback) { return ZipUtils::Zip(source, dest, callback); };
+      config.unzip = [](const std::filesystem::path& source, const std::filesystem::path& dest, VPinballLib::TableLibrary::ZipProgressCallback callback) { return ZipUtils::Extract(source, dest, callback); };
+      config.archiveExtensions.clear();
+      for (const string& ext : ZipUtils::GetExtractableExtensions()) // .zip and .vpxz, and .rar and .7z when built with libarchive
+         config.archiveExtensions.push_back('.' + ext);
+#endif
+      config.log = [](VPinballLib::TableLibrary::LogLevel level, const string& message)
+      {
+         switch (level)
+         {
+         case VPinballLib::TableLibrary::LogLevel::Info: PLOGI << "TableLibrary: " << message; break;
+         case VPinballLib::TableLibrary::LogLevel::Warn: PLOGW << "TableLibrary: " << message; break;
+         case VPinballLib::TableLibrary::LogLevel::Error: PLOGE << "TableLibrary: " << message; break;
+         }
+      };
+      m_tableLibrary = std::make_unique<VPinballLib::TableLibrary>(std::move(config));
+   }
+   return *m_tableLibrary;
+}
+
+VPinballLib::ScoreStore& VPApp::GetScoreStore()
+{
+   if (m_scoreStore == nullptr)
+   {
+      VPinballLib::ScoreStore::Config config;
+      config.profilesPath = m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences, "profiles.json");
+      config.scoresPath = m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences, "scores.json");
+      config.log = [](VPinballLib::ScoreStore::LogLevel level, const string& message)
+      {
+         switch (level)
+         {
+         case VPinballLib::ScoreStore::LogLevel::Info: PLOGI << "ScoreStore: " << message; break;
+         case VPinballLib::ScoreStore::LogLevel::Warn: PLOGW << "ScoreStore: " << message; break;
+         case VPinballLib::ScoreStore::LogLevel::Error: PLOGE << "ScoreStore: " << message; break;
+         }
+      };
+      m_scoreStore = std::make_unique<VPinballLib::ScoreStore>(std::move(config));
+   }
+   return *m_scoreStore;
+}
+
+// Same definition as the one of the PinMAME plugin, which reads its value when it is loaded
+static VPX::Properties::PropertyRegistry::PropId GetPinMAMEPathPropId()
+{
+   return Settings::GetRegistry().Register(std::make_unique<VPX::Properties::StringPropertyDef>(
+      "Plugin.PinMAME"s, "PinMAMEPath"s, "PinMAME Path"s, "Folder that contains PinMAME subfolders (roms, nvram, ...)"s, false, ""s));
+}
+
+void VPApp::SetupSharedPinMAMEFolder()
+{
+#ifndef __LIBVPINBALL__
+   // The plugin looks for a 'pinmame' folder along the table, then for the folder of this setting, then for '~/.pinmame': leave existing setups alone
+   const auto propId = GetPinMAMEPathPropId();
+   const std::filesystem::path pinmamePath = GetTableLibrary().GetTablesPath() / "pinmame";
+   // The default may have been written to the settings file, as settings pages save all the settings: it still is the default
+   const string definedPath = m_settings.GetString(propId);
+   const bool isDefault = definedPath.empty() || std::filesystem::path(definedPath).lexically_normal() == pinmamePath.lexically_normal();
+   if (!m_isSharedPinMAMEFolderApplied && !isDefault)
+      return;
+   if (const char* home = getenv("HOME"); definedPath.empty() && home != nullptr && DirExists(std::filesystem::path(home) / ".pinmame" / "roms"))
+      return;
+
+   std::error_code ec;
+   std::filesystem::create_directories(pinmamePath / "roms", ec);
+   if (ec)
+   {
+      PLOGE << "Failed to create the shared PinMAME folder " << pinmamePath << ": " << ec.message();
+      return;
+   }
+   // This is a default, not a user choice: it is reset when closing (see destructor) to follow the tables folder if it is changed. It may still
+   // end up in the settings file if a settings page saves while it is applied, in which case it has to be edited along the tables folder.
+   m_settings.Set(propId, pinmamePath.string(), false);
+   if (!m_isSharedPinMAMEFolderApplied)
+   {
+      PLOGI << "PinMAME folder is not defined, using the one shared by the tables of the table library: " << pinmamePath;
+   }
+   m_isSharedPinMAMEFolderApplied = true;
+#endif
+}
+
+std::filesystem::path VPApp::GetLobbyTablePath() const
+{
+   // Base of the lobby, which is then emptied and given a floor (see BuildLobby in AppCommands.cpp)
+   // FIXME replace by a dedicated lobby table (a room with nothing to play, designed for VR)
+   return m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "blankTable.vpx");
+}
+
+// The parts of the VR room of a table:
+// - in a part group using the room space reference,
+// - for tables made before part groups existed, in a layer named after the room (like 'VR Room' or 'VR_Room', layers being loaded as part groups),
+// - or in a collection named 'VR...' which is not the cabinet: tables often define their rooms as collections that their script shows according
+//   to their options (for example VR_MinimalRoom, VR_PoolBar and VR_Sphere, beside VR_Table for the cabinet)
+vector<IEditable*> VPApp::GetRoomParts(PinTable* table)
+{
+   const auto isRoomGroup = [](const IEditable* part)
+   {
+      for (const PartGroup* group = part->GetPartGroup(); group != nullptr; group = group->GetPartGroup())
+         if (group->m_d.m_spaceReference == PartGroupData::SpaceReference::SR_ROOM || lowerCase(group->GetName()).find("room") != string::npos)
+            return true;
+      return false;
+   };
+   const auto isRoomCollection = [](const wstring& collectionName)
+   {
+      const wstring name = lowerCase(collectionName);
+      return name.starts_with(L"vr") && !std::ranges::any_of(std::initializer_list<const wchar_t*> { L"cab", L"table", L"backglass", L"bg" },
+         [&name](const wchar_t* cabinetWord) { return name.find(cabinetWord) != wstring::npos; });
+   };
+
+   vector<IEditable*> parts;
+   for (IEditable* part : table->GetParts())
+      if (part->GetItemType() != ItemTypeEnum::eItemPartGroup && isRoomGroup(part))
+         parts.push_back(part);
+   for (CComObject<Collection>* collection : table->GetCollections())
+      if (isRoomCollection(collection->m_wzName))
+         for (IEditable* part : collection->GetParts())
+            if (part->GetItemType() != ItemTypeEnum::eItemPartGroup && std::ranges::find(parts, part) == parts.end())
+               parts.push_back(part);
+   return parts;
+}
+
+std::optional<bool> VPApp::GetPartVisible(IEditable* part)
+{
+   static wchar_t visibleName[] = L"Visible";
+   LPOLESTR names = visibleName;
+   DISPID dispid;
+   IDispatch* const dispatch = part->GetIScriptable() ? part->GetIScriptable()->GetIDispatch() : nullptr;
+   if (dispatch == nullptr || FAILED(dispatch->GetIDsOfNames(IID_NULL, &names, 1, 0, &dispid)))
+      return std::nullopt;
+   DISPPARAMS noArgs = { nullptr, nullptr, 0, 0 };
+   CComVariant result;
+   if (FAILED(dispatch->Invoke(dispid, IID_NULL, 0, DISPATCH_PROPERTYGET, &noArgs, &result, nullptr, nullptr)) || FAILED(result.ChangeType(VT_BOOL)))
+      return std::nullopt;
+   return result.boolVal != VARIANT_FALSE;
+}
+
+void VPApp::SetPartVisible(IEditable* part, bool visible)
+{
+   static wchar_t visibleName[] = L"Visible";
+   LPOLESTR names = visibleName;
+   DISPID dispid;
+   IDispatch* const dispatch = part->GetIScriptable() ? part->GetIScriptable()->GetIDispatch() : nullptr;
+   if (dispatch == nullptr || FAILED(dispatch->GetIDsOfNames(IID_NULL, &names, 1, 0, &dispid)))
+      return;
+   CComVariant value(visible);
+   DISPID putId = DISPID_PROPERTYPUT;
+   DISPPARAMS args = { &value, &putId, 1, 1 };
+   dispatch->Invoke(dispid, IID_NULL, 0, DISPATCH_PROPERTYPUT, &args, nullptr, nullptr, nullptr);
+}
+
+std::optional<VPApp::LobbyRoom> VPApp::GetLobbyRoom()
+{
+   std::ifstream file(m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences, "lobby-room.json"));
+   if (!file.is_open())
+      return std::nullopt;
+   try
+   {
+      const nlohmann::json json = nlohmann::json::parse(file);
+      LobbyRoom room;
+      const string path = json.value("table", ""s);
+      room.tablePath = std::filesystem::path(reinterpret_cast<const char8_t*>(path.c_str()));
+      if (room.tablePath.is_relative())
+         room.tablePath = GetTableLibrary().GetTablesPath() / room.tablePath;
+      room.tableName = json.value("name", ""s);
+      room.parts = json.value("parts", vector<string>());
+      // The table may have been removed since
+      if (room.parts.empty() || !FileExists(room.tablePath))
+         return std::nullopt;
+      return room;
+   }
+   catch (const std::exception& e)
+   {
+      PLOGE << "Failed to read lobby-room.json: " << e.what();
+      return std::nullopt;
+   }
+}
+
+int VPApp::UseTableRoomInLobby(PinTable* table)
+{
+   // The parts visible now, as the table options (or its script) select which parts of the room are shown
+   vector<string> parts;
+   for (IEditable* part : GetRoomParts(table))
+      if (GetPartVisible(part).value_or(true))
+         parts.push_back(part->GetName());
+   if (parts.empty())
+      return 0;
+
+   // Relative to the tables folder when inside, so that the folder can be moved
+   std::filesystem::path path = table->m_filename;
+   const std::filesystem::path relative = path.lexically_normal().lexically_relative(GetTableLibrary().GetTablesPath().lexically_normal());
+   if (!relative.empty() && *relative.begin() != "..")
+      path = relative;
+   const std::u8string utf8Path = path.generic_u8string();
+   nlohmann::ordered_json json = {
+      { "table", string(utf8Path.begin(), utf8Path.end()) },
+      { "name", !table->m_tableName.empty() ? table->m_tableName : table->m_filename.stem().string() },
+      { "parts", parts },
+   };
+   std::ofstream file(m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences, "lobby-room.json"), std::ios::trunc);
+   file << json.dump(2);
+   PLOGI << "Lobby room set to the room of " << table->m_filename << " (" << parts.size() << " parts)";
+   return static_cast<int>(parts.size());
+}
+
+string VPApp::GetTableImageFocusLabel()
+{
+   static const char* const labels[] = { "Table image: Backglass", "Table image: Table (from above)", "Table image: Cabinet" };
+   return labels[clamp(g_app->m_settings.GetStandalone_TableImageFocus(), 0, 2)];
+}
+
+void VPApp::NextTableImageFocus()
+{
+   g_app->m_settings.SetStandalone_TableImageFocus((clamp(g_app->m_settings.GetStandalone_TableImageFocus(), 0, 2) + 1) % 3, false);
+}
+
+string VPApp::GetLoadingText(const std::filesystem::path& tablePath, bool lobby)
+{
+   if (lobby)
+      return "Loading the lobby..."s;
+   string name = tablePath.stem().string();
+   const std::filesystem::path normalPath = tablePath.lexically_normal();
+   const VPinballLib::TableLibrary& library = GetTableLibrary();
+   for (const auto& table : library.GetTables())
+      if (library.GetFullPath(table).lexically_normal() == normalPath)
+      {
+         name = table.name;
+         break;
+      }
+   return "Loading " + name + "...";
+}
+
+string VPApp::GetNextLoadingText(bool playingLobby)
+{
+   if (!m_nextTableFilename.empty())
+      return GetLoadingText(m_nextTableFilename, false);
+   if (m_launcherMode && (!playingLobby || m_reloadLobby))
+      return GetLoadingText({}, true);
+   return {};
+}
+
+void VPApp::ResetLobbyRoom()
+{
+   std::error_code ec;
+   std::filesystem::remove(m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences, "lobby-room.json"), ec);
+   PLOGI << "Lobby room reset to the default one";
+}
+
+#ifdef VPX_TABLE_WEBSERVER
+WebServer& VPApp::GetWebServer()
+{
+   if (m_webServer == nullptr)
+   {
+      m_webServer = std::make_unique<WebServer>();
+      m_webServer->SetPairingRequired(m_settings.GetStandalone_WebServerPairing());
+      GetScoreStore(); // Created here, as the web server thread uses it
+   }
+   return *m_webServer;
+}
+
+void VPApp::StartWebServerIfAlwaysOn()
+{
+   if (m_settings.GetStandalone_WebServerAlwaysOn() && !GetWebServer().IsRunning())
+      GetWebServer().Start();
+}
+#endif
+#endif
+
 VPApp::~VPApp()
 {
+   ReleaseDisplayResources();
    #ifndef __STANDALONE__
       m_module.RevokeClassObjects();
       m_module.Term();
@@ -245,6 +534,13 @@ VPApp::~VPApp()
    #else
       libwinevbs_shutdown();
    #endif
+#ifdef VPX_TABLE_WEBSERVER
+   m_webServer = nullptr; // Uses the table library and g_app
+#endif
+#ifdef __STANDALONE__
+   if (m_isSharedPinMAMEFolderApplied)
+      m_settings.Reset(GetPinMAMEPathPropId());
+#endif
    g_pvp = nullptr;
    g_app = nullptr;
 
@@ -253,6 +549,94 @@ VPApp::~VPApp()
    #ifdef _CRTDBG_MAP_ALLOC
       _CrtDumpMemoryLeaks();
    #endif
+}
+
+VPX::Window* VPApp::AcquireWindow(int windowId, const string& title, const Settings& settings)
+{
+   const string config = VPX::Window::GetConfigKey(settings, static_cast<VPXWindowId>(windowId));
+   VPX::Window* wnd = nullptr;
+   if (const auto it = std::ranges::find_if(m_keptWindows, [windowId](const KeptWindow& kept) { return kept.windowId == windowId; }); it != m_keptWindows.end())
+   {
+      if (it->config == config)
+      {
+         PLOGI << "Window #" << windowId << " kept from the previous table";
+         wnd = it->window;
+      }
+      else
+      {
+         PLOGI << "Window #" << windowId << " settings changed since the previous table, the window is created again";
+         delete it->window;
+      }
+      m_keptWindows.erase(it);
+      SDL_QuitSubSystem(SDL_INIT_VIDEO); // Balances the reference taken when the window was kept
+   }
+   if (wnd == nullptr)
+      wnd = new VPX::Window(title, settings, static_cast<VPXWindowId>(windowId));
+   m_usedWindows.push_back({ wnd, windowId, config });
+   return wnd;
+}
+
+void VPApp::ReleaseWindow(VPX::Window* wnd)
+{
+   const auto it = std::ranges::find_if(m_usedWindows, [wnd](const KeptWindow& used) { return used.window == wnd; });
+   if (it == m_usedWindows.end())
+   {
+      assert(false); // Not acquired from AcquireWindow
+      delete wnd;
+      return;
+   }
+   const KeptWindow used = *it;
+   m_usedWindows.erase(it);
+   if (m_keepDisplayBetweenTables)
+   {
+      // Each table initializes then releases the video subsystem, which must stay alive with the kept window
+      SDL_InitSubSystem(SDL_INIT_VIDEO);
+      m_keptWindows.push_back(used);
+   }
+   else
+      delete used.window;
+}
+
+#ifdef ENABLE_XR
+VRDevice* VPApp::AcquireVRDevice(const Settings& settings)
+{
+   if (m_vrDevice && (m_vrDevice->IsLost() || m_vrDevice->GetRendererType() != VRDevice::SelectRendererType(settings)))
+   {
+      PLOGI << "The VR device kept from the previous table can't be used anymore (" << (m_vrDevice->IsLost() ? "lost by the runtime" : "graphics backend changed")
+            << "), it is created again";
+      delete m_vrDevice;
+      m_vrDevice = nullptr;
+   }
+   if (m_vrDevice)
+      PLOGI << "VR device kept from the previous table (same OpenXR instance)";
+   else
+      m_vrDevice = new VRDevice(settings);
+   return m_vrDevice;
+}
+
+void VPApp::ReleaseVRDevice(bool discard)
+{
+   if (m_vrDevice && (discard || !m_keepDisplayBetweenTables || !m_keepVRDeviceBetweenTables || m_vrDevice->IsLost()))
+   {
+      delete m_vrDevice;
+      m_vrDevice = nullptr;
+   }
+}
+#endif
+
+void VPApp::ReleaseDisplayResources()
+{
+   assert(m_usedWindows.empty()); // Only called when no table is played
+   #ifdef ENABLE_XR
+   delete m_vrDevice;
+   m_vrDevice = nullptr;
+   #endif
+   for (const KeptWindow& kept : m_keptWindows)
+   {
+      delete kept.window;
+      SDL_QuitSubSystem(SDL_INIT_VIDEO);
+   }
+   m_keptWindows.clear();
 }
 
 void VPApp::LimitMultiThreading()

@@ -17,7 +17,9 @@ namespace Flex {
 
 FlexDMD::FlexDMD(const MsgPluginAPI* msgApi, unsigned int endpointId, VPXPluginAPI* vpxApi)
    : m_vpxApi(vpxApi)
+   , m_msgApi(msgApi)
    , m_endpointId(endpointId)
+   , m_onScoreboardMsgId(msgApi->GetMsgID(SCOREPI_NAMESPACE, SCOREPI_EVT_ON_SCOREBOARD))
    , m_dmdProvider(msgApi, endpointId, CTLPI_DISPLAY_GET_SRC_MSG, CTLPI_DISPLAY_ON_SRC_CHG_MSG)
    , m_segProvider(msgApi, endpointId, CTLPI_SEG_GET_SRC_MSG, CTLPI_SEG_ON_SRC_CHG_MSG)
 {
@@ -33,8 +35,21 @@ FlexDMD::~FlexDMD()
    DiscardFrames();
    delete m_pAssetManager;
    delete m_pSurface;
+   m_msgApi->ReleaseMsgID(m_onScoreboardMsgId);
    if (m_onDestroyHandler != nullptr)
       m_onDestroyHandler(this);
+}
+
+void FlexDMD::BroadcastScoreboard(const char* source, int nPlayers, int currentPlayer, const int64_t* scores, int nScores) const
+{
+   ScoreboardEvent event { };
+   event.source = source;
+   event.nPlayers = nPlayers;
+   event.currentPlayer = currentPlayer;
+   event.nScores = std::min(nScores, SCOREPI_MAX_PLAYERS);
+   for (int i = 0; i < event.nScores; i++)
+      event.scores[i] = scores[i];
+   m_msgApi->BroadcastMsg(m_endpointId, m_onScoreboardMsgId, &event);
 }
 
 void FlexDMD::SetRun(bool run)

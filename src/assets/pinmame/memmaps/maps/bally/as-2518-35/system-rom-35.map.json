@@ -1,0 +1,493 @@
+{
+  "_notes": [
+    "Bally MPU AS-2518-35 (with U6 System ROM: 720-35_6.716)",
+    "6-digit score display",
+    "Game                          Mfg    Date   IPDB   OPDB",
+    "----------------------------  -----  ----   ----   ----",
+    "Dolly Parton                  Bally  1979    698    130",
+    "Future Spa                    Bally  1980    974   1769",
+    "Harlem Globetrotters On Tour  Bally  1979   1125   1742",
+    "Hotdoggin'                    Bally  1979   1243    658",
+    "Mystic                        Bally  1980   1650    998",
+    "Nitro Ground Shaker           Bally  1980   1682   1676",
+    "Rolling Stones                Bally  1980   2010   1211",
+    "Silverball Mania              Bally  1980   2156    670",
+    "Space Invaders*               Bally  1980   2252   1683",
+    "Viking                        Bally  1980   2737   1068",
+    "*Space Invaders actually 720-37_6.716.  Similar but different pricing.",
+    "By default the credits are not shown, set dip switch 27 to show them.",
+    "Originally compiled by Francis De Brabandere."
+  ],
+  "_fileformat": 0.8,
+  "_metadata": {
+    "version": 3,
+    "copyright": [
+      "Copyright (C) 2024 by Francis De Brabandere <francisdb@gmail.com>",
+      "Copyright (C) 2025 by Tom Collins <tom@scorbit.io>"
+    ],
+    "license": "Open Data Commons Open Database License (ODbL) v1.0",
+    "platform": "bally-35-6K",
+    "roms": [
+      "dollyptn",
+      "futurspa",
+      "hglbtrtr",
+      "hotdoggn",
+      "mystic",
+      "ngndshkr",
+      "rollston",
+      "slbmania",
+      "slbmanic",
+      "slbmanid",
+      "spaceinv",
+      "viking"
+    ],
+    "values": {
+      "_notes": [
+        "DIP switch settings verified against the Bally Viking (#1198), Space Invaders and Harlem Globetrotters On Tour manuals.",
+        "Switches 8, 14-16, 23, 24 and 32 are game-specific features and are not included here; see the game's manual.",
+        "incentive: X@Y means X credits paid on the Yth coin"
+      ],
+      "off_on": [
+        "off",
+        "on"
+      ],
+      "pricing": [
+        "incentive: 1@1, 2@2 (3/2)",
+        "incentive: 1@1, 2@2 (3/2)",
+        "1 credit/coin",
+        "1 credit/2 coins",
+        "2 credits/coin",
+        "2 credits/2 coins",
+        "3 credits/coin",
+        "3 credits/2 coins",
+        "4 credits/coin",
+        "4 credits/2 coins",
+        "5 credits/coin",
+        "5 credits/2 coins",
+        "6 credits/coin",
+        "6 credits/2 coins",
+        "7 credits/coin",
+        "7 credits/2 coins",
+        "8 credits/coin",
+        "8 credits/2 coins",
+        "9 credits/coin",
+        "9 credits/2 coins",
+        "10 credits/coin",
+        "10 credits/2 coins",
+        "11 credits/coin",
+        "11 credits/2 coins",
+        "12 credits/coin",
+        "12 credits/2 coins",
+        "13 credits/coin",
+        "13 credits/2 coins",
+        "14 credits/coin",
+        "14 credits/2 coins",
+        "15 credits/coin",
+        "15 credits/2 coins"
+      ],
+      "pricing_chute2": [
+        "same as chute 1",
+        "1 credit/coin",
+        "2 credits/coin",
+        "3 credits/coin",
+        "4 credits/coin",
+        "5 credits/coin",
+        "6 credits/coin",
+        "7 credits/coin",
+        "8 credits/coin",
+        "9 credits/coin",
+        "10 credits/coin",
+        "11 credits/coin",
+        "12 credits/coin",
+        "13 credits/coin",
+        "14 credits/coin",
+        "15 credits/coin"
+      ]
+    }
+  },
+  "game_state": {
+    "credits": {
+      "label": "Credits",
+      "start": "0x02B1",
+      "length": 2,
+      "encoding": "bcd"
+    },
+    "scores": [
+      {
+        "label": "Player 1",
+        "start": "0x021E",
+        "encoding": "bcd",
+        "length": 6
+      },
+      {
+        "label": "Player 2",
+        "start": "0x0224",
+        "encoding": "bcd",
+        "length": 6
+      },
+      {
+        "label": "Player 3",
+        "start": "0x022A",
+        "encoding": "bcd",
+        "length": 6
+      },
+      {
+        "label": "Player 4",
+        "start": "0x0230",
+        "encoding": "bcd",
+        "length": 6
+      }
+    ],
+    "final_scores": [
+      {
+        "label": "Final P1",
+        "start": "0x023D",
+        "encoding": "bcd",
+        "length": 6
+      },
+      {
+        "label": "Final P2",
+        "start": "0x0243",
+        "encoding": "bcd",
+        "length": 6
+      },
+      {
+        "label": "Final P3",
+        "start": "0x0249",
+        "encoding": "bcd",
+        "length": 6
+      },
+      {
+        "label": "Final P4",
+        "start": "0x024F",
+        "encoding": "bcd",
+        "length": 6
+      }
+    ],
+    "current_ball": {
+      "label": "Current Ball",
+      "start": "0x12",
+      "encoding": "bcd"
+    },
+    "player_count": {
+      "label": "Players",
+      "start": "0x13",
+      "encoding": "bcd"
+    },
+    "current_player": {
+      "label": "Current Player",
+      "start": "0x14",
+      "encoding": "bcd"
+    },
+    "ball_count": {
+      "label": "Ball Count",
+      "encoding": "dipsw",
+      "offsets": [
+        31
+      ],
+      "values": [
+        3,
+        5
+      ]
+    },
+    "max_credits": {
+      "label": "Max Credits",
+      "encoding": "dipsw",
+      "offsets": [
+        26,
+        25
+      ],
+      "values": [
+        10,
+        15,
+        25,
+        40
+      ]
+    },
+    "game_over": {
+      "_notes": "reading 'game over' lamp",
+      "label": "Game Over",
+      "start": "0x20C",
+      "encoding": "bool",
+      "mask": "0x4",
+      "invert": true
+    },
+    "tilted": {
+      "_notes": "reading 'tilt' lamp",
+      "label": "Tilted",
+      "start": "0x20C",
+      "encoding": "bool",
+      "mask": "0x8",
+      "invert": true
+    }
+  },
+  "high_scores": [
+    {
+      "label": "High Score",
+      "short_label": "HS",
+      "score": {
+        "start": "0x02AB",
+        "encoding": "bcd",
+        "length": 6
+      }
+    }
+  ],
+  "audits": {
+    "Bookkeeping functions": {
+      "05": {
+        "label": "Current Credits",
+        "start": "0x02B1",
+        "length": 6,
+        "encoding": "bcd",
+        "min": 0,
+        "max": 40
+      },
+      "06": {
+        "label": "Total Plays (Paid and Free Games)",
+        "start": "0x02B7",
+        "length": 6,
+        "encoding": "bcd",
+        "min": 0,
+        "max": 99999
+      },
+      "07": {
+        "label": "Total Replays (Free Games)",
+        "start": "0x02BD",
+        "length": 6,
+        "encoding": "bcd",
+        "min": 0,
+        "max": 99999
+      },
+      "08": {
+        "label": "HSTD Achieved",
+        "start": "0x02C3",
+        "length": 6,
+        "encoding": "bcd",
+        "min": 0,
+        "max": 99999
+      },
+      "09": {
+        "label": "Coin Chute #1",
+        "start": "0x02C9",
+        "length": 6,
+        "encoding": "bcd",
+        "min": 0,
+        "max": 99999
+      },
+      "10": {
+        "label": "Coin Chute #2",
+        "start": "0x02CF",
+        "length": 6,
+        "encoding": "bcd",
+        "min": 0,
+        "max": 99999
+      },
+      "11": {
+        "label": "Coin Chute #3",
+        "start": "0x02D5",
+        "length": 6,
+        "encoding": "bcd",
+        "min": 0,
+        "max": 99999
+      },
+      "12": {
+        "label": "Specials Awarded",
+        "start": "0x02DB",
+        "length": 6,
+        "encoding": "bcd",
+        "min": 0,
+        "max": 99999
+      },
+      "13": {
+        "label": "Minutes of Game Play",
+        "start": "0x02E1",
+        "length": 6,
+        "encoding": "bcd",
+        "min": 0,
+        "max": 99999
+      },
+      "14": {
+        "label": "Service Credits",
+        "start": "0x02E7",
+        "length": 6,
+        "encoding": "bcd",
+        "min": 0,
+        "max": 99999
+      }
+    }
+  },
+  "adjustments": {
+    "High score functions": {
+      "01": {
+        "label": "Replay Level 1",
+        "start": "0x0299",
+        "encoding": "bcd",
+        "length": 6,
+        "min": 0,
+        "max": 999000,
+        "default": 0,
+        "special_values": {
+          "0": "OFF"
+        },
+        "multiple_of": 10000
+      },
+      "02": {
+        "label": "Replay Level 2",
+        "start": "0x029F",
+        "encoding": "bcd",
+        "length": 6,
+        "min": 0,
+        "max": 999000,
+        "default": 0,
+        "special_values": {
+          "0": "OFF"
+        },
+        "multiple_of": 10000
+      },
+      "03": {
+        "label": "Replay Level 3",
+        "start": "0x02A5",
+        "encoding": "bcd",
+        "length": 6,
+        "min": 0,
+        "max": 999000,
+        "default": 0,
+        "special_values": {
+          "0": "OFF"
+        },
+        "multiple_of": 10000
+      },
+      "04": {
+        "label": "High score to date",
+        "start": "0x02AB",
+        "encoding": "bcd",
+        "length": 6,
+        "min": 0,
+        "max": 999000
+      }
+    }
+  },
+  "dip_switches": {
+    "1-5": {
+      "_notes": "Full pricing table from the manuals; X/2 coins settings pay all credits on the 2nd coin. The 3/2 incentive pays 1 credit on the 1st coin and 2 on the 2nd if no scoring occurred in between (1 otherwise). Space Invaders' 720-37 U6 ROM ignores switches 1 and 9 (always treated as off) and replaces the two 15 credits settings with a 3/4 coins incentive.",
+      "label": "Coin Chute #1 (hinge side) Credits/Coin",
+      "encoding": "dipsw",
+      "offsets": [
+        5,
+        4,
+        3,
+        2,
+        1
+      ],
+      "values": "pricing"
+    },
+    "6-7": {
+      "_notes": "Both switches off is not documented in the manuals.",
+      "label": "High Score / Special Award Mode",
+      "encoding": "dipsw",
+      "offsets": [
+        7,
+        6
+      ],
+      "values": [
+        "?",
+        "novelty (specials award points, no threshold award)",
+        "extra ball",
+        "replay"
+      ]
+    },
+    "9-13": {
+      "_notes": "Full pricing table from the manuals; X/2 coins settings pay all credits on the 2nd coin. The 3/2 incentive pays 1 credit on the 1st coin and 2 on the 2nd if no scoring occurred in between (1 otherwise). Space Invaders' 720-37 U6 ROM ignores switches 1 and 9 (always treated as off) and replaces the two 15 credits settings with a 3/4 coins incentive.",
+      "label": "Coin Chute #3 Credits/Coin",
+      "encoding": "dipsw",
+      "offsets": [
+        13,
+        12,
+        11,
+        10,
+        9
+      ],
+      "values": "pricing"
+    },
+    "17-20": {
+      "label": "Coin Chute #2 Credits/Coin",
+      "encoding": "dipsw",
+      "offsets": [
+        20,
+        19,
+        18,
+        17
+      ],
+      "values": "pricing_chute2"
+    },
+    "21-22": {
+      "label": "High Score to Date Award",
+      "encoding": "dipsw",
+      "offsets": [
+        22,
+        21
+      ],
+      "values": [
+        "no award",
+        "1 credit",
+        "2 credits",
+        "3 credits"
+      ]
+    },
+    "25-26": {
+      "label": "Maximum Credits",
+      "encoding": "dipsw",
+      "offsets": [
+        26,
+        25
+      ],
+      "values": [
+        10,
+        15,
+        25,
+        40
+      ]
+    },
+    "27": {
+      "label": "Credits Displayed",
+      "encoding": "dipsw",
+      "offsets": [
+        27
+      ],
+      "values": "off_on"
+    },
+    "28": {
+      "label": "Match Feature",
+      "encoding": "dipsw",
+      "offsets": [
+        28
+      ],
+      "values": "off_on"
+    },
+    "29-30": {
+      "label": "Sound Option",
+      "encoding": "dipsw",
+      "offsets": [
+        30,
+        29
+      ],
+      "values": [
+        "chimes on most scoring",
+        "playfield noises without background",
+        "noise effects on most scoring",
+        "playfield noises with background"
+      ]
+    },
+    "31": {
+      "label": "Balls per Game",
+      "encoding": "dipsw",
+      "offsets": [
+        31
+      ],
+      "values": [
+        3,
+        5
+      ]
+    }
+  }
+}

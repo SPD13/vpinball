@@ -444,6 +444,9 @@
     <ClCompile Include="$(SolutionDir)/../../src/renderer/ViewSetup.cpp">
       <Filter>renderer</Filter>
     </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/renderer/VRControllerModels.cpp">
+      <Filter>renderer</Filter>
+    </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/renderer/VRDevice.cpp">
       <Filter>renderer</Filter>
     </ClCompile>
@@ -625,6 +628,9 @@
       <Filter>ui\live\ingame</Filter>
     </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/SystemInfoPage.cpp">
+      <Filter>ui\live\ingame</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/MessagePage.cpp">
       <Filter>ui\live\ingame</Filter>
     </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/ui/win/PinTableMDI.cpp">
@@ -1457,6 +1463,9 @@
     <ClInclude Include="$(SolutionDir)/../../src/renderer/ViewSetup.h">
       <Filter>renderer</Filter>
     </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/renderer/VRControllerModels.h">
+      <Filter>renderer</Filter>
+    </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/renderer/VRDevice.h">
       <Filter>renderer</Filter>
     </ClInclude>
@@ -1650,6 +1659,9 @@
       <Filter>ui\live\ingame</Filter>
     </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/SystemInfoPage.h">
+      <Filter>ui\live\ingame</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/MessagePage.h">
       <Filter>ui\live\ingame</Filter>
     </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/ui/win/DragPointDialogs.h">

@@ -1,0 +1,123 @@
+{
+  "_notes": [
+    "Adjustment numbering is arbitrary.  Free Play ROM sets credits=max_credits on START.",
+    "Scores only available in display memory, unlike later Atari Gen 1 games."
+  ],
+  "_fileformat": 0.8,
+  "_metadata": {
+    "version": 2,
+    "copyright": [
+      "Copyright (C) 2026 by Tom Collins <tom@scorbit.io>"
+    ],
+    "license": "Open Data Commons Open Database License (ODbL) v1.0",
+    "platform": "atari-gen1",
+    "roms": [
+      "atarians",
+      "atarianf"
+    ],
+    "free_only": [
+      "atarianf"
+    ]
+  },
+  "game_state": {
+    "scores": [
+      {
+        "label": "Player 1",
+        "start": "0x000C",
+        "encoding": "bcd",
+        "length": 3,
+        "special_values": {
+          "888888": 0
+        }
+      },
+      {
+        "label": "Player 2",
+        "start": "0x0008",
+        "encoding": "bcd",
+        "length": 3,
+        "special_values": {
+          "888888": 0
+        }
+      },
+      {
+        "label": "Player 3",
+        "start": "0x0004",
+        "encoding": "bcd",
+        "length": 3,
+        "special_values": {
+          "888888": 0
+        }
+      },
+      {
+        "label": "Player 4",
+        "start": "0x0000",
+        "encoding": "bcd",
+        "length": 3,
+        "special_values": {
+          "888888": 0
+        }
+      }
+    ],
+    "credits": {
+      "label": "Credits",
+      "_notes": "also in display memory at 0x1D (bcd)",
+      "start": "0x00CE",
+      "encoding": "bcd"
+    },
+    "max_credits": {
+      "label": "Max Credits",
+      "start": "0x00E0",
+      "encoding": "bcd"
+    },
+    "current_ball": {
+      "label": "Ball",
+      "_notes": "also in display memory at 0x1C",
+      "start": "0x00C6",
+      "encoding": "bcd"
+    },
+    "ball_count": {
+      "label": "Balls",
+      "start": "0x00C7",
+      "encoding": "bcd"
+    },
+    "current_player": {
+      "label": "Player",
+      "start": "0x00C3",
+      "encoding": "bcd"
+    },
+    "player_count": {
+      "label": "Players",
+      "start": "0x00C4",
+      "encoding": "bcd"
+    },
+    "game_over": {
+      "_notes": "true when player_count==0",
+      "label": "Game Over",
+      "start": "0x00C4",
+      "encoding": "bool",
+      "invert": true
+    }
+  },
+  "adjustments": {
+    "Adjustments": {
+      "01": {
+        "label": "Low Replay Level",
+        "start": "0x00CB",
+        "encoding": "bcd",
+        "scale": 10000
+      },
+      "02": {
+        "label": "Medium Replay Level",
+        "start": "0x00CA",
+        "encoding": "bcd",
+        "scale": 10000
+      },
+      "03": {
+        "label": "High Replay Level",
+        "start": "0x00C9",
+        "encoding": "bcd",
+        "scale": 10000
+      }
+    }
+  }
+}

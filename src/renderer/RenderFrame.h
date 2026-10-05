@@ -23,6 +23,10 @@ public:
    bool Execute(const bool log = false);
    void Discard();
 
+   // Dynamic resolution scale of the scene rendered by this frame into the output back buffer (see RenderDevice::BeginScaledRendering),
+   // read by the headset device after the frame is executed to tell the runtime which part of the swapchain image was drawn
+   float m_outputRenderScale = 1.f;
+
 private:
    void SortPasses(RenderPass* finalPass, vector<RenderPass*>& sortedPasses);
 

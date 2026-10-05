@@ -1,0 +1,242 @@
+{
+  "_notes": [
+    "Compiled by HorsePin",
+    "current_player/current_ball from the joint pair test -- one hit across a full four-player game --",
+    "and independently confirmed by the exit dump, which reads player 4 / ball 3.",
+    "player_count at 0x02110900, the one address every Stern SAM game shares.",
+    "The map's existing score addresses were reproduced by the sweep and verified against the dump:",
+    "3,360,170 / 1,651,680 / 2,391,870 / 2,237,460, matching the machine's own game-over display.",
+    "The rejected CPU RAM candidate at 0x00031544 is the classic scaled-set false positive this",
+    "platform produces -- 732,790 / 184,370 / 18,320 / 11,450, each roughly a quarter of the one",
+    "before. Scores live in NVRAM on every SAM game measured, which is what rejects it."
+  ],
+  "_fileformat": 0.7,
+  "_metadata": {
+    "version": 3,
+    "copyright": [
+      "Copyright (C) 2022 https://github.com/horseyhorsey",
+      "Copyright (C) 2025 by Tom Collins <tom@scorbit.io>"
+    ],
+    "license": "Open Data Commons Open Database License (ODbL) v1.0",
+    "platform": "stern-sam",
+    "roms": [
+      "tf_180"
+    ]
+  },
+  "game_state": {
+    "player_count": {
+      "label": "Player Count",
+      "encoding": "int",
+      "start": "0x02110900"
+    },
+    "current_player": {
+      "label": "Player",
+      "encoding": "int",
+      "start": "0x00032438"
+    },
+    "current_ball": {
+      "label": "Ball",
+      "encoding": "int",
+      "start": "0x00032439"
+    },
+    "scores": [
+      {
+        "label": "Player 1",
+        "encoding": "int",
+        "length": 4,
+        "start": "0x21109E4"
+      },
+      {
+        "label": "Player 2",
+        "encoding": "int",
+        "length": 4,
+        "start": "0x21109E8"
+      },
+      {
+        "label": "Player 3",
+        "encoding": "int",
+        "length": 4,
+        "start": "0x21109EC"
+      },
+      {
+        "label": "Player 4",
+        "encoding": "int",
+        "length": 4,
+        "start": "0x21109F0"
+      }
+    ]
+  },
+  "high_scores": [
+    {
+      "label": "Autobot Grand Champion",
+      "short_label": "AGC",
+      "initials": {
+        "start": "0x2102DC8",
+        "encoding": "ch",
+        "length": 3
+      },
+      "score": {
+        "encoding": "int",
+        "length": 4,
+        "start": "0x2102DE0"
+      }
+    },
+    {
+      "label": "Autobot #1",
+      "short_label": "A#1",
+      "initials": {
+        "start": "0x2102DE8",
+        "encoding": "ch",
+        "length": 3
+      },
+      "score": {
+        "encoding": "int",
+        "length": 4,
+        "start": "0x2102E00"
+      }
+    },
+    {
+      "label": "Autobot #2",
+      "short_label": "A#2",
+      "initials": {
+        "start": "0x2102E08",
+        "encoding": "ch",
+        "length": 3
+      },
+      "score": {
+        "encoding": "int",
+        "length": 4,
+        "start": "0x2102E20"
+      }
+    },
+    {
+      "label": "Autobot #3",
+      "short_label": "A#3",
+      "initials": {
+        "start": "0x2102E28",
+        "encoding": "ch",
+        "length": 3
+      },
+      "score": {
+        "encoding": "int",
+        "length": 4,
+        "start": "0x2102E40"
+      }
+    },
+    {
+      "label": "Autobot #4",
+      "short_label": "A#4",
+      "initials": {
+        "start": "0x2102E48",
+        "encoding": "ch",
+        "length": 3
+      },
+      "score": {
+        "encoding": "int",
+        "length": 4,
+        "start": "0x2102E60"
+      }
+    },
+    {
+      "label": "Decepticon Grand Champion",
+      "short_label": "DGC",
+      "initials": {
+        "start": "0x2102E68",
+        "encoding": "ch",
+        "length": 3
+      },
+      "score": {
+        "encoding": "int",
+        "length": 4,
+        "start": "0x2102E80"
+      }
+    },
+    {
+      "label": "Decepticon #1",
+      "short_label": "D#1",
+      "initials": {
+        "start": "0x2102E88",
+        "encoding": "ch",
+        "length": 3
+      },
+      "score": {
+        "encoding": "int",
+        "length": 4,
+        "start": "0x2102EA0"
+      }
+    },
+    {
+      "label": "Decepticon #2",
+      "short_label": "D#2",
+      "initials": {
+        "start": "0x2102EA8",
+        "encoding": "ch",
+        "length": 3
+      },
+      "score": {
+        "encoding": "int",
+        "length": 4,
+        "start": "0x2102EC0"
+      }
+    },
+    {
+      "label": "Decepticon #3",
+      "short_label": "D#3",
+      "initials": {
+        "start": "0x2102EC8",
+        "encoding": "ch",
+        "length": 3
+      },
+      "score": {
+        "encoding": "int",
+        "length": 4,
+        "start": "0x2102EE0"
+      }
+    },
+    {
+      "label": "Decepticon #4",
+      "short_label": "D#4",
+      "initials": {
+        "start": "0x2102EE8",
+        "encoding": "ch",
+        "length": 3
+      },
+      "score": {
+        "encoding": "int",
+        "length": 4,
+        "start": "0x2102F00"
+      }
+    }
+  ],
+  "mode_champions": [
+    {
+      "label": "Combo",
+      "short_label": "Combo",
+      "initials": {
+        "start": "0x2102F08",
+        "encoding": "ch",
+        "length": 3
+      },
+      "score": {
+        "start": "0x2102F20",
+        "encoding": "int",
+        "length": 4
+      }
+    },
+    {
+      "label": "Best Combo Champion",
+      "short_label": "Best Combo",
+      "initials": {
+        "start": "0x2102F28",
+        "encoding": "ch",
+        "length": 3
+      },
+      "score": {
+        "start": "0x2102F40",
+        "encoding": "int",
+        "length": 4,
+        "suffix": "-WAY"
+      }
+    }
+  ]
+}

@@ -1,0 +1,421 @@
+diff -ru a/bgfx/include/bgfx/defines.h b/bgfx/include/bgfx/defines.h
+--- a/bgfx/include/bgfx/defines.h
++++ b/bgfx/include/bgfx/defines.h
+@@ -294,6 +294,7 @@
+ #define BGFX_TEXTURE_READ_BACK                    UINT64_C(0x0000800000000000) //!< Texture will be used for read back from GPU.
+ #define BGFX_TEXTURE_EXTERNAL_SHARED              UINT64_C(0x0001000000000000) //!< Texture is shared with other device or other process.
+ #define BGFX_TEXTURE_FRAGMENT_DENSITY_MAP         UINT64_C(0x0002000000000000) //!< Texture is a fragment density map provided by an external image, used through `BGFX_RESOLVE_FRAGMENT_DENSITY_MAP`.
++#define BGFX_TEXTURE_FRAGMENT_SHADING_RATE        UINT64_C(0x0004000000000000) //!< Texture is a fragment shading rate attachment (R8U, one rate code per texel), used through `BGFX_RESOLVE_FRAGMENT_SHADING_RATE`.
+ 
+ /**
+  * Do not use! Top nibble is reserved for internal texture flags (see bgfx_p.h).
+@@ -547,6 +548,7 @@
+ #define BGFX_RESOLVE_NONE                         UINT8_C(0x00) //!< No resolve flags.
+ #define BGFX_RESOLVE_AUTO_GEN_MIPS                UINT8_C(0x01) //!< Auto-generate mip maps on resolve.
+ #define BGFX_RESOLVE_FRAGMENT_DENSITY_MAP         UINT8_C(0x02) //!< Attachment is the frame buffer's fragment density map, not a color target (Vulkan, `BGFX_CAPS_FRAGMENT_DENSITY_MAP`).
++#define BGFX_RESOLVE_FRAGMENT_SHADING_RATE        UINT8_C(0x04) //!< Attachment is the frame buffer's fragment shading rate image, not a color target (Vulkan, VK_KHR_fragment_shading_rate).
+ 
+ #define BGFX_PCI_ID_NONE                          UINT16_C(0x0000) //!< Autoselect adapter.
+ #define BGFX_PCI_ID_SOFTWARE_RASTERIZER           UINT16_C(0x0001) //!< Software rasterizer.
+diff -ru a/bgfx/src/bgfx.cpp b/bgfx/src/bgfx.cpp
+--- a/bgfx/src/bgfx.cpp
++++ b/bgfx/src/bgfx.cpp
+@@ -5645,9 +5645,9 @@
+ 			const TextureHandle texHandle = at.handle;
+ 			const TextureRef&   tr = s_ctx->m_textureRef[texHandle.idx];
+ 
+-			if (0 != (at.resolve & BGFX_RESOLVE_FRAGMENT_DENSITY_MAP) )
++			if (0 != (at.resolve & (BGFX_RESOLVE_FRAGMENT_DENSITY_MAP | BGFX_RESOLVE_FRAGMENT_SHADING_RATE) ) )
+ 			{
+-				// A fragment density map is read by the rasterizer, it is not rendered to: none of the render target rules apply
++				// A fragment density map or shading rate image is read by the rasterizer, it is not rendered to: none of the render target rules apply
+ 				continue;
+ 			}
+ 
+diff -ru a/bgfx/src/renderer_vk.cpp b/bgfx/src/renderer_vk.cpp
+--- a/bgfx/src/renderer_vk.cpp
++++ b/bgfx/src/renderer_vk.cpp
+@@ -1159,6 +1159,11 @@
+ 			srcAccessMask = VK_ACCESS_FRAGMENT_DENSITY_MAP_READ_BIT_EXT;
+ 			break;
+ 
++		case VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR:
++			srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR;
++			srcAccessMask = VK_ACCESS_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR;
++			break;
++
+ 		case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+ 			break;
+ 
+@@ -1209,6 +1214,11 @@
+ 			dstAccessMask = VK_ACCESS_FRAGMENT_DENSITY_MAP_READ_BIT_EXT;
+ 			break;
+ 
++		case VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR:
++			dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR;
++			dstAccessMask = VK_ACCESS_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR;
++			break;
++
+ 		case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+ 			// vkQueuePresentKHR performs automatic visibility operations
+ 			break;
+@@ -3745,7 +3755,7 @@
+ 			}
+ 		}
+ 
+-		VkResult getRenderPass(uint8_t _num, const VkFormat* _formats, const VkImageAspectFlags* _aspects, const bool* _resolve, VkSampleCountFlagBits _samples, uint16_t _clearFlags, ::VkRenderPass* _outRenderPass, uint32_t* _outHashKey, VkFormat _fdmFormat = VK_FORMAT_UNDEFINED, uint32_t _fdmLayers = 0)
++		VkResult getRenderPass(uint8_t _num, const VkFormat* _formats, const VkImageAspectFlags* _aspects, const bool* _resolve, VkSampleCountFlagBits _samples, uint16_t _clearFlags, ::VkRenderPass* _outRenderPass, uint32_t* _outHashKey, VkFormat _fdmFormat = VK_FORMAT_UNDEFINED, uint32_t _fdmLayers = 0, VkFormat _fsrFormat = VK_FORMAT_UNDEFINED, uint32_t _fsrTexelSize = 0)
+ 		{
+ 			VkResult result = VK_SUCCESS;
+ 
+@@ -3761,6 +3771,8 @@
+ 			hash.add(_clearFlags);
+ 			hash.add(_fdmFormat);
+ 			hash.add(_fdmLayers);
++			hash.add(_fsrFormat);
++			hash.add(_fsrTexelSize);
+ 			if (NULL != _resolve)
+ 			{
+ 				hash.add(_resolve, sizeof(bool) * _num);
+@@ -3931,8 +3943,127 @@
+ 			rpi.dependencyCount = BX_COUNTOF(dep);
+ 			rpi.pDependencies   = dep;
+ 
+-			result = vkCreateRenderPass(m_device, &rpi, m_allocatorCb, &renderPass);
++			// Fragment shading rate attachment (VK_KHR_fragment_shading_rate): one more attachment, read by the rasterizer and never written,
++			// which only the render pass 2 structures can reference, so the description above is converted
++			const bool hasFsr = VK_FORMAT_UNDEFINED != _fsrFormat && 0 != _fsrTexelSize && NULL != vkCreateRenderPass2KHR;
++			if (hasFsr)
++			{
++				const uint32_t numAd  = rpi.attachmentCount;
++				const uint32_t fsrIdx = numAd;
++				VkAttachmentDescription2 ad2[BGFX_CONFIG_MAX_FRAME_BUFFER_ATTACHMENTS * 2 + 2];
++				for (uint32_t ii = 0; ii < numAd; ++ii)
++				{
++					ad2[ii].sType          = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2;
++					ad2[ii].pNext          = NULL;
++					ad2[ii].flags          = ad[ii].flags;
++					ad2[ii].format         = ad[ii].format;
++					ad2[ii].samples        = ad[ii].samples;
++					ad2[ii].loadOp         = ad[ii].loadOp;
++					ad2[ii].storeOp        = ad[ii].storeOp;
++					ad2[ii].stencilLoadOp  = ad[ii].stencilLoadOp;
++					ad2[ii].stencilStoreOp = ad[ii].stencilStoreOp;
++					ad2[ii].initialLayout  = ad[ii].initialLayout;
++					ad2[ii].finalLayout    = ad[ii].finalLayout;
++				}
++				ad2[fsrIdx].sType          = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2;
++				ad2[fsrIdx].pNext          = NULL;
++				ad2[fsrIdx].flags          = 0;
++				ad2[fsrIdx].format         = _fsrFormat;
++				ad2[fsrIdx].samples        = VK_SAMPLE_COUNT_1_BIT;
++				ad2[fsrIdx].loadOp         = VK_ATTACHMENT_LOAD_OP_LOAD;
++				ad2[fsrIdx].storeOp        = VK_ATTACHMENT_STORE_OP_DONT_CARE;
++				ad2[fsrIdx].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
++				ad2[fsrIdx].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
++				ad2[fsrIdx].initialLayout  = VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR;
++				ad2[fsrIdx].finalLayout    = VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR;
+ 
++				VkAttachmentReference2 colorAr2[BGFX_CONFIG_MAX_FRAME_BUFFER_ATTACHMENTS];
++				VkAttachmentReference2 resolveAr2[BGFX_CONFIG_MAX_FRAME_BUFFER_ATTACHMENTS];
++				VkAttachmentReference2 depthAr2;
++				VkAttachmentReference2 fsrAr2;
++				for (uint32_t ii = 0; ii < sd[0].colorAttachmentCount; ++ii)
++				{
++					colorAr2[ii].sType        = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2;
++					colorAr2[ii].pNext        = NULL;
++					colorAr2[ii].attachment   = colorAr[ii].attachment;
++					colorAr2[ii].layout       = colorAr[ii].layout;
++					colorAr2[ii].aspectMask   = 0;
++					resolveAr2[ii].sType      = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2;
++					resolveAr2[ii].pNext      = NULL;
++					resolveAr2[ii].attachment = resolveAr[ii].attachment;
++					resolveAr2[ii].layout     = resolveAr[ii].layout;
++					resolveAr2[ii].aspectMask = 0;
++				}
++				depthAr2.sType      = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2;
++				depthAr2.pNext      = NULL;
++				depthAr2.attachment = depthAr.attachment;
++				depthAr2.layout     = depthAr.layout;
++				depthAr2.aspectMask = 0;
++				fsrAr2.sType      = VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2;
++				fsrAr2.pNext      = NULL;
++				fsrAr2.attachment = fsrIdx;
++				fsrAr2.layout     = VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR;
++				fsrAr2.aspectMask = 0;
++
++				VkFragmentShadingRateAttachmentInfoKHR fsrInfo;
++				fsrInfo.sType = VK_STRUCTURE_TYPE_FRAGMENT_SHADING_RATE_ATTACHMENT_INFO_KHR;
++				fsrInfo.pNext = NULL;
++				fsrInfo.pFragmentShadingRateAttachment = &fsrAr2;
++				fsrInfo.shadingRateAttachmentTexelSize.width  = _fsrTexelSize;
++				fsrInfo.shadingRateAttachmentTexelSize.height = _fsrTexelSize;
++
++				VkSubpassDescription2 sd2;
++				sd2.sType                   = VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2;
++				sd2.pNext                   = &fsrInfo;
++				sd2.flags                   = 0;
++				sd2.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
++				sd2.viewMask                = 0;
++				sd2.inputAttachmentCount    = 0;
++				sd2.pInputAttachments       = NULL;
++				sd2.colorAttachmentCount    = sd[0].colorAttachmentCount;
++				sd2.pColorAttachments       = colorAr2;
++				sd2.pResolveAttachments     = resolveAr2;
++				sd2.pDepthStencilAttachment = &depthAr2;
++				sd2.preserveAttachmentCount = 0;
++				sd2.pPreserveAttachments    = NULL;
++
++				VkSubpassDependency2 dep2[BX_COUNTOF(dep)];
++				for (uint32_t ii = 0; ii < BX_COUNTOF(dep); ++ii)
++				{
++					dep2[ii].sType           = VK_STRUCTURE_TYPE_SUBPASS_DEPENDENCY_2;
++					dep2[ii].pNext           = NULL;
++					dep2[ii].srcSubpass      = dep[ii].srcSubpass;
++					dep2[ii].dstSubpass      = dep[ii].dstSubpass;
++					dep2[ii].srcStageMask    = dep[ii].srcStageMask;
++					dep2[ii].dstStageMask    = dep[ii].dstStageMask;
++					dep2[ii].srcAccessMask   = dep[ii].srcAccessMask;
++					dep2[ii].dstAccessMask   = dep[ii].dstAccessMask;
++					dep2[ii].dependencyFlags = dep[ii].dependencyFlags;
++					dep2[ii].viewOffset      = 0;
++				}
++				dep2[0].dstStageMask  |= VK_PIPELINE_STAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR;
++				dep2[0].dstAccessMask |= VK_ACCESS_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR;
++
++				VkRenderPassCreateInfo2 rpi2;
++				rpi2.sType                   = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2;
++				rpi2.pNext                   = rpi.pNext;
++				rpi2.flags                   = 0;
++				rpi2.attachmentCount         = numAd + 1;
++				rpi2.pAttachments            = ad2;
++				rpi2.subpassCount            = 1;
++				rpi2.pSubpasses              = &sd2;
++				rpi2.dependencyCount         = BX_COUNTOF(dep2);
++				rpi2.pDependencies           = dep2;
++				rpi2.correlatedViewMaskCount = 0;
++				rpi2.pCorrelatedViewMasks    = NULL;
++
++				result = vkCreateRenderPass2KHR(m_device, &rpi2, m_allocatorCb, &renderPass);
++			}
++			else
++			{
++				result = vkCreateRenderPass(m_device, &rpi, m_allocatorCb, &renderPass);
++			}
++
+ 			if (VK_SUCCESS != result)
+ 			{
+ 				BX_TRACE("Create render pass error: vkCreateRenderPass failed %d: %s.", result, getName(result) );
+@@ -3946,7 +4077,7 @@
+ 			return result;
+ 		}
+ 
+-		VkResult getRenderPass(uint8_t _num, const Attachment* _attachments, uint16_t _clearFlags, ::VkRenderPass* _outRenderPass, uint32_t* _outHashKey = NULL, VkFormat _fdmFormat = VK_FORMAT_UNDEFINED, uint32_t _fdmLayers = 0)
++		VkResult getRenderPass(uint8_t _num, const Attachment* _attachments, uint16_t _clearFlags, ::VkRenderPass* _outRenderPass, uint32_t* _outHashKey = NULL, VkFormat _fdmFormat = VK_FORMAT_UNDEFINED, uint32_t _fdmLayers = 0, VkFormat _fsrFormat = VK_FORMAT_UNDEFINED, uint32_t _fsrTexelSize = 0)
+ 		{
+ 			VkFormat formats[BGFX_CONFIG_MAX_FRAME_BUFFER_ATTACHMENTS];
+ 			VkImageAspectFlags aspects[BGFX_CONFIG_MAX_FRAME_BUFFER_ATTACHMENTS];
+@@ -3960,7 +4091,7 @@
+ 				samples = texture.m_sampler.Sample;
+ 			}
+ 
+-			return getRenderPass(_num, formats, aspects, NULL, samples, _clearFlags, _outRenderPass, _outHashKey, _fdmFormat, _fdmLayers);
++			return getRenderPass(_num, formats, aspects, NULL, samples, _clearFlags, _outRenderPass, _outHashKey, _fdmFormat, _fdmLayers, _fsrFormat, _fsrTexelSize);
+ 		}
+ 
+ 		VkResult getRenderPass(const SwapChainVK& swapChain, uint16_t _clearFlags, ::VkRenderPass* _outRenderPass, uint32_t* _outHashKey = NULL)
+@@ -4368,9 +4499,18 @@
+ 			fdmLayered.maxFragmentDensityMapLayers = frameBuffer.m_fdmLayers;
+ 			const bool layeredFdm = frameBuffer.m_hasFdm && frameBuffer.m_fdmLayers > 1 && m_fragmentDensityMapLayeredSupported;
+ 
++			// A frame buffer with a shading rate attachment: the attachment's rate replaces the pipeline's one (the dynamic state, when in use, sets the same combiner)
++			VkPipelineFragmentShadingRateStateCreateInfoKHR fsrState;
++			fsrState.sType = VK_STRUCTURE_TYPE_PIPELINE_FRAGMENT_SHADING_RATE_STATE_CREATE_INFO_KHR;
++			fsrState.pNext = layeredFdm ? (const void*)&fdmLayered : NULL;
++			fsrState.fragmentSize.width  = 1;
++			fsrState.fragmentSize.height = 1;
++			fsrState.combinerOps[0] = VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR;
++			fsrState.combinerOps[1] = VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR;
++
+ 			VkGraphicsPipelineCreateInfo graphicsPipeline;
+ 			graphicsPipeline.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+-			graphicsPipeline.pNext = layeredFdm ? &fdmLayered : NULL;
++			graphicsPipeline.pNext = frameBuffer.m_hasFsr ? (const void*)&fsrState : layeredFdm ? (const void*)&fdmLayered : NULL;
+ 			graphicsPipeline.flags = 0;
+ 			graphicsPipeline.stageCount = NULL == program.m_fsh ? 1 : 2;
+ 			graphicsPipeline.pStages    = shaderStages;
+@@ -6986,6 +7126,7 @@
+ 				)
+ 			| (m_flags & (BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_INTERNAL_VIDEO_DECODE_DST) ? VK_IMAGE_USAGE_STORAGE_BIT : 0)
+ 			| (m_flags & BGFX_TEXTURE_FRAGMENT_DENSITY_MAP ? VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT : 0)
++			| (m_flags & BGFX_TEXTURE_FRAGMENT_SHADING_RATE ? VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR : 0)
+ 			;
+ 		if (0 != (m_flags & BGFX_TEXTURE_FRAGMENT_DENSITY_MAP) && s_renderVK->m_fragmentDensityMapOffsetSupported)
+ 		{
+@@ -7061,6 +7202,8 @@
+ 			? VK_IMAGE_LAYOUT_GENERAL
+ 			: m_flags & BGFX_TEXTURE_FRAGMENT_DENSITY_MAP
+ 			? VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT
++			: m_flags & BGFX_TEXTURE_FRAGMENT_SHADING_RATE
++			? VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR
+ 			: VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+ 			;
+ 
+@@ -9214,6 +9357,7 @@
+ 
+ 		uint8_t num = 0;
+ 		m_hasFdm = false;
++		m_hasFsr = false;
+ 
+ 		for (uint8_t ii = 0; ii < _num; ++ii)
+ 		{
+@@ -9224,6 +9368,14 @@
+ 				continue;
+ 			}
+ 
++			if (0 != (_attachment[ii].resolve & BGFX_RESOLVE_FRAGMENT_SHADING_RATE) )
++			{
++				// Needs the render pass 2 structures; without them the attachment is ignored
++				m_hasFsr = NULL != vkCreateRenderPass2KHR;
++				m_fsrAttachment = _attachment[ii];
++				continue;
++			}
++
+ 			const TextureVK& texture = s_renderVK->m_textures[_attachment[ii].handle.idx];
+ 
+ 			if (0 == (texture.m_aspectFlags & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT) ) )
+@@ -9234,7 +9386,7 @@
+ 
+ 		for (uint8_t ii = 0; ii < _num; ++ii)
+ 		{
+-			if (0 != (_attachment[ii].resolve & BGFX_RESOLVE_FRAGMENT_DENSITY_MAP) )
++			if (0 != (_attachment[ii].resolve & (BGFX_RESOLVE_FRAGMENT_DENSITY_MAP | BGFX_RESOLVE_FRAGMENT_SHADING_RATE) ) )
+ 			{
+ 				continue;
+ 			}
+@@ -9298,7 +9450,7 @@
+ 
+ 		if (m_numTh > 0)
+ 		{
+-			VK_CHECK(s_renderVK->getRenderPass(m_numTh, m_attachment, _clearFlags, &renderPass, NULL, m_fdmFormat, m_fdmLayers) );
++			VK_CHECK(s_renderVK->getRenderPass(m_numTh, m_attachment, _clearFlags, &renderPass, NULL, m_fdmFormat, m_fdmLayers, m_fsrFormat, m_fsrTexelSize) );
+ 		}
+ 		else
+ 		{
+@@ -9326,6 +9478,12 @@
+ 				s_renderVK->release(m_fdmImageView);
+ 				m_fdmImageView = VK_NULL_HANDLE;
+ 			}
++
++			if (VK_NULL_HANDLE != m_fsrImageView)
++			{
++				s_renderVK->release(m_fsrImageView);
++				m_fsrImageView = VK_NULL_HANDLE;
++			}
+ 		}
+ 	}
+ 
+@@ -9350,8 +9508,21 @@
+ 				m_fdmLayers = 0;
+ 			}
+ 
+-			VK_CHECK(s_renderVK->getRenderPass(m_numTh, m_attachment, 0, &m_renderPass, &m_renderPassHashKey, m_fdmFormat, m_fdmLayers) );
++			if (m_hasFsr)
++			{
++				// The device has a single texel size on most hardware; the application sizes its image with the same property
++				const TextureVK& fsr = s_renderVK->m_textures[m_fsrAttachment.handle.idx];
++				m_fsrFormat = fsr.m_format;
++				m_fsrTexelSize = bx::max<uint32_t>(s_renderVK->m_deviceShadingRateImageProperties.minFragmentShadingRateAttachmentTexelSize.width, 1);
++			}
++			else
++			{
++				m_fsrFormat = VK_FORMAT_UNDEFINED;
++				m_fsrTexelSize = 0;
++			}
+ 
++			VK_CHECK(s_renderVK->getRenderPass(m_numTh, m_attachment, 0, &m_renderPass, &m_renderPassHashKey, m_fdmFormat, m_fdmLayers, m_fsrFormat, m_fsrTexelSize) );
++
+ 			m_depth = BGFX_INVALID_HANDLE;
+ 			m_num = 0;
+ 
+@@ -9399,6 +9570,26 @@
+ 				m_textureImageViews[m_numTh] = m_fdmImageView;
+ 			}
+ 
++			if (m_hasFsr)
++			{
++				const uint8_t idx = m_numTh + (m_hasFdm ? 1 : 0);
++				BX_ASSERT(idx < BGFX_CONFIG_MAX_FRAME_BUFFER_ATTACHMENTS, "No room left for the fragment shading rate attachment.");
++				const Attachment& at = m_fsrAttachment;
++				const TextureVK& texture = s_renderVK->m_textures[at.handle.idx];
++				// One layer for every layer of the frame buffer (layeredShadingRateAttachments is not assumed)
++				VK_CHECK(texture.createView(
++					  at.layer
++					, 1
++					, at.mip
++					, 1
++					, VK_IMAGE_VIEW_TYPE_2D
++					, VK_IMAGE_ASPECT_COLOR_BIT
++					, true
++					, &m_fsrImageView
++					) );
++				m_textureImageViews[idx] = m_fsrImageView;
++			}
++
+ 			const TextureVK& firstTexture = s_renderVK->m_textures[m_attachment[0].handle.idx];
+ 			m_width  = bx::max(firstTexture.m_width  >> m_attachment[0].mip, 1);
+ 			m_height = bx::max(firstTexture.m_height >> m_attachment[0].mip, 1);
+@@ -9409,7 +9600,7 @@
+ 			fci.pNext = NULL;
+ 			fci.flags = 0;
+ 			fci.renderPass      = m_renderPass;
+-			fci.attachmentCount = m_numTh + (m_hasFdm ? 1 : 0);
++			fci.attachmentCount = m_numTh + (m_hasFdm ? 1 : 0) + (m_hasFsr ? 1 : 0);
+ 			fci.pAttachments    = &m_textureImageViews[0];
+ 			fci.width  = m_width;
+ 			fci.height = m_height;
+@@ -10663,7 +10854,7 @@
+ 							VkFragmentShadingRateCombinerOpKHR combinerOp[] =
+ 							{
+ 								VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
+-								VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR
++								fb.m_hasFsr ? VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR : VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR // the frame buffer's shading rate attachment
+ 							};
+ 
+ 							vkCmdSetFragmentShadingRateKHR(
+diff -ru a/bgfx/src/renderer_vk.h b/bgfx/src/renderer_vk.h
+--- a/bgfx/src/renderer_vk.h
++++ b/bgfx/src/renderer_vk.h
+@@ -183,6 +183,7 @@
+ 			VK_IMPORT_DEVICE_FUNC(false, vkCmdBeginRenderPass);                       \
+ 			VK_IMPORT_DEVICE_FUNC(false, vkCmdEndRenderPass);                         \
+ 			VK_IMPORT_DEVICE_FUNC(true,  vkCmdEndRenderPass2KHR);                     \
++			VK_IMPORT_DEVICE_FUNC(true,  vkCreateRenderPass2KHR);                     \
+ 			VK_IMPORT_DEVICE_FUNC(false, vkCmdSetViewport);                           \
+ 			VK_IMPORT_DEVICE_FUNC(false, vkCmdDraw);                                  \
+ 			VK_IMPORT_DEVICE_FUNC(false, vkCmdDrawIndexed);                           \
+@@ -869,6 +870,10 @@
+ 			, m_fdmImageView(VK_NULL_HANDLE)
+ 			, m_fdmFormat(VK_FORMAT_UNDEFINED)
+ 			, m_fdmLayers(0)
++			, m_hasFsr(false)
++			, m_fsrImageView(VK_NULL_HANDLE)
++			, m_fsrFormat(VK_FORMAT_UNDEFINED)
++			, m_fsrTexelSize(0)
+ 		{
+ 		}
+ 
+@@ -920,6 +925,13 @@
+ 		VkImageView m_fdmImageView;
+ 		VkFormat    m_fdmFormat;
+ 		uint32_t    m_fdmLayers;
++
++		// Fragment shading rate attachment (VK_KHR_fragment_shading_rate): the attachment tagged BGFX_RESOLVE_FRAGMENT_SHADING_RATE, a single layer R8U image
++		bool        m_hasFsr;
++		Attachment  m_fsrAttachment;
++		VkImageView m_fsrImageView;
++		VkFormat    m_fsrFormat;
++		uint32_t    m_fsrTexelSize;
+ 	};
+ 
+ 	struct CommandQueueVK

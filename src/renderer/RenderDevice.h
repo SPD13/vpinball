@@ -127,6 +127,15 @@ public:
    void DrawTexturedQuad(Shader* shader, const Vertex3D_NoTex2* vertices, const bool isTransparent = false, const float depth = 0.f);
    void DrawFullscreenTexturedQuad(Shader* shader);
    void DrawGaussianBlur(RenderTarget* source, RenderTarget* tmp, RenderTarget* dest, float kernel_size, int singleLayer = -1);
+   // Dynamic resolution: the passes created between Begin and End are executed in the top left part of the targets which follow it
+   // (RenderTarget::m_dynamicResolution), at this scale of their size, and the full-screen quads sample that part (DrawFullscreenTexturedQuad).
+   // The scale is kept with the frame for its presentation (RenderFrame::m_outputRenderScale, read back through GetExecutedRenderScale once
+   // the frame is executed, by the headset device which tells the runtime which part of the swapchain image was drawn)
+   void BeginScaledRendering(const float renderScale) { m_renderScale = renderScale; m_renderFrame->m_outputRenderScale = renderScale; }
+   void EndScaledRendering() { m_renderScale = 1.f; }
+   float GetRenderScale() const { return m_renderScale; }
+   void SetExecutedRenderScale(const float renderScale) { m_executedRenderScale = renderScale; }
+   float GetExecutedRenderScale() const { return m_executedRenderScale; }
    void AddBeginOfFrameCmd(const std::function<void()>& cmd) { m_renderFrame->AddBeginOfFrameCmd(cmd); }
    void AddEndOfFrameCmd(const std::function<void()>& cmd) { m_renderFrame->AddEndOfFrameCmd(cmd); }
    void LogNextFrame() { m_logNextFrame = true; }
@@ -293,6 +302,14 @@ public:
    bgfx::ViewId m_activeViewId = 0;
    uint16_t m_activeViewClearFlags = BGFX_CLEAR_NONE; // Accumulated clear flags of the active view (BGFX applies a single clear per view, using the last defined state)
    uint32_t m_activeViewClearColor = 0;
+   // The names given to the views, kept here because bgfx drops them in release builds and the profiler reports views by id (see VRDevice::LogRuntimeStatus)
+   std::array<string, 256> m_viewNames;
+   bool m_nameViews = false; // Naming costs a string per pass and frame: only in debug builds or when profiling (VPX_GPU_PROFILE)
+   void SetViewName(bgfx::ViewId id, const string& name)
+   {
+      m_viewNames[id] = name;
+      bgfx::setViewName(id, name.c_str());
+   }
    uint64_t m_bgfxState = 0;
 
    bool m_frameNoPresent = false; // Flag set when the next frame should be submitted without VBlank sync disabled
@@ -300,6 +317,8 @@ public:
    std::binary_semaphore m_renderThreadStopped { 0 }; // Semaphore signaled by the render thread when it has left its render loop, so the destructor can free render resources without racing in-flight rendering
    std::binary_semaphore m_frameReadySem { 0 }; // Semaphore to signal when a frame is ready to be submitted
    std::mutex m_frameMutex; // Mutex to lock acces to retained render frame between logic thread and render thread
+   float m_renderScale = 1.f; // Dynamic resolution scale given to the passes being created (logic thread, see BeginScaledRendering)
+   std::atomic<float> m_executedRenderScale = 1.f; // Scale of the last executed frame (written by the render thread, read for the presentation)
 
    bgfx::ProgramHandle m_srgbMipmapProgram = BGFX_INVALID_HANDLE;
 
@@ -328,6 +347,7 @@ private:
    std::atomic<bool> m_renderDeviceAlive;
    std::thread m_renderThread;
    vector<std::shared_ptr<Sampler>> m_pendingTextureUploads;
+   std::mutex m_pendingTextureUploadsMutex; // The render thread processes them when flipping a frame, outside of the frame mutex, while texture loading threads may add some
    std::unique_ptr<ShaderState> m_uniformState = nullptr;
 
    class tBGFXCallback : public bgfx::CallbackI

@@ -77,12 +77,15 @@ vec3 ballLightLoop(const vec3 pos, vec3 N, vec3 V, vec3 diffuse, vec3 glossy, co
 
    vec3 color = vec3(0.0, 0.0, 0.0);
 
+   // Specular antialiasing of the highlights (see material.sh), mostly for the small balls seen from afar
+   const float glossyPower = SpecularAAGlossyPower(Roughness_WrapL_Edge_Thickness.x, SpecularAAKernel(NormalVariation(N)));
+
    BRANCH if((!is_metal && (diffuseMax > 0.0)) || (glossyMax > 0.0))
-      for(int i = 0; i < NUM_LIGHTS + NUM_BALL_LIGHTS; i++)  
+      for(int i = 0; i < NUM_LIGHTS + NUM_BALL_LIGHTS; i++)
           #ifdef STEREO
-             color += DoPointLight(pos, N, V, diffuse, glossy, edge, Roughness_WrapL_Edge_Thickness.x, i, is_metal, v_eye); // no clearcoat needed as only pointlights so far
+             color += DoPointLight(pos, N, V, diffuse, glossy, edge, glossyPower, i, is_metal, v_eye); // no clearcoat needed as only pointlights so far
           #else
-             color += DoPointLight(pos, N, V, diffuse, glossy, edge, Roughness_WrapL_Edge_Thickness.x, i, is_metal); // no clearcoat needed as only pointlights so far
+             color += DoPointLight(pos, N, V, diffuse, glossy, edge, glossyPower, i, is_metal); // no clearcoat needed as only pointlights so far
           #endif
 
    BRANCH if(!is_metal && (diffuseMax > 0.0))
@@ -172,11 +175,14 @@ void main()
     #else
         const vec2 uvp = vec2(0.5, 0.5) + vec2(proj.x, -proj.y) * (0.5 / proj.w);
     #endif
+    // Dynamic resolution: the previous frame holds the rendered part of its buffer (w_h_disableLighting.w is its render scale, see
+    // RenderDevice::BeginScaledRendering); uvp stays in 0..1 for the bounds check below
+    const vec2 uvs = uvp * w_h_disableLighting.w;
     const vec3 playfieldColor = 0.25 * (
-          texStereo(tex_ball_playfield, uvp + vec2(w_h_disableLighting.x, 0.)).rgb
-        + texStereo(tex_ball_playfield, uvp - vec2(w_h_disableLighting.x, 0.)).rgb
-        + texStereo(tex_ball_playfield, uvp + vec2(0., w_h_disableLighting.y)).rgb
-        + texStereo(tex_ball_playfield, uvp - vec2(0., w_h_disableLighting.y)).rgb
+          texStereo(tex_ball_playfield, uvs + vec2(w_h_disableLighting.x, 0.)).rgb
+        + texStereo(tex_ball_playfield, uvs - vec2(w_h_disableLighting.x, 0.)).rgb
+        + texStereo(tex_ball_playfield, uvs + vec2(0., w_h_disableLighting.y)).rgb
+        + texStereo(tex_ball_playfield, uvs - vec2(0., w_h_disableLighting.y)).rgb
     ); // a bit of supersampling, not strictly needed, but a bit better and not that costly
 
     // we don't clamp sampling outside the playfield (costly and no real visual impact)

@@ -276,6 +276,7 @@ elseif(PLATFORM STREQUAL "windows-mingw")
 
    add_executable(vpinball
       ${VPX_STANDALONE_SOURCES}
+      ${VPX_WEBSERVER_SOURCES}
 
       src/utils/StackTrace.cpp
       src/utils/StackTrace.h
@@ -300,6 +301,7 @@ elseif(PLATFORM STREQUAL "windows-mingw")
 
    target_compile_definitions(vpinball PRIVATE
       __STANDALONE__
+      VPX_TABLE_WEBSERVER
 
       __LIBWINEVBS__
       WINE_UNICODE_NATIVE
@@ -310,6 +312,8 @@ elseif(PLATFORM STREQUAL "windows-mingw")
 
       ENABLE_BGFX
       $<IF:$<CONFIG:Debug>,BX_CONFIG_DEBUG=1,BX_CONFIG_DEBUG=0>
+      # Standalone build with OpenXR: the closest a PC gets to the Linux build running on a standalone headset
+      $<$<BOOL:${ENABLE_XR}>:ENABLE_XR>
 
       VPX_STANDALONE_CRASH_HANDLER
    )
@@ -344,7 +348,16 @@ elseif(PLATFORM STREQUAL "windows-mingw")
       winevbs64
       backtrace
       dbghelp
+      zip64 # Web server
+      ws2_32
+      iphlpapi
    )
+
+   # RAR and 7z archives, when external.sh built libarchive (static, 7z needs liblzma), linked by full path so that MSYS2's is never used
+   if(EXISTS "${BUILD_LIBS_DIR}/libarchive.a")
+      target_compile_definitions(vpinball PRIVATE VPX_ARCHIVE_SUPPORT LIBARCHIVE_STATIC)
+      target_link_libraries(vpinball "${BUILD_LIBS_DIR}/libarchive.a" "${BUILD_LIBS_DIR}/liblzma.a" z bcrypt) # bcrypt: random names of temporary files
+   endif()
 
    target_link_options(vpinball PUBLIC
       -Wl,--dynamicbase
@@ -375,6 +388,8 @@ elseif(PLATFORM STREQUAL "windows-mingw")
          COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/hidapi64.dll" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/openxr_loader64.dll" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/winevbs64.dll" "$<TARGET_FILE_DIR:vpinball>"
+         COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/libzip64.dll" "$<TARGET_FILE_DIR:vpinball>"
+         COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/zlib1.dll" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/libwinpthread-1.dll" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/libgcc_s_seh-1.dll" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/libstdc++-6.dll" "$<TARGET_FILE_DIR:vpinball>"
@@ -395,6 +410,7 @@ elseif(PLATFORM STREQUAL "macos")
 
    add_executable(vpinball
       ${VPX_STANDALONE_SOURCES}
+      ${VPX_WEBSERVER_SOURCES}
 
       standalone/macos/main.mm
    )
@@ -411,6 +427,7 @@ elseif(PLATFORM STREQUAL "macos")
 
    target_compile_definitions(vpinball PRIVATE
       __STANDALONE__
+      VPX_TABLE_WEBSERVER
 
       __LIBWINEVBS__
       __WINESRC__
@@ -458,6 +475,7 @@ elseif(PLATFORM STREQUAL "macos")
       freeimage
       hidapi
       winevbs
+      zip
       "-framework AppKit"
    )
 
@@ -514,6 +532,7 @@ elseif(PLATFORM STREQUAL "linux")
 
    add_executable(vpinball
       ${VPX_STANDALONE_SOURCES}
+      ${VPX_WEBSERVER_SOURCES}
    )
 
    target_include_directories(vpinball PUBLIC
@@ -528,6 +547,7 @@ elseif(PLATFORM STREQUAL "linux")
 
    target_compile_definitions(vpinball PRIVATE
       __STANDALONE__
+      VPX_TABLE_WEBSERVER
 
       __LIBWINEVBS__
       __WINESRC__
@@ -539,10 +559,14 @@ elseif(PLATFORM STREQUAL "linux")
    if(RENDERER STREQUAL "BGFX")
       target_compile_definitions(vpinball PRIVATE
          ENABLE_BGFX
+         $<$<BOOL:${ENABLE_XR}>:ENABLE_XR>
 
          $<IF:$<CONFIG:Debug>,BX_CONFIG_DEBUG=1,BX_CONFIG_DEBUG=0>
       )
    else()
+      if(ENABLE_XR)
+         message(FATAL_ERROR "ENABLE_XR requires the BGFX renderer")
+      endif()
       target_compile_definitions(vpinball PRIVATE
          ENABLE_OPENGL
          $<$<NOT:$<STREQUAL:${ARCH},x64>>:__OPENGLES__>
@@ -589,7 +613,16 @@ elseif(PLATFORM STREQUAL "linux")
       freeimage
       hidapi-hidraw
       winevbs
+      zip
+      $<$<BOOL:${ENABLE_XR}>:openxr_loader>
    )
+
+   # RAR and 7z archives, when external.sh built libarchive (static, 7z needs liblzma), linked by full path so that a system one is never used
+   set(BUILD_LIBS_DIR "${CMAKE_SOURCE_DIR}/third-party/build-libs/linux-${ARCH}")
+   if(EXISTS "${BUILD_LIBS_DIR}/libarchive.a")
+      target_compile_definitions(vpinball PRIVATE VPX_ARCHIVE_SUPPORT LIBARCHIVE_STATIC)
+      target_link_libraries(vpinball PUBLIC "${BUILD_LIBS_DIR}/libarchive.a" "${BUILD_LIBS_DIR}/liblzma.a" z)
+   endif()
 
    target_link_libraries(vpinball PUBLIC $<IF:$<STREQUAL:${RENDERER},BGFX>,bgfx,glad>)
 
@@ -633,7 +666,14 @@ elseif(PLATFORM STREQUAL "linux")
          COMMAND cp -a "${RUNTIME_LIBS_DIR}/libhidapi-hidraw.so.*" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND cp -a "${RUNTIME_LIBS_DIR}/libwinevbs.so" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND cp -a "${RUNTIME_LIBS_DIR}/libwinevbs.so.*" "$<TARGET_FILE_DIR:vpinball>"
+         COMMAND cp -a "${RUNTIME_LIBS_DIR}/libzip.so" "$<TARGET_FILE_DIR:vpinball>"
+         COMMAND cp -a "${RUNTIME_LIBS_DIR}/libzip.so.*" "$<TARGET_FILE_DIR:vpinball>"
       )
+      if(ENABLE_XR)
+         add_custom_command(TARGET vpinball POST_BUILD
+            COMMAND cp -a "${RUNTIME_LIBS_DIR}/libopenxr_loader.so*" "$<TARGET_FILE_DIR:vpinball>"
+         )
+      endif()
       if(RENDERER STREQUAL "BGFX")
          add_custom_command(TARGET vpinball POST_BUILD
             COMMAND cp -a "${RUNTIME_LIBS_DIR}/libbgfx.so" "$<TARGET_FILE_DIR:vpinball>"

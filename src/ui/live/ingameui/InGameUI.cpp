@@ -22,9 +22,12 @@
 #include "StereoSettingsPage.h"
 #include "TableMiscPage.h"
 #include "TableOptionsPage.h"
+#include "TablePickerPage.h"
+#include "ScoresPage.h"
 #include "TableRulesPage.h"
 #include "VRSettingsPage.h"
 #include "SystemInfoPage.h"
+#include "MessagePage.h"
 #include "parts/ball.h"
 
 
@@ -53,6 +56,12 @@ InGameUI::InGameUI(LiveUI &liveUI)
    AddPage("table/rules"s, []() { return std::make_unique<TableRulesPage>(); });
    AddPage("plugins/homepage"s, []() { return std::make_unique<PluginHomePage>(); });
    AddPage("misc/systeminfo"s, []() { return std::make_unique<SystemInfoPage>(); });
+   AddPage("misc/message"s, []() { return std::make_unique<MessagePage>(); });
+#ifdef __STANDALONE__
+   AddPage("tables/picker"s, []() { return std::make_unique<TablePickerPage>(); });
+   AddPage("profiles"s, []() { return std::make_unique<ProfilesPage>(); });
+   AddPage("scores/result"s, []() { return std::make_unique<ScoreResultPage>(); });
+#endif
 }
 
 void InGameUI::AddPage(const string &path, const std::function<std::unique_ptr<InGameUIPage>()>& pageFactory)

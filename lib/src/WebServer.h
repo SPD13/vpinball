@@ -21,12 +21,18 @@ public:
    static void LogAppender(const string& formattedLog);
    static void BroadcastStatus();
    void Update();
+   void Start();
+   void Stop();
    bool IsRunning() { return m_run; }
    string GetUrl();
 
+   // When pairing is required, the API is only served to browsers that entered the code displayed by the application.
+   // This is the default for the desktop application, as the server has no other access control and listens on the local network.
+   void SetPairingRequired(bool required) { m_pairingRequired = required; }
+   bool IsPairingRequired() const { return m_pairingRequired; }
+   string GetPairingCode();
+
 private:
-   void Start();
-   void Stop();
    void SetLastUpdate();
    void Info(struct mg_connection *c, struct mg_http_message* hm);
    void Status(struct mg_connection *c, struct mg_http_message* hm);
@@ -37,13 +43,33 @@ private:
    void Delete(struct mg_connection *c, struct mg_http_message* hm);
    void Rename(struct mg_connection *c, struct mg_http_message* hm);
    void Move(struct mg_connection *c, struct mg_http_message* hm);
+   void MissingRoms(struct mg_connection *c, struct mg_http_message* hm);
    void Folder(struct mg_connection *c, struct mg_http_message* hm);
    void Extract(struct mg_connection *c, struct mg_http_message* hm);
    void Command(struct mg_connection *c, struct mg_http_message* hm);
    void LogStream(struct mg_connection *c, struct mg_http_message* hm);
+   // The table library, for the tables page: list, image, favorite, display name and deletion (desktop builds, the mobile launchers own their library)
+   void Tables(struct mg_connection *c, struct mg_http_message* hm);
+   void TableImage(struct mg_connection *c, struct mg_http_message* hm);
+   void TableFavorite(struct mg_connection *c, struct mg_http_message* hm);
+   void TableName(struct mg_connection *c, struct mg_http_message* hm);
+   void TableDelete(struct mg_connection *c, struct mg_http_message* hm);
+   // Leaderboards, for the scores page: the scores with the profiles, deletion and assignment of scores, profiles management
+   void Scores(struct mg_connection *c, struct mg_http_message* hm);
+   void ScoreDelete(struct mg_connection *c, struct mg_http_message* hm);
+   void ScoresClear(struct mg_connection *c, struct mg_http_message* hm);
+   void ScoreAssign(struct mg_connection *c, struct mg_http_message* hm);
+   void ProfileAdd(struct mg_connection *c, struct mg_http_message* hm);
+   void ProfileRename(struct mg_connection *c, struct mg_http_message* hm);
+   void ProfileDelete(struct mg_connection *c, struct mg_http_message* hm);
+   void ProfileActive(struct mg_connection *c, struct mg_http_message* hm);
 
    void AddLogEntry(const string& formattedLog);
    void BroadcastLogEntry(const string& formattedLog);
+
+   void Pair(struct mg_connection *c, struct mg_http_message* hm);
+   bool IsPaired(struct mg_http_message* hm);
+   void GeneratePairingCode();
 
    string GetIPAddress();
    bool ValidatePathParameter(struct mg_connection *c, struct mg_http_message* hm, const char* paramName, string& outValue);
@@ -54,6 +80,15 @@ private:
    std::atomic<bool> m_run;
    std::unique_ptr<std::thread> m_pThread;
    string m_url;
+#ifdef __LIBVPINBALL__
+   std::atomic<bool> m_pairingRequired = false;
+#else
+   std::atomic<bool> m_pairingRequired = true; // Read by the server thread, changed from the UI
+#endif
+   std::mutex m_pairingMutex;
+   string m_pairingCode;
+   vector<string> m_pairedTokens;
+   int m_failedPairings = 0;
    static std::mutex s_logMutex;
    static vector<unsigned long> s_logConnections;
    static vector<unsigned long> s_statusConnections;

@@ -252,6 +252,8 @@ set(VPX_SOURCES
    src/renderer/VertexBuffer.h
    src/renderer/ViewSetup.cpp
    src/renderer/ViewSetup.h
+   src/renderer/VRControllerModels.cpp
+   src/renderer/VRControllerModels.h
    src/renderer/VRDevice.cpp
    src/renderer/VRDevice.h
    src/renderer/Window.cpp
@@ -377,12 +379,18 @@ set(VPX_SOURCES
    src/ui/live/ingameui/TableMiscPage.cpp
    src/ui/live/ingameui/TableOptionsPage.h
    src/ui/live/ingameui/TableOptionsPage.cpp
+   src/ui/live/ingameui/TablePickerPage.h
+   src/ui/live/ingameui/TablePickerPage.cpp
+   src/ui/live/ingameui/ScoresPage.h
+   src/ui/live/ingameui/ScoresPage.cpp
    src/ui/live/ingameui/TableRulesPage.h
    src/ui/live/ingameui/TableRulesPage.cpp
    src/ui/live/ingameui/VRSettingsPage.h
    src/ui/live/ingameui/VRSettingsPage.cpp
    src/ui/live/ingameui/SystemInfoPage.h
    src/ui/live/ingameui/SystemInfoPage.cpp
+   src/ui/live/ingameui/MessagePage.h
+   src/ui/live/ingameui/MessagePage.cpp
 
    src/ui/win/codeview.cpp
    src/ui/win/codeview.h
@@ -774,24 +782,37 @@ set(VPX_STANDALONE_SOURCES
    standalone/vpinball_standalone_i.c
    standalone/vpinball_standalone_i.h
    standalone/vpinball_standalone_i_proxy.cpp
+
+   lib/src/TableLibrary.h
+   lib/src/TableLibrary.cpp
+   lib/src/ScoreStore.h
+   lib/src/ScoreStore.cpp
+
+   src/core/ScoreTracker.h
+   src/core/ScoreTracker.cpp
 )
 
-set(VPX_LIB_SOURCES
-   ${VPX_STANDALONE_SOURCES}
-
-   lib/src/VPinballLib.h
-   lib/src/VPinballLib.cpp
+# Web server used to manage tables from a browser
+set(VPX_WEBSERVER_SOURCES
    lib/src/WebServer.h
    lib/src/WebServer.cpp
    lib/src/ZipUtils.h
    lib/src/ZipUtils.cpp
+
+   third-party/include/mongoose/mongoose.c
+   third-party/include/mongoose/mongoose.h
+)
+
+set(VPX_LIB_SOURCES
+   ${VPX_STANDALONE_SOURCES}
+   ${VPX_WEBSERVER_SOURCES}
+
+   lib/src/VPinballLib.h
+   lib/src/VPinballLib.cpp
    lib/include/vpinball/VPinballLib_C.h
    lib/src/VPinballLib_C.cpp
    lib/src/VPXProgress.h
    lib/src/VPXProgress.cpp
-
-   third-party/include/mongoose/mongoose.c
-   third-party/include/mongoose/mongoose.h
 )
 
 set(VPX_GL_SHADERS

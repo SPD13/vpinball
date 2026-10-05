@@ -17,6 +17,11 @@
         <div id="version-info" class="version-info"></div>
       </div>
       <div class="status-container">
+        <nav id="page-nav" class="page-nav">
+          <a href="/" class="page-nav-item">Tables</a>
+          <a href="scores.html" class="page-nav-item">Scores</a>
+          <a href="vpx.html" class="page-nav-item current">Files</a>
+        </nav>
         <div class="current-table-container">
           <div class="current-table-label">Current Table:</div>
           <div id="current-table" class="current-table"></div>
@@ -68,6 +73,16 @@
                 </span>
                 Upload File
               </a>
+              <a href="#" onclick="event.preventDefault(); uploadFolder(); hideMainActionsDropdown(); return false;">
+                <span class="dropdown-icon">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                    <polyline points="15 13 12 10 9 13"></polyline>
+                    <line x1="12" y1="10" x2="12" y2="17"></line>
+                  </svg>
+                </span>
+                Upload Folder
+              </a>
               <a href="#" onclick="event.preventDefault(); refreshTables(); hideMainActionsDropdown(); return false;">
                 <span class="dropdown-icon">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -96,6 +111,26 @@
         <div class="left-actions">
           <span id="main-status" class="status-message"></span>
         </div>
+      </div>
+
+      <div id="quick-links" class="quick-links">
+        <a href="#" id="roms-folder-link" onclick="event.preventDefault(); navigateToPath(ROMS_FOLDER); return false;">
+          <span class="file-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            </svg>
+          </span>
+          PinMAME ROMs (pinmame/roms)
+        </a>
+      </div>
+
+      <div id="missing-roms" class="missing-roms" hidden>
+        <div class="missing-roms-header">
+          <span class="missing-roms-title">Missing ROMs</span>
+          <button class="btn btn-secondary" onclick="clearMissingRoms()">Clear list</button>
+        </div>
+        <div class="missing-roms-hint">Tables failed to start without these ROMs. Upload each zip file, as is, to the folder shown.</div>
+        <ul id="missing-roms-list" class="missing-roms-list"></ul>
       </div>
 
       <div id="file-list-container" class="file-list-container">
@@ -319,6 +354,11 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <div id="upload-banner" class="upload-banner" hidden>
+    <div id="upload-banner-text" class="upload-banner-text"></div>
+    <div class="upload-banner-bar"><div id="upload-banner-fill" class="upload-banner-fill"></div></div>
   </div>
 
   <script src="monaco-editor.js"></script>

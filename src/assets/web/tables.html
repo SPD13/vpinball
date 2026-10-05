@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Visual Pinball Tables</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <header class="app-header">
+      <div class="logo-container">
+        <div class="logo-title">
+          <img src="/assets/vpinball.png" alt="Visual Pinball Logo">
+          <h1>Visual Pinball Tables</h1>
+        </div>
+        <div id="version-info" class="version-info"></div>
+      </div>
+      <nav class="page-nav">
+        <a href="/" class="page-nav-item current">Tables</a>
+        <a href="scores.html" class="page-nav-item">Scores</a>
+        <a href="vpx.html" class="page-nav-item">Files</a>
+      </nav>
+    </header>
+
+    <main class="main-container tables-page">
+      <div class="tables-toolbar">
+        <div id="tables-tabs" class="tables-tabs" role="tablist"></div>
+        <div class="search-container">
+          <span class="search-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+          </span>
+          <input type="search" id="tables-search" placeholder="Search tables..." autocomplete="off">
+        </div>
+      </div>
+
+      <div class="tables-summary">
+        <span id="tables-count" class="tables-count"></span>
+        <span id="tables-status" class="status-message"></span>
+      </div>
+
+      <div class="tables-scroll">
+        <div id="tables-empty" class="tables-empty" hidden></div>
+        <ul id="tables-grid" class="tables-grid"></ul>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="name-dialog" class="tables-dialog">
+    <form id="name-form" method="dialog">
+      <h2>Display name</h2>
+      <p class="tables-dialog-hint">The name shown for this table in the table picker. Its files are not renamed.</p>
+      <input type="text" id="name-input" maxlength="128" autocomplete="off" spellcheck="false">
+      <p class="tables-dialog-hint">Name from the file: <span id="name-default"></span></p>
+      <div class="tables-dialog-actions">
+        <button type="button" id="name-reset" class="btn btn-secondary tables-dialog-left">Use file name</button>
+        <button type="button" id="name-cancel" class="btn btn-secondary">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="delete-dialog" class="tables-dialog">
+    <form id="delete-form" method="dialog">
+      <h2 id="delete-title">Delete table?</h2>
+      <p class="tables-dialog-hint">The table and all its files will be removed from the device:</p>
+      <p id="delete-path" class="tables-dialog-path"></p>
+      <p class="tables-dialog-hint">This can not be undone.</p>
+      <div class="tables-dialog-actions">
+        <button type="button" id="delete-cancel" class="btn btn-secondary">Cancel</button>
+        <button type="submit" class="btn btn-danger">Delete</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="tables.js"></script>
+</body>
+</html>

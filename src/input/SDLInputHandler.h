@@ -316,6 +316,13 @@ private:
       uint16_t deviceId = m_pininput.RegisterDevice(settingId, InputManager::DeviceType::Joystick, joyName);
       m_joystickIds[id] = deviceId;
 
+      // Steam Input exposes the VR controllers (Steam Frame) as a virtual Xbox gamepad (Valve VID, or uinput 'X-Box 360 pad'). Flag it so
+      // that no layout is proposed for it when the VR controllers are used through OpenXR.
+      const uint16_t vendor = SDL_GetJoystickVendor(joystick);
+      PLOGI << "Joystick '" << joyName << "' VID: 0x" << std::hex << vendor << " PID: 0x" << SDL_GetJoystickProduct(joystick) << std::dec;
+      if (vendor == 0x28de || sdlJoyName.find("Steam"s) != string::npos || sdlJoyName.find("X-Box 360 pad"s) != string::npos)
+         m_pininput.SetDeviceIsVRVirtualGamepad(deviceId);
+
       // Register all axis to allow selection in the UI (they will optionally be overriden if identified below)
       for (int axis = 0; axis < nAxis; axis++)
          m_pininput.RegisterElementName(deviceId, true, 0x0200 | static_cast<uint16_t>(axis), "Axis #" + std::to_string(axis));

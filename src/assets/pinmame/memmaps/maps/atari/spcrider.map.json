@@ -1,0 +1,98 @@
+{
+  "_notes": [
+    "Adjustment numbering is arbitrary.  Free Play ROM sets credits=max_credits on START."
+  ],
+  "_fileformat": 0.8,
+  "_metadata": {
+    "version": 2,
+    "copyright": [
+      "Copyright (C) 2026 by Tom Collins <tom@scorbit.io>"
+    ],
+    "license": "Open Data Commons Open Database License (ODbL) v1.0",
+    "platform": "atari-gen1",
+    "roms": [
+      "spcrider",
+      "spcridef"
+    ],
+    "free_only": [
+      "spcridef"
+    ]
+  },
+  "game_state": {
+    "scores": [
+      {
+        "label": "Player 1",
+        "start": "0x002C",
+        "encoding": "bcd",
+        "length": 3
+      },
+      {
+        "label": "Player 2",
+        "start": "0x0028",
+        "encoding": "bcd",
+        "length": 3
+      },
+      {
+        "label": "Player 3",
+        "start": "0x0024",
+        "encoding": "bcd",
+        "length": 3
+      },
+      {
+        "label": "Player 4",
+        "start": "0x0020",
+        "encoding": "bcd",
+        "length": 3
+      }
+    ],
+    "credits": {
+      "label": "Credits",
+      "_notes": "also in display memory at 0x1D (bcd)",
+      "start": "0x00B7",
+      "encoding": "bcd"
+    },
+    "max_credits": {
+      "label": "Max Credits",
+      "start": "0x00A8",
+      "encoding": "bcd"
+    },
+    "current_ball": {
+      "label": "Ball",
+      "_notes": "also in display memory at 0x1C",
+      "start": "0x00AB",
+      "encoding": "bcd"
+    },
+    "ball_count": {
+      "label": "Balls",
+      "start": "0x00A7",
+      "encoding": "bcd"
+    },
+    "current_player": {
+      "label": "Player",
+      "start": "0x00AA",
+      "encoding": "bcd"
+    },
+    "player_count": {
+      "label": "Players",
+      "start": "0x00A9",
+      "encoding": "bcd"
+    },
+    "game_over": {
+      "_notes": "true when player_count==0",
+      "label": "Game Over",
+      "start": "0x00A9",
+      "encoding": "bool",
+      "invert": true
+    }
+  },
+  "adjustments": {
+    "Adjustments": {
+      "01": {
+        "label": "Replay Level",
+        "start": "0x0082",
+        "encoding": "bcd",
+        "scale": 10000
+      }
+    }
+  }
+}

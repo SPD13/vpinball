@@ -11,6 +11,9 @@
 
 #include "core/editablereg.h"
 #include "core/VPApp.h"
+#ifdef __STANDALONE__
+#include "core/ScoreTracker.h"
+#endif
 #include "core/VPXPluginAPIImpl.h"
 #include "parts/ball.h"
 #include "parts/flasher.h"
@@ -50,6 +53,12 @@
 #include "lib/src/VPinballLib.h"
 #endif
 
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#elif defined(__linux__)
+#include <unistd.h>
+#endif
+
 // MSVC Concurrency Viewer support
 // This requires to add the MSVC Concurrency SDK to the project
 //#define MSVC_CONCURRENCY_VIEWER
@@ -78,6 +87,31 @@ using namespace VPX;
 // leave as-is as e.g. VPM relies on this
 #define WIN32_PLAYER_WND_CLASSNAME _T("VPPlayer")
 
+// Resident memory of the process in bytes (0 if unknown), logged when switching tables to spot memory that is not released by a table
+static size_t GetProcessResidentMemory()
+{
+#if defined(__APPLE__)
+   mach_task_basic_info_data_t info;
+   mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+   if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS)
+      return static_cast<size_t>(info.resident_size);
+#elif defined(__linux__)
+   if (FILE* const f = fopen("/proc/self/statm", "r"); f)
+   {
+      unsigned long size = 0, resident = 0;
+      const int n = fscanf(f, "%lu %lu", &size, &resident);
+      fclose(f);
+      if (n == 2)
+         return static_cast<size_t>(resident) * static_cast<size_t>(sysconf(_SC_PAGESIZE));
+   }
+#elif defined(_MSC_VER)
+   PROCESS_MEMORY_COUNTERS counters;
+   if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)))
+      return counters.WorkingSetSize;
+#endif
+   return 0;
+}
+
 
 Player::Player(PinTable *const table, const PlayMode playMode)
    : m_ptable(table)
@@ -92,6 +126,9 @@ Player::Player(PinTable *const table, const PlayMode playMode)
         table->m_settings.GetPlayer_SoundDeviceBG(), table->m_settings.GetPlayer_SoundDevice(), static_cast<VPX::SoundConfigTypes>(table->m_settings.GetPlayer_Sound3D())))
    , m_resURIResolver(m_pluginManager.GetMsgAPI(), m_pluginAPI.GetVPXEndPointId(), true, true, true)
 {
+   #ifdef __STANDALONE__
+   m_isLobby = g_app->m_playingLobby;
+   #endif
    // For the time being, lots of access are made through the global singleton, so ensure we are unique, and define it as soon as needed
    assert(g_pplayer == nullptr);
    g_pplayer = this;
@@ -195,6 +232,8 @@ Player::Player(PinTable *const table, const PlayMode playMode)
       const float fOverrideContactScatterAngle = table->m_settings.GetPlayer_TablePhysicsContactScatterAngle(table->m_overridePhysics - 1);
       c_hardScatter = ANGTORAD(table->m_overridePhysics ? fOverrideContactScatterAngle : table->m_defaultScatter);
    }
+   else
+      c_hardScatter = 0.f; // Default of the global, which may have been overridden by the previous table played by the application
 
    if (!IsEditorMode())
    {
@@ -237,10 +276,12 @@ Player::Player(PinTable *const table, const PlayMode playMode)
       const int vrDetectionMode = m_ptable->m_settings.GetPlayerVR_AskToTurnOn();
       if (vrDetectionMode != 2) // 2 is VR off (0 is VR on, 1 is autodetect)
       {
-         m_vrDevice = new VRDevice(m_ptable->m_settings);
+         // The device may be kept from the previous table (see VPApp::AcquireVRDevice), then its headset is already set up
+         m_vrDevice = g_app->AcquireVRDevice(m_ptable->m_settings);
          if (m_vrDevice->IsOpenXRReady())
          {
-            m_vrDevice->SetupHMD();
+            if (!m_vrDevice->IsOpenXRHMDReady())
+               m_vrDevice->SetupHMD();
             if (m_vrDevice->IsOpenXRHMDReady())
                useVR = true;
             else if (vrDetectionMode == 0) // 0 is VR on
@@ -254,9 +295,11 @@ Player::Player(PinTable *const table, const PlayMode playMode)
             ShowError("VR mode activated but OpenXR initialization failed.");
          if (!useVR)
          {
-            delete m_vrDevice;
+            g_app->ReleaseVRDevice(true);
             m_vrDevice = nullptr;
          }
+         else
+            m_vrDevice->ApplyTableSettings(m_ptable->m_settings);
       }
    #endif
 
@@ -298,7 +341,8 @@ Player::Player(PinTable *const table, const PlayMode playMode)
       }
       else
       {
-         m_playfieldWnd = new VPX::Window("Visual Pinball Player"s, settings, VPXWindowId::VPXWINDOW_Playfield);
+         // The window may be kept from the previous table (see VPApp::AcquireWindow)
+         m_playfieldWnd = g_app->AcquireWindow(VPXWindowId::VPXWINDOW_Playfield, "Visual Pinball Player"s, settings);
 
          const float pfRefreshRate = m_playfieldWnd->GetRefreshRate();
          m_maxFramerate = m_ptable->m_settings.GetPlayer_MaxFramerate();
@@ -487,6 +531,14 @@ Player::Player(PinTable *const table, const PlayMode playMode)
    wintimer_init();
    m_liveUI = new LiveUI(m_renderer->m_renderDevice);
    m_liveUI->m_ballControl.LoadSettings(m_ptable->m_settings);
+   #ifdef __STANDALONE__
+   // When tables are played one after another, a loading screen is shown until the table is ready (see RenderLoadingFrame)
+   if (g_app->m_keepDisplayBetweenTables)
+   {
+      m_liveUI->SetLoadingText(g_app->GetLoadingText(m_ptable->m_filename, m_isLobby));
+      RenderLoadingFrame(true);
+   }
+   #endif
 
    m_tblMirrorEnabled = m_ptable->m_settings.GetPlayer_Mirror();
    #ifndef __STANDALONE__
@@ -540,7 +592,7 @@ Player::Player(PinTable *const table, const PlayMode playMode)
    {
       tinyxml2::XMLDocument xmlDoc;
       tinyxml2::XMLElement *preloadCache = nullptr;
-      if ((m_ptable->m_settings.GetPlayer_CacheMode() > 0) && FileExists(m_ptable->m_filename))
+      if ((m_ptable->m_settings.GetPlayer_CacheMode() > 0) && FileExists(m_ptable->m_filename) && !m_isLobby) // The cache of a table lists all its textures, while the lobby only keeps its room
       {
          try
          {
@@ -668,11 +720,15 @@ Player::Player(PinTable *const table, const PlayMode playMode)
       while (pool.has_work_in_flight())
       {
          ProcessOSMessages();
+         // The loading threads use the texture manager under this mutex, as the in-game UI does when it renders (the textures of its fonts)
+         if (std::unique_lock lock(mutex, std::try_to_lock); lock.owns_lock())
+            RenderLoadingFrame(false);
          Sleep(0);
       }
       pool.wait_until_empty();
       pool.wait_until_nothing_in_flight();
       LockFrameMutex();
+      RenderLoadingFrame(true);
 
       // Due to multithreaded loading and pre-allocation, check if some images could not be loaded, and perform a retry since more memory is available now
       for (auto image : failedPreloads)
@@ -703,6 +759,8 @@ Player::Player(PinTable *const table, const PlayMode playMode)
          ph->RenderSetup(m_renderer.get());
    }
 
+   RenderLoadingFrame(true);
+
    if (!IsEditorMode())
    {
       PLOGI << "Starting script"; // For profiling
@@ -727,6 +785,7 @@ Player::Player(PinTable *const table, const PlayMode playMode)
              editable->GetEventProxyBase()->FireVoidEvent(DISPID_AnimateEvents_Animate);
       }
       m_ptable->FireOptionEvent(PinTable::OptionEventType::Initialized);
+      RenderLoadingFrame(true);
 
 #ifndef __STANDALONE__
       if (m_detectScriptHang && g_pvp)
@@ -768,6 +827,21 @@ Player::Player(PinTable *const table, const PlayMode playMode)
    // Signal plugins before performing static prerendering. The only thing not fully initialized is the physics (is this ok ?)
    m_pluginAPI.OnGameStart();
 
+#ifdef __STANDALONE__
+   // Scores are recorded for the tables of the library (leaderboards), not for the lobby. The result of a previous table that was not
+   // shown (tables played one after the other without going back to the lobby) is dropped.
+   if (!m_isLobby)
+      g_app->m_lastSessionResult.reset();
+   if (playMode == PlayMode::Play && !m_isLobby)
+   {
+      if (const std::optional<VPinballLib::Table> libraryTable = g_app->GetTableLibrary().FindTable(m_ptable->m_filename))
+      {
+         m_scoreTracker = std::make_unique<ScoreTracker>(this, *libraryTable);
+         m_scoreTracker->Start();
+      }
+   }
+#endif
+
    // Open UI if requested (this also disables static prerendering, so must be done before performing it)
    if (playMode == PlayMode::EditPOV)
       m_liveUI->OpenInGameUI("settings/pov"s);
@@ -783,6 +857,7 @@ Player::Player(PinTable *const table, const PlayMode playMode)
    }
 
    m_progressDialog.SetProgress("Starting..."s, 100);
+   m_liveUI->SetLoadingText({}); // The table is ready to be rendered
 
    if (m_renderer->IsUsingStaticPrepass())
    {
@@ -816,6 +891,13 @@ Player::Player(PinTable *const table, const PlayMode playMode)
    m_physics->StartPhysics();
 
    PLOGI << "Startup done"; // For profiling
+   if (g_app->m_lastTableCloseTime != 0)
+   {
+      const size_t rss = GetProcessResidentMemory();
+      const uint64_t now = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+      PLOGI << "Table switch: " << ((now - g_app->m_lastTableCloseTime) / 1000) << "ms from closing the previous table"
+            << (rss ? std::format(", process memory: {} MB", rss / (1024 * 1024)) : ""s);
+   }
 
 #ifdef __LIBVPINBALL__
    VPinballLib::VPinballLib::SendEvent(VPINBALL_EVENT_PLAYER_STARTED, nullptr);
@@ -849,6 +931,13 @@ Player::~Player()
    const bool appExitRequested = (m_closing == CS_CLOSE_APP);
    m_closing = CS_CLOSED;
    PLOGI << "Closing player...";
+   g_app->m_lastTableCloseTime = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+
+#ifdef __STANDALONE__
+   // Last look at the scores while PinMAME and the script still run
+   if (m_scoreTracker)
+      m_scoreTracker->Finish();
+#endif
 
    // Signal plugins early since most fields will become invalid
    m_pluginAPI.OnGameEnd();
@@ -860,6 +949,17 @@ Player::~Player()
       if (m_detectScriptHang && g_pvp)
          g_pvp->PostWorkToWorkerThread(HANG_SNOOP_STOP, NULL);
    }
+
+#ifdef __STANDALONE__
+   // High scores saved by the Exit event of the script, then the scores of the session for the lobby
+   if (m_scoreTracker)
+   {
+      m_scoreTracker->LateFinish();
+      if (!m_scoreTracker->GetRecordedScoreIds().empty())
+         g_app->m_lastSessionResult = VPApp::SessionResult { m_scoreTracker->GetTableUuid(), m_scoreTracker->GetRecordedScoreIds() };
+      m_scoreTracker = nullptr;
+   }
+#endif
 
    delete m_liveUI;
    m_liveUI = nullptr;
@@ -888,8 +988,8 @@ Player::~Player()
    // Save modified settings if any
    m_ptable->m_settings.Save();
 
-   // Save list of used textures to avoid stuttering in next play
-   if ((m_ptable->m_settings.GetPlayer_CacheMode() > 0) && FileExists(m_ptable->m_filename))
+   // Save list of used textures to avoid stuttering in next play (not for the lobby, which may be loaded from a table and only keep its room)
+   if ((m_ptable->m_settings.GetPlayer_CacheMode() > 0) && FileExists(m_ptable->m_filename) && !m_isLobby)
    {
       try
       {
@@ -1066,10 +1166,17 @@ Player::~Player()
    #endif
    m_renderer = nullptr;
    LockForegroundWindow(false);
-   delete m_playfieldWnd;
+   // Destroyed, or kept for the next table (see VPApp::m_keepDisplayBetweenTables)
+   if (m_vrDevice)
+      delete m_playfieldWnd; // VR output, not an OS window
+   else if (m_playfieldWnd)
+      g_app->ReleaseWindow(m_playfieldWnd);
    m_playfieldWnd = nullptr;
 
-   delete m_vrDevice;
+   #ifdef ENABLE_XR
+   if (m_vrDevice)
+      g_app->ReleaseVRDevice(false);
+   #endif
    m_vrDevice = nullptr;
 
    SDL_QuitSubSystem(SDL_INIT_VIDEO); // Balances the init done in the constructor
@@ -1841,6 +1948,8 @@ void Player::UpdateGameLogic()
 
    m_pluginManager.ProcessAsyncCallbacks();
 
+   m_liveUI->ShowPendingMessage();
+
    #ifdef MSVC_CONCURRENCY_VIEWER
    delete tagSpan;
    #endif
@@ -1877,12 +1986,185 @@ void Player::GameLoop()
    #endif
 }
 
+#if defined(__STANDALONE__) && !defined(__LIBVPINBALL__)
+#include "lib/src/TableLibrary.h"
+
+// Tables of the table library which have no image get a screenshot of the playfield when closed (the mobile launchers do the same)
+void Player::CaptureTableImageBeforeClosing()
+{
+   if (m_tableImageCaptureStarted)
+   {
+      if (m_tableImageCaptureDone)
+         CloseAfterLoadingScreen();
+      return;
+   }
+
+   std::filesystem::path imagePath = m_ptable->m_filename;
+   imagePath.replace_extension(".jpg");
+   std::filesystem::path pngPath = m_ptable->m_filename;
+   pngPath.replace_extension(".png");
+   if (!CanReplaceTableImage() || FileExists(imagePath) || FileExists(pngPath))
+   {
+      m_tableImageCaptureStarted = true;
+      m_tableImageCaptureDone = true;
+      CloseAfterLoadingScreen();
+      return;
+   }
+
+   // The in-game menu slides out when closed: wait for it to be gone, so that it is not captured
+   if (!m_tableImageMenuHidden)
+   {
+      m_liveUI->HideUI();
+      m_tableImageMenuHidden = true;
+   }
+   if (!IsInGameUIClosed())
+      return;
+
+   m_tableImageCaptureStarted = true;
+   CaptureTableImage(imagePath,
+      [this, imagePath](bool success)
+      {
+         if (success)
+            PLOGI << "Table image saved: " << imagePath;
+         else
+            PLOGE << "Failed to save table image: " << imagePath;
+         m_tableImageCaptureDone = true;
+      });
+}
+
+// When another table or the lobby follows, its loading screen is shown before closing (after the image capture, which must not show it): it is then what
+// the display shows while this table closes and the next one starts loading
+void Player::CloseAfterLoadingScreen()
+{
+   if (m_closingLoadingFrame == 0)
+   {
+      if (const string text = g_app->GetNextLoadingText(m_isLobby); !text.empty())
+      {
+         m_liveUI->SetLoadingText(text);
+         #ifdef ENABLE_XR
+         if (m_vrDevice)
+            m_vrDevice->RecenterUIPanel(); // In front of the player, who may have turned since the menu was opened
+         #endif
+         m_closingLoadingFrame = m_overall_frames + 1;
+         m_closingLoadingTime = std::chrono::steady_clock::now();
+         return;
+      }
+   }
+   // Frames are prepared ahead of their display: a few more let the first one with the loading screen be displayed (a time limit in case no frame
+   // is requested, for example in VR while the headset is not worn)
+   else if (m_overall_frames < m_closingLoadingFrame + 3 && std::chrono::steady_clock::now() - m_closingLoadingTime < std::chrono::milliseconds(500))
+      return;
+   SetCloseState(CS_CLOSE_APP);
+}
+
+bool Player::IsInGameUIClosed() const
+{
+   const VPX::InGameUI::InGameUIPage* const page = m_liveUI->m_inGameUI.GetActivePage();
+   return page == nullptr || page->IsClosed();
+}
+
+#ifdef ENABLE_XR
+// The parts showing the backglass of a table, as visible now: named after it (like 'VR_Backbox_Backglass'), or primitives showing an image named after
+// it. Their bounding vertices, each with the space reference of its part, to frame the backglass images on them.
+static vector<std::pair<int, vec3>> GetBackglassBounds(PinTable* table)
+{
+   vector<std::pair<int, vec3>> result;
+   vector<Vertex3Ds> bounds;
+   for (IEditable* part : table->GetParts())
+   {
+      if (part->m_desktopBackdrop) // Not in the 3D scene
+         continue;
+      const Primitive* const prim = part->GetItemType() == ItemTypeEnum::eItemPrimitive ? static_cast<const Primitive*>(part) : nullptr;
+      if (lowerCase(part->GetName()).find("backglass") == string::npos && (prim == nullptr || lowerCase(prim->m_d.m_szImage).find("backglass") == string::npos))
+         continue;
+      bounds.clear();
+      part->GetBoundingVertices(bounds, nullptr); // Nothing for hidden parts
+      const int space = static_cast<int>(part->GetPartGroup() ? part->GetPartGroup()->GetReferenceSpace() : PartGroupData::SpaceReference::SR_PLAYFIELD);
+      for (const Vertex3Ds& v : bounds)
+         result.emplace_back(space, vec3(v.x, v.y, v.z));
+   }
+   return result;
+}
+#endif
+
+// In VR, the view follows the head of the player, which may not face the table: the image is then framed on the table as the settings choose
+// (its backglass by default, its playfield seen from above, or its whole cabinet)
+void Player::CaptureTableImage(const std::filesystem::path& imagePath, const std::function<void(bool)>& onCaptured)
+{
+   #ifdef ENABLE_XR
+   if (m_vrDevice)
+   {
+      constexpr VRDevice::TableCaptureView views[] = { VRDevice::TableCaptureView::Backglass, VRDevice::TableCaptureView::Table, VRDevice::TableCaptureView::Cabinet };
+      const VRDevice::TableCaptureView view = views[clamp(g_app->m_settings.GetStandalone_TableImageFocus(), 0, 2)];
+      m_vrDevice->SetTableCaptureView(view, view == VRDevice::TableCaptureView::Backglass ? GetBackglassBounds(m_ptable) : vector<std::pair<int, vec3>>());
+   }
+   #endif
+   m_renderer->m_renderDevice->CaptureScreenshot({ m_playfieldWnd }, { imagePath },
+      [this, onCaptured](bool success)
+      {
+         #ifdef ENABLE_XR
+         if (m_vrDevice)
+            m_vrDevice->SetTableCaptureView(VRDevice::TableCaptureView::None);
+         #endif
+         onCaptured(success);
+      },
+      3); // The views are moved from the next frame on
+}
+
+bool Player::CanReplaceTableImage() const
+{
+   // Only the tables of the table library have an image (not the lobby, even when loaded from a table of the library, nor tables played from elsewhere)
+   if (m_isLobby)
+      return false;
+   const std::filesystem::path relativePath = m_ptable->m_filename.lexically_normal().lexically_relative(g_app->GetTableLibrary().GetTablesPath().lexically_normal());
+   return !relativePath.empty() && *relativePath.begin() != "..";
+}
+
+void Player::ReplaceTableImage()
+{
+   if (!CanReplaceTableImage())
+      return;
+   // The table picker uses <table>.png first, then <table>.jpg: replace the one in use (the picker notices the new modification date)
+   std::filesystem::path imagePath = m_ptable->m_filename;
+   imagePath.replace_extension(".png");
+   if (!FileExists(imagePath))
+      imagePath.replace_extension(".jpg");
+   m_liveUI->HideUI();
+   m_tableImageReplacePath = imagePath; // Captured by the game loop once the in-game menu is gone
+}
+
+void Player::UpdateTableImageReplacement()
+{
+   if (!m_tableImageReplacePath.empty() && IsInGameUIClosed())
+   {
+      const std::filesystem::path imagePath = std::exchange(m_tableImageReplacePath, std::filesystem::path());
+      CaptureTableImage(imagePath,
+         [this, imagePath](bool success)
+         {
+            if (success)
+               PLOGI << "Table image replaced: " << imagePath;
+            else
+               PLOGE << "Failed to replace table image: " << imagePath;
+            m_tableImageReplaced = success ? 1 : 2; // Called on the render thread: the notification is pushed by the game loop
+         });
+   }
+   if (const int replaced = m_tableImageReplaced.exchange(0); replaced != 0)
+      m_liveUI->PushNotification(replaced == 1 ? "Table image replaced"s : "Failed to replace the table image"s, 3000);
+}
+#endif
+
 #ifdef ENABLE_BGFX
 bool Player::CallbackSteppedGameLoop()
 {
    // Discard step if the player is not in one of the running states
    if (GetCloseState() != CS_PLAYING && GetCloseState() != CS_USER_INPUT && GetCloseState() != CS_CLOSE_CAPTURE_SCREENSHOT)
       return false;
+
+   #if defined(__STANDALONE__) && !defined(__LIBVPINBALL__)
+   if (GetCloseState() == CS_CLOSE_CAPTURE_SCREENSHOT)
+      CaptureTableImageBeforeClosing();
+   UpdateTableImageReplacement();
+   #endif
 
    // Continuously process input, synchronize with emulation and step physics to keep latency low
    UpdateGameLogic();
@@ -2101,6 +2383,11 @@ void Player::PrepareFrame()
    m_logicProfiler.NewFrame(m_time_msec);
    m_logicProfiler.EnterProfileSection(FrameProfiler::PROFILE_PREPARE_FRAME);
 
+#ifdef __STANDALONE__
+   if (m_scoreTracker)
+      m_scoreTracker->Update();
+#endif
+
    m_overall_frames++; // This causes the next VPinMAME <-> VPX sync to update light status which can be heavy since it needs to perform PWM integration of all lights
    m_lastKnownGoodCounter++;
    m_startFrameTick = usec();
@@ -2175,6 +2462,45 @@ void Player::SubmitFrame()
          delete tagSpan;
       #endif
    #endif
+}
+
+void Player::RenderLoadingFrame(bool ownsFrameMutex)
+{
+#ifdef ENABLE_BGFX
+   RenderDevice* const rd = m_renderer->m_renderDevice;
+   // Not before the render thread asks for a frame: in VR, it only does when the headset requests one, which needs the session to be running
+   if (m_liveUI == nullptr || !m_liveUI->IsLoadingScreenShown() || rd->m_framePending)
+      return;
+   // At the display pace at most (for the spinner), not to take time from the loading
+   const auto now = std::chrono::steady_clock::now();
+   if (now - m_lastLoadingFrameTime < std::chrono::milliseconds(15))
+      return;
+   if (!ownsFrameMutex)
+   {
+      if (!rd->m_frameMutex.try_lock())
+         return;
+      if (rd->m_framePending) // Another thread submitted a frame (texture upload) since the check above
+      {
+         rd->m_frameMutex.unlock();
+         return;
+      }
+   }
+   m_lastLoadingFrameTime = now;
+   m_renderer->RenderLoadingFrame();
+   SubmitFrame(); // Gives the frame mutex to the render thread
+   if (ownsFrameMutex)
+   {
+      // Take it back once the render thread has submitted the frame (it then accepts the next one), without waiting more than a few frames, for example if
+      // the VR session stops (the render thread then holds the frame mutex until the frame is submitted)
+      while (rd->m_framePending && std::chrono::steady_clock::now() - now < std::chrono::milliseconds(100))
+      {
+         ProcessOSMessages();
+         Sleep(0);
+      }
+      while (!rd->m_frameMutex.try_lock())
+         Sleep(0);
+   }
+#endif
 }
 
 void Player::FinishFrame()

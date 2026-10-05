@@ -158,6 +158,8 @@ vec3 compute_refraction(const vec3 pos, const vec3 screenCoord, const vec3 N, co
    #else
    vec2 uv = vec2(0.5, 0.5) + vec2(proj.x, -proj.y) * (0.5 / proj.w);
    #endif
+   // Dynamic resolution: the probe holds the rendered part of the frame (w_h_height.z is the render scale, see RenderDevice::BeginScaledRendering)
+   uv *= w_h_height.z;
 
    // Check if the sample position is behind the object pos. If not, don't perform refraction as it would lead to refract things above us (so reflect)
    const float d = texStereo(tex_probe_depth, uv).x;

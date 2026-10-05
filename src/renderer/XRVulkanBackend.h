@@ -7,6 +7,8 @@
 #ifdef XR_USE_GRAPHICS_API_VULKAN
 
 #include <vulkan/vulkan.h>
+#include <algorithm>
+#include <cstring>
 
 #ifdef XR_USE_PLATFORM_ANDROID
 #include <vulkan/vulkan_android.h>
@@ -23,6 +25,7 @@ public:
       return lib;
    }
 
+   PFN_vkEnumerateInstanceExtensionProperties _vkEnumerateInstanceExtensionProperties = nullptr;
    PFN_vkCreateInstance _vkCreateInstance;
    PFN_vkDestroyInstance _vkDestroyInstance;
    PFN_vkGetPhysicalDeviceFeatures _vkGetPhysicalDeviceFeatures;
@@ -42,7 +45,7 @@ private:
    }
    LibVulkan()
    {
-#if BX_PLATFORM_WINDOWS
+#if BX_PLATFORM_WINDOWS || BX_PLATFORM_LINUX
       m_vulkan1Dll = bx::dlopen(
 #if BX_PLATFORM_WINDOWS
          "vulkan-1.dll"
@@ -56,6 +59,7 @@ private:
       );
       if (m_vulkan1Dll == nullptr)
          return;
+      _vkEnumerateInstanceExtensionProperties = (PFN_vkEnumerateInstanceExtensionProperties)bx::dlsym(m_vulkan1Dll, "vkEnumerateInstanceExtensionProperties");
       _vkCreateInstance = (PFN_vkCreateInstance)bx::dlsym(m_vulkan1Dll, "vkCreateInstance");
       _vkDestroyInstance = (PFN_vkDestroyInstance)bx::dlsym(m_vulkan1Dll, "vkDestroyInstance");
       _vkGetPhysicalDeviceFeatures = (PFN_vkGetPhysicalDeviceFeatures)bx::dlsym(m_vulkan1Dll, "vkGetPhysicalDeviceFeatures");
@@ -66,6 +70,7 @@ private:
       _vkGetDeviceQueue = (PFN_vkGetDeviceQueue)bx::dlsym(m_vulkan1Dll, "vkGetDeviceQueue");
       _vkDeviceWaitIdle = (PFN_vkDeviceWaitIdle)bx::dlsym(m_vulkan1Dll, "vkDeviceWaitIdle");
 #else
+      _vkEnumerateInstanceExtensionProperties = &vkEnumerateInstanceExtensionProperties;
       _vkCreateInstance = &vkCreateInstance;
       _vkDestroyInstance = &vkDestroyInstance;
       _vkGetPhysicalDeviceFeatures = &vkGetPhysicalDeviceFeatures;
@@ -105,9 +110,10 @@ public:
 #if BX_PLATFORM_ANDROID
          instanceExtensions.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
 #elif BX_PLATFORM_LINUX
-         instanceExtensions.push_back(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
-         instanceExtensions.push_back(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
-         instanceExtensions.push_back(VK_KHR_XCB_SURFACE_EXTENSION_NAME);
+         // Names instead of the header macros, which need the window system headers
+         instanceExtensions.push_back("VK_KHR_wayland_surface");
+         instanceExtensions.push_back("VK_KHR_xlib_surface");
+         instanceExtensions.push_back("VK_KHR_xcb_surface");
 #elif BX_PLATFORM_WINDOWS
          instanceExtensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
 #elif BX_PLATFORM_OSX
@@ -115,6 +121,16 @@ public:
 #elif BX_PLATFORM_NX
          instanceExtensions.push_back(VK_NN_VI_SURFACE_EXTENSION_NAME);
 #endif
+      }
+      // Requesting an extension that the driver does not expose fails the instance creation (the debug extensions are missing from some mobile drivers)
+      if (m_vulkan._vkEnumerateInstanceExtensionProperties)
+      {
+         uint32_t availableCount = 0;
+         m_vulkan._vkEnumerateInstanceExtensionProperties(nullptr, &availableCount, nullptr);
+         std::vector<VkExtensionProperties> available(availableCount);
+         m_vulkan._vkEnumerateInstanceExtensionProperties(nullptr, &availableCount, available.data());
+         std::erase_if(instanceExtensions, [&](const char* ext)
+            { return std::none_of(available.begin(), available.end(), [ext](const VkExtensionProperties& props) { return strcmp(props.extensionName, ext) == 0; }); });
       }
       PLOGI << "Requested Vulkan instance extensions: ";
       for (auto ext : instanceExtensions)
@@ -224,11 +240,98 @@ public:
       deviceExtensions.push_back(VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME);
       //deviceExtensions.push_back(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
       //deviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME); // For preview swapchain
+
+      // Foveated rendering: fragment density maps (and one map layer per eye on a layered frame buffer) when the driver has them and bgfx can attach them
+      VkPhysicalDeviceFragmentDensityMapFeaturesEXT fdmFeatures { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT };
+      VkPhysicalDeviceFragmentDensityMapLayeredFeaturesVALVE fdmLayeredFeatures { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_LAYERED_FEATURES_VALVE };
+      VkPhysicalDeviceFragmentDensityMapOffsetFeaturesEXT fdmOffsetFeatures { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_OFFSET_FEATURES_EXT };
+      VkPhysicalDeviceFragmentShadingRateFeaturesKHR fsrFeatures { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR };
+      void* deviceInfoNext = nullptr;
+      #ifdef BGFX_TEXTURE_FRAGMENT_DENSITY_MAP
+      {
+         const PFN_vkEnumerateDeviceExtensionProperties enumerateDeviceExtensions
+            = (PFN_vkEnumerateDeviceExtensionProperties)m_vulkan._vkGetInstanceProcAddr(m_instance, "vkEnumerateDeviceExtensionProperties");
+         uint32_t count = 0;
+         if (enumerateDeviceExtensions && enumerateDeviceExtensions(m_physicalDevice, nullptr, &count, nullptr) == VK_SUCCESS && count > 0)
+         {
+            std::vector<VkExtensionProperties> available(count);
+            enumerateDeviceExtensions(m_physicalDevice, nullptr, &count, available.data());
+            const auto has = [&](const char* name) { return std::any_of(available.begin(), available.end(), [name](const VkExtensionProperties& p) { return strcmp(p.extensionName, name) == 0; }); };
+            const auto enable = [&](const char* name)
+            {
+               if (std::none_of(deviceExtensions.begin(), deviceExtensions.end(), [name](const char* e) { return strcmp(e, name) == 0; }))
+                  deviceExtensions.push_back(name);
+            };
+            #ifdef BGFX_TEXTURE_FRAGMENT_SHADING_RATE
+            // Fragment shading rate attachments: the other way to foveate, which Turnip applies in its direct render path too (density maps
+            // force the tiled one). Needs the pipeline rate feature for the combiner that lets the attachment's rate win.
+            if (has(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME) && has(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME))
+            {
+               const PFN_vkGetPhysicalDeviceFeatures2 getFeatures2 = (PFN_vkGetPhysicalDeviceFeatures2)m_vulkan._vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceFeatures2");
+               const PFN_vkGetPhysicalDeviceProperties2 getProperties2 = (PFN_vkGetPhysicalDeviceProperties2)m_vulkan._vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceProperties2");
+               if (getFeatures2 && getProperties2)
+               {
+                  VkPhysicalDeviceFragmentShadingRateFeaturesKHR fsrAvailable { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR };
+                  VkPhysicalDeviceFeatures2 features2 { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &fsrAvailable };
+                  getFeatures2(m_physicalDevice, &features2);
+                  VkPhysicalDeviceFragmentShadingRatePropertiesKHR fsrProperties { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR };
+                  VkPhysicalDeviceProperties2 properties2 { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &fsrProperties };
+                  getProperties2(m_physicalDevice, &properties2);
+                  if (fsrAvailable.pipelineFragmentShadingRate && fsrAvailable.attachmentFragmentShadingRate && fsrProperties.minFragmentShadingRateAttachmentTexelSize.width > 0)
+                  {
+                     m_fsrSupported = true;
+                     m_fsrTexelSize = fsrProperties.minFragmentShadingRateAttachmentTexelSize.width;
+                     m_fsrMaxFragmentSize = fsrProperties.maxFragmentSize.width;
+                     enable(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+                     enable(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
+                     fsrFeatures.pipelineFragmentShadingRate = VK_TRUE;
+                     fsrFeatures.attachmentFragmentShadingRate = VK_TRUE;
+                     fsrFeatures.primitiveFragmentShadingRate = fsrAvailable.primitiveFragmentShadingRate;
+                     fsrFeatures.pNext = deviceInfoNext;
+                     deviceInfoNext = &fsrFeatures;
+                  }
+               }
+            }
+            PLOGI << "Fragment shading rate attachments: " << (m_fsrSupported ? "supported, texel " + std::to_string(m_fsrTexelSize) + ", fragments up to " + std::to_string(m_fsrMaxFragmentSize) + 'x' + std::to_string(m_fsrMaxFragmentSize) : "not supported by the driver");
+            #endif
+            if (has(VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME))
+            {
+               m_fdmSupported = true;
+               enable(VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME);
+               fdmFeatures.fragmentDensityMap = VK_TRUE;
+               fdmFeatures.pNext = deviceInfoNext;
+               deviceInfoNext = &fdmFeatures;
+               if (has(VK_VALVE_FRAGMENT_DENSITY_MAP_LAYERED_EXTENSION_NAME))
+               {
+                  m_fdmLayeredSupported = true;
+                  enable(VK_VALVE_FRAGMENT_DENSITY_MAP_LAYERED_EXTENSION_NAME);
+                  fdmLayeredFeatures.fragmentDensityMapLayered = VK_TRUE;
+                  fdmLayeredFeatures.pNext = deviceInfoNext;
+                  deviceInfoNext = &fdmLayeredFeatures;
+               }
+               // Offsets move the map's high density area to where the eyes look, at the end of each render pass (vkCmdEndRenderPass2)
+               if (has(VK_EXT_FRAGMENT_DENSITY_MAP_OFFSET_EXTENSION_NAME) && has(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME))
+               {
+                  m_fdmOffsetSupported = true;
+                  enable(VK_EXT_FRAGMENT_DENSITY_MAP_OFFSET_EXTENSION_NAME);
+                  enable(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
+                  fdmOffsetFeatures.fragmentDensityMapOffset = VK_TRUE;
+                  fdmOffsetFeatures.pNext = deviceInfoNext;
+                  deviceInfoNext = &fdmOffsetFeatures;
+               }
+            }
+         }
+         PLOGI << "Fragment density maps: " << (m_fdmSupported ? "supported" : "not supported by the driver") << (m_fdmLayeredSupported ? ", one layer per eye" : "")
+               << (m_fdmOffsetSupported ? ", with offsets" : "");
+      }
+      #endif
+
       PLOGI << "Requested device extensions: ";
       for (auto ext : deviceExtensions)
          PLOGI << "\t" << ext;
 
       VkDeviceCreateInfo deviceInfo { VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
+      deviceInfo.pNext = deviceInfoNext;
       deviceInfo.queueCreateInfoCount = 1;
       deviceInfo.pQueueCreateInfos = &dcqi;
       deviceInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
@@ -315,6 +418,14 @@ public:
    XrSwapchainImageBaseHeader* AllocateSwapchainImageData(XrSwapchain swapchain, VRDevice::SwapchainType type, uint32_t count) override
    {
       m_swapchainImages[swapchain].resize(count, { XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR });
+      if (m_requestFoveationImages && type == VRDevice::SwapchainType::COLOR)
+      {
+         // The runtime fills in its fragment density map for each image (XR_FB_foveation_vulkan)
+         auto& foveationImages = m_swapchainFoveationImages[swapchain];
+         foveationImages.resize(count, { XR_TYPE_SWAPCHAIN_IMAGE_FOVEATION_VULKAN_FB });
+         for (uint32_t i = 0; i < count; i++)
+            m_swapchainImages[swapchain][i].next = &foveationImages[i];
+      }
       return reinterpret_cast<XrSwapchainImageBaseHeader*>(m_swapchainImages[swapchain].data());
    }
 
@@ -322,6 +433,48 @@ public:
    {
       m_swapchainImages[swapchain].clear();
       m_swapchainImages.erase(swapchain);
+      m_swapchainFoveationImages.erase(swapchain);
+   }
+
+   void RequestFoveationImages(bool request) override { m_requestFoveationImages = request && m_fdmSupported; }
+   bool IsFragmentDensityMapSupported() const override { return m_fdmSupported; }
+   bool IsFragmentDensityMapOffsetSupported() const override { return m_fdmOffsetSupported; }
+   bool IsFragmentShadingRateSupported() const override { return m_fsrSupported; }
+   uint32_t GetFragmentShadingRateTexelSize() const override { return m_fsrTexelSize; }
+   uint32_t GetFragmentShadingRateMaxFragmentSize() const override { return m_fsrMaxFragmentSize; }
+
+   // Wrap the runtime's density map images as textures (external images: bgfx neither allocates nor transitions them), so the scene render target can attach them
+   bool CreateFoveationTextures(VRDevice::SwapchainInfo& swapchain) override
+   {
+      #ifdef BGFX_TEXTURE_FRAGMENT_DENSITY_MAP
+      const auto it = m_swapchainFoveationImages.find(swapchain.swapchain);
+      if (!m_fdmSupported || it == m_swapchainFoveationImages.end())
+         return false;
+      swapchain.foveationTextures.clear();
+      std::map<VkImage, bgfx::TextureHandle> created; // The runtime may hand the same map for several images
+      for (const XrSwapchainImageFoveationVulkanFB& foveation : it->second)
+      {
+         bgfx::TextureHandle handle = BGFX_INVALID_HANDLE;
+         if (foveation.image != VK_NULL_HANDLE && foveation.width > 0 && foveation.height > 0)
+         {
+            const auto known = created.find(foveation.image);
+            if (known != created.end())
+               handle = known->second;
+            else
+            {
+               handle = bgfx::createTexture2D(static_cast<uint16_t>(foveation.width), static_cast<uint16_t>(foveation.height), false, static_cast<uint16_t>(swapchain.arraySize),
+                  bgfx::TextureFormat::RG8, BGFX_TEXTURE_FRAGMENT_DENSITY_MAP, nullptr, reinterpret_cast<uintptr_t>(foveation.image));
+               created[foveation.image] = handle;
+               swapchain.foveationWidth = foveation.width;
+               swapchain.foveationHeight = foveation.height;
+            }
+         }
+         swapchain.foveationTextures.push_back(handle);
+      }
+      return !created.empty();
+      #else
+      return false;
+      #endif
    }
 
    void* GetSwapchainImage(XrSwapchain swapchain, uint32_t index) override { return (void*)(uintptr_t)m_swapchainImages[swapchain][index].image; }
@@ -340,6 +493,14 @@ private:
    uint32_t m_queueFamilyIndex = 0;
    XrGraphicsBindingVulkanKHR m_graphicsBinding {};
    std::map<XrSwapchain, std::vector<XrSwapchainImageVulkanKHR>> m_swapchainImages;
+   std::map<XrSwapchain, std::vector<XrSwapchainImageFoveationVulkanFB>> m_swapchainFoveationImages;
+   bool m_fdmSupported = false;
+   bool m_fdmLayeredSupported = false;
+   bool m_fdmOffsetSupported = false;
+   bool m_fsrSupported = false;
+   uint32_t m_fsrTexelSize = 0;
+   uint32_t m_fsrMaxFragmentSize = 1;
+   bool m_requestFoveationImages = false;
 };
 
 #endif

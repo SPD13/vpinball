@@ -1,0 +1,685 @@
+diff -ru a/bgfx/include/bgfx/bgfx.h b/bgfx/include/bgfx/bgfx.h
+--- a/bgfx/include/bgfx/bgfx.h
++++ b/bgfx/include/bgfx/bgfx.h
+@@ -4184,6 +4184,16 @@
+ 		, ShadingRate::Enum _shadingRate = ShadingRate::Rate1x1
+ 		);
+ 
++	/// Set, for the current frame, the offsets applied to the fragment density map of a frame buffer created with a
++	/// `BGFX_RESOLVE_FRAGMENT_DENSITY_MAP` attachment (VK_EXT_fragment_density_map_offset): one (x, y) pair in pixels per layer,
++	/// rounded to the device granularity. Must be set every frame; ignored when offsets are not supported.
++	///
++	/// @param[in] _handle Frame buffer handle.
++	/// @param[in] _offsetsXY Pairs of x, y offsets, one pair per layer.
++	/// @param[in] _numLayers Number of pairs.
++	///
++	void setFragmentDensityMapOffsets(FrameBufferHandle _handle, const int32_t* _offsetsXY, uint8_t _numLayers);
++
+ 	/// Reset all view settings to default.
+ 	///
+ 	/// @param[in] _id _id View id.
+diff -ru a/bgfx/include/bgfx/defines.h b/bgfx/include/bgfx/defines.h
+--- a/bgfx/include/bgfx/defines.h
++++ b/bgfx/include/bgfx/defines.h
+@@ -293,6 +293,7 @@
+ #define BGFX_TEXTURE_BLIT_DST                     UINT64_C(0x0000400000000000) //!< Texture will be used as blit destination.
+ #define BGFX_TEXTURE_READ_BACK                    UINT64_C(0x0000800000000000) //!< Texture will be used for read back from GPU.
+ #define BGFX_TEXTURE_EXTERNAL_SHARED              UINT64_C(0x0001000000000000) //!< Texture is shared with other device or other process.
++#define BGFX_TEXTURE_FRAGMENT_DENSITY_MAP         UINT64_C(0x0002000000000000) //!< Texture is a fragment density map provided by an external image, used through `BGFX_RESOLVE_FRAGMENT_DENSITY_MAP`.
+ 
+ /**
+  * Do not use! Top nibble is reserved for internal texture flags (see bgfx_p.h).
+@@ -469,6 +470,7 @@
+ #define BGFX_CAPS_VIDEO_DECODE                    UINT64_C(0x0000000200000000) //!< Hardware video decode is supported.
+ #define BGFX_CAPS_VIEWPORT_LAYER_ARRAY            UINT64_C(0x0000000400000000) //!< Viewport layer is available in vertex shader.
+ #define BGFX_CAPS_WAITABLE_SWAPCHAIN              UINT64_C(0x0000000800000000) //!< Swapchain support waiting for an empty slot.
++#define BGFX_CAPS_FRAGMENT_DENSITY_MAP            UINT64_C(0x0000001000000000) //!< Fragment density map attachments (VK_EXT_fragment_density_map) are supported.
+ /// All texture compare modes are supported.
+ #define BGFX_CAPS_TEXTURE_COMPARE_ALL (0 \
+ 	| BGFX_CAPS_TEXTURE_COMPARE_RESERVED \
+@@ -544,6 +546,7 @@
+ 
+ #define BGFX_RESOLVE_NONE                         UINT8_C(0x00) //!< No resolve flags.
+ #define BGFX_RESOLVE_AUTO_GEN_MIPS                UINT8_C(0x01) //!< Auto-generate mip maps on resolve.
++#define BGFX_RESOLVE_FRAGMENT_DENSITY_MAP         UINT8_C(0x02) //!< Attachment is the frame buffer's fragment density map, not a color target (Vulkan, `BGFX_CAPS_FRAGMENT_DENSITY_MAP`).
+ 
+ #define BGFX_PCI_ID_NONE                          UINT16_C(0x0000) //!< Autoselect adapter.
+ #define BGFX_PCI_ID_SOFTWARE_RASTERIZER           UINT16_C(0x0001) //!< Software rasterizer.
+diff -ru a/bgfx/src/bgfx.cpp b/bgfx/src/bgfx.cpp
+--- a/bgfx/src/bgfx.cpp
++++ b/bgfx/src/bgfx.cpp
+@@ -2943,6 +2943,10 @@
+ 
+ 		bx::memCopy(m_submit->m_viewRemap, m_viewRemap, sizeof(m_viewRemap) );
+ 
++		bx::memCopy(m_submit->m_fdmOffsets, m_fdmOffsets, sizeof(m_fdmOffsets) );
++		m_submit->m_numFdmOffsets = m_numFdmOffsets;
++		m_numFdmOffsets = 0;
++
+ 		m_uniformCache.frame(m_submit->m_uniformCacheFrame);
+ 
+ 		static_assert(bx::isTriviallyCopyable<View>(), "Must be memcopyiable...");
+@@ -5641,6 +5645,12 @@
+ 			const TextureHandle texHandle = at.handle;
+ 			const TextureRef&   tr = s_ctx->m_textureRef[texHandle.idx];
+ 
++			if (0 != (at.resolve & BGFX_RESOLVE_FRAGMENT_DENSITY_MAP) )
++			{
++				// A fragment density map is read by the rasterizer, it is not rendered to: none of the render target rules apply
++				continue;
++			}
++
+ 			BGFX_ERROR_CHECK(true
+ 				&& isValid(texHandle)
+ 				&& s_ctx->m_textureHandle.isValid(texHandle.idx)
+@@ -6764,6 +6774,14 @@
+ 	{
+ 		BX_ASSERT(checkView(_id), "Invalid view id: %d", _id);
+ 		s_ctx->setViewShadingRate(_id, _shadingRate);
++	}
++
++	void setFragmentDensityMapOffsets(FrameBufferHandle _handle, const int32_t* _offsetsXY, uint8_t _numLayers)
++	{
++		if (isValid(_handle) && NULL != _offsetsXY && 0 != _numLayers)
++		{
++			s_ctx->setFragmentDensityMapOffsets(_handle, _offsetsXY, _numLayers);
++		}
+ 	}
+ 
+ 	void resetView(ViewId _id)
+diff -ru a/bgfx/src/bgfx_p.h b/bgfx/src/bgfx_p.h
+--- a/bgfx/src/bgfx_p.h
++++ b/bgfx/src/bgfx_p.h
+@@ -2930,6 +2930,16 @@
+ 		bool     m_cubeMap;
+ 	};
+ 
++	// Fragment density map offsets of one frame buffer for one frame
++	#define BGFX_CONFIG_MAX_FDM_OFFSET_FRAME_BUFFERS 4
++	#define BGFX_CONFIG_MAX_FDM_OFFSET_LAYERS 8
++	struct FdmOffsets
++	{
++		uint16_t fbIdx;
++		uint8_t  num;
++		int32_t  offsets[2 * BGFX_CONFIG_MAX_FDM_OFFSET_LAYERS];
++	};
++
+ 	struct FrameBufferRef
+ 	{
+ 		bx::FixedString64 m_name;
+@@ -3573,6 +3583,10 @@
+ 
+ 		View m_view[BGFX_CONFIG_MAX_VIEWS];
+ 
++		// Fragment density map offsets of the frame, per frame buffer (see bgfx::setFragmentDensityMapOffsets)
++		FdmOffsets m_fdmOffsets[BGFX_CONFIG_MAX_FDM_OFFSET_FRAME_BUFFERS];
++		uint8_t m_numFdmOffsets;
++
+ 		int32_t m_occlusion[BGFX_CONFIG_MAX_OCCLUSION_QUERIES];
+ 
+ 		FrameArenaT<RenderItem, kDrawCallBlock> m_renderItem;
+@@ -7217,6 +7231,30 @@
+ 			m_view[_id].setShadingRate(_shadingRate);
+ 		}
+ 
++		BGFX_API_FUNC(void setFragmentDensityMapOffsets(FrameBufferHandle _handle, const int32_t* _offsetsXY, uint8_t _numLayers) )
++		{
++			FdmOffsets* entry = NULL;
++			for (uint8_t ii = 0; ii < m_numFdmOffsets; ++ii)
++			{
++				if (m_fdmOffsets[ii].fbIdx == _handle.idx)
++				{
++					entry = &m_fdmOffsets[ii];
++					break;
++				}
++			}
++			if (NULL == entry)
++			{
++				if (m_numFdmOffsets >= BGFX_CONFIG_MAX_FDM_OFFSET_FRAME_BUFFERS)
++				{
++					return;
++				}
++				entry = &m_fdmOffsets[m_numFdmOffsets++];
++			}
++			entry->fbIdx = _handle.idx;
++			entry->num = bx::min<uint8_t>(_numLayers, BGFX_CONFIG_MAX_FDM_OFFSET_LAYERS);
++			bx::memCopy(entry->offsets, _offsetsXY, sizeof(int32_t) * 2 * entry->num);
++		}
++
+ 		BGFX_API_FUNC(void setViewUniform(ViewId _id, UniformHandle _handle, const void* _value, uint16_t _num) )
+ 		{
+ 			m_uniformCache.setViewUniform(_id, _handle, _value, _num);
+@@ -7436,6 +7474,8 @@
+ 		ViewId m_viewRemap[BGFX_CONFIG_MAX_VIEWS];
+ 		uint32_t m_seq[BGFX_CONFIG_MAX_VIEWS];
+ 		View m_view[BGFX_CONFIG_MAX_VIEWS];
++		FdmOffsets m_fdmOffsets[BGFX_CONFIG_MAX_FDM_OFFSET_FRAME_BUFFERS];
++		uint8_t m_numFdmOffsets = 0;
+ 
+ 		UniformCache m_uniformCache;
+ 
+diff -ru a/bgfx/src/renderer_vk.cpp b/bgfx/src/renderer_vk.cpp
+--- a/bgfx/src/renderer_vk.cpp
++++ b/bgfx/src/renderer_vk.cpp
+@@ -392,6 +392,10 @@
+ 			EXT_swapchain_maintenance1,
+ 			KHR_draw_indirect_count,
+ 			KHR_fragment_shading_rate,
++			EXT_fragment_density_map,
++			VALVE_fragment_density_map_layered,
++			EXT_fragment_density_map_offset,
++			KHR_create_renderpass2,
+ 			KHR_get_physical_device_properties2,
+ 			KHR_get_surface_capabilities2,
+ 			KHR_video_queue,
+@@ -442,6 +446,10 @@
+ 		{ "VK_EXT_swapchain_maintenance1",          1, false, false, true,                                                          Layer::Count },
+ 		{ "VK_KHR_draw_indirect_count",             1, false, false, true,                                                          Layer::Count },
+ 		{ "VK_KHR_fragment_shading_rate",           1, false, false, true,                                                          Layer::Count },
++		{ "VK_EXT_fragment_density_map",            1, false, false, true,                                                          Layer::Count },
++		{ "VK_VALVE_fragment_density_map_layered",  1, false, false, true,                                                          Layer::Count },
++		{ "VK_EXT_fragment_density_map_offset",     1, false, false, true,                                                          Layer::Count },
++		{ "VK_KHR_create_renderpass2",              1, false, false, true,                                                          Layer::Count },
+ 		{ "VK_KHR_get_physical_device_properties2", 1, false, false, true,                                                          Layer::Count },
+ 		{ "VK_KHR_get_surface_capabilities2",       1, false, false, true,                                                          Layer::Count },
+ 		{ "VK_KHR_video_queue",                     1, false, false, true,                                                          Layer::Count },
+@@ -1146,6 +1154,11 @@
+ 			srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+ 			break;
+ 
++		case VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT:
++			srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_DENSITY_PROCESS_BIT_EXT;
++			srcAccessMask = VK_ACCESS_FRAGMENT_DENSITY_MAP_READ_BIT_EXT;
++			break;
++
+ 		case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+ 			break;
+ 
+@@ -1191,6 +1204,11 @@
+ 			dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+ 			break;
+ 
++		case VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT:
++			dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_DENSITY_PROCESS_BIT_EXT;
++			dstAccessMask = VK_ACCESS_FRAGMENT_DENSITY_MAP_READ_BIT_EXT;
++			break;
++
+ 		case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+ 			// vkQueuePresentKHR performs automatic visibility operations
+ 			break;
+@@ -1670,6 +1688,13 @@
+ 
+ 				m_deviceShadingRateImageProperties = {};
+ 				m_deviceShadingRateImageProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR;
++				VkPhysicalDeviceFragmentDensityMapOffsetPropertiesEXT fdmOffsetProperties = {};
++				fdmOffsetProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_OFFSET_PROPERTIES_EXT;
++				m_fragmentDensityOffsetGranularity = { 1, 1 };
++				if (s_extension[Extension::EXT_fragment_density_map_offset].m_supported)
++				{
++					m_deviceShadingRateImageProperties.pNext = &fdmOffsetProperties;
++				}
+ 
+ 				if (vkGetPhysicalDeviceProperties2KHR) {
+ 					VkPhysicalDeviceProperties2KHR pdp2;
+@@ -1678,6 +1703,13 @@
+ 
+ 					vkGetPhysicalDeviceProperties2KHR(m_physicalDevice, &pdp2);
+ 					m_deviceProperties = pdp2.properties;
++					if (s_extension[Extension::EXT_fragment_density_map_offset].m_supported)
++					{
++						m_fragmentDensityOffsetGranularity = fdmOffsetProperties.fragmentDensityOffsetGranularity;
++						if (0 == m_fragmentDensityOffsetGranularity.width ) { m_fragmentDensityOffsetGranularity.width  = 1; }
++						if (0 == m_fragmentDensityOffsetGranularity.height) { m_fragmentDensityOffsetGranularity.height = 1; }
++					}
++					m_deviceShadingRateImageProperties.pNext = NULL;
+ 				} else
+ 				{
+ 					vkGetPhysicalDeviceProperties(m_physicalDevice, &m_deviceProperties);
+@@ -1916,6 +1948,7 @@
+ 					| (s_extension[Extension::EXT_shader_viewport_index_layer].m_supported ? BGFX_CAPS_VIEWPORT_LAYER_ARRAY : 0)
+ 					| (s_extension[Extension::KHR_draw_indirect_count        ].m_supported && indirectDrawSupport ? BGFX_CAPS_DRAW_INDIRECT_COUNT : 0)
+ 					| (s_extension[Extension::KHR_fragment_shading_rate      ].m_supported ? BGFX_CAPS_VARIABLE_RATE_SHADING : 0)
++					| (s_extension[Extension::EXT_fragment_density_map       ].m_supported ? BGFX_CAPS_FRAGMENT_DENSITY_MAP   : 0)
+ 					| (s_extension[Extension::KHR_present_id].m_supported && s_extension[Extension::KHR_present_wait].m_supported ? BGFX_CAPS_WAITABLE_SWAPCHAIN : 0)
+ 					;
+ 
+@@ -1924,6 +1957,18 @@
+ 					&& NULL != vkCmdSetFragmentShadingRateKHR
+ 					;
+ 
++				// One density map layer per frame buffer layer without multiview (VK_VALVE_fragment_density_map_layered); otherwise layer 0 is used for every layer
++				m_fragmentDensityMapLayeredSupported = s_extension[Extension::VALVE_fragment_density_map_layered].m_supported;
++
++				// Offsets need the feature enabled at device creation, which only happens when the application created the device (and enabled it)
++				m_fragmentDensityMapOffsetSupported = true
++					&& NULL != m_externalDevice
++					&& s_extension[Extension::EXT_fragment_density_map].m_supported
++					&& s_extension[Extension::EXT_fragment_density_map_offset].m_supported
++					&& NULL != vkCmdEndRenderPass2KHR
++					;
++				m_currentFdmOffsets = NULL;
++
+ 				const uint32_t maxAttachments = bx::min<uint32_t>(
+ 					  m_deviceProperties.limits.maxFragmentOutputAttachments
+ 					, m_deviceProperties.limits.maxColorAttachments
+@@ -3183,7 +3228,7 @@
+ 
+ 				vkCmdBeginRenderPass(m_commandBuffer, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
+ 				vkCmdDrawIndexed(m_commandBuffer, _numIndices, 1, 0, 0, 0);
+-				vkCmdEndRenderPass(m_commandBuffer);
++				endRenderPass();
+ 			}
+ 		}
+ 
+@@ -3700,7 +3745,7 @@
+ 			}
+ 		}
+ 
+-		VkResult getRenderPass(uint8_t _num, const VkFormat* _formats, const VkImageAspectFlags* _aspects, const bool* _resolve, VkSampleCountFlagBits _samples, uint16_t _clearFlags, ::VkRenderPass* _outRenderPass, uint32_t* _outHashKey)
++		VkResult getRenderPass(uint8_t _num, const VkFormat* _formats, const VkImageAspectFlags* _aspects, const bool* _resolve, VkSampleCountFlagBits _samples, uint16_t _clearFlags, ::VkRenderPass* _outRenderPass, uint32_t* _outHashKey, VkFormat _fdmFormat = VK_FORMAT_UNDEFINED, uint32_t _fdmLayers = 0)
+ 		{
+ 			VkResult result = VK_SUCCESS;
+ 
+@@ -3714,6 +3759,8 @@
+ 			hash.add(_samples);
+ 			hash.add(_formats, sizeof(VkFormat) * _num);
+ 			hash.add(_clearFlags);
++			hash.add(_fdmFormat);
++			hash.add(_fdmLayers);
+ 			if (NULL != _resolve)
+ 			{
+ 				hash.add(_resolve, sizeof(bool) * _num);
+@@ -3733,7 +3780,7 @@
+ 				return result;
+ 			}
+ 
+-			VkAttachmentDescription ad[BGFX_CONFIG_MAX_FRAME_BUFFER_ATTACHMENTS * 2];
++			VkAttachmentDescription ad[BGFX_CONFIG_MAX_FRAME_BUFFER_ATTACHMENTS * 2 + 1];
+ 
+ 			for (uint8_t ii = 0; ii < (_num * 2); ++ii)
+ 			{
+@@ -3852,11 +3899,32 @@
+ 			dep[1].dstAccessMask   = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+ 			dep[1].dependencyFlags = 0;
+ 
++			// Fragment density map: one more attachment, read by the rasterizer and never written, referenced through the create info chain
++			const bool hasFdm = VK_FORMAT_UNDEFINED != _fdmFormat;
++			VkRenderPassFragmentDensityMapCreateInfoEXT fdmInfo;
++			if (hasFdm)
++			{
++				const uint32_t idx = _num + numResolveAr;
++				ad[idx].flags          = 0;
++				ad[idx].format         = _fdmFormat;
++				ad[idx].samples        = VK_SAMPLE_COUNT_1_BIT;
++				ad[idx].loadOp         = VK_ATTACHMENT_LOAD_OP_LOAD;
++				ad[idx].storeOp        = VK_ATTACHMENT_STORE_OP_DONT_CARE;
++				ad[idx].stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
++				ad[idx].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
++				ad[idx].initialLayout  = VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
++				ad[idx].finalLayout    = VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
++				fdmInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_FRAGMENT_DENSITY_MAP_CREATE_INFO_EXT;
++				fdmInfo.pNext = NULL;
++				fdmInfo.fragmentDensityMapAttachment.attachment = idx;
++				fdmInfo.fragmentDensityMapAttachment.layout     = VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
++			}
++
+ 			VkRenderPassCreateInfo rpi;
+ 			rpi.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+-			rpi.pNext           = NULL;
++			rpi.pNext           = hasFdm ? &fdmInfo : NULL;
+ 			rpi.flags           = 0;
+-			rpi.attachmentCount = _num + numResolveAr;
++			rpi.attachmentCount = _num + numResolveAr + (hasFdm ? 1 : 0);
+ 			rpi.pAttachments    = ad;
+ 			rpi.subpassCount    = BX_COUNTOF(sd);
+ 			rpi.pSubpasses      = sd;
+@@ -3878,7 +3946,7 @@
+ 			return result;
+ 		}
+ 
+-		VkResult getRenderPass(uint8_t _num, const Attachment* _attachments, uint16_t _clearFlags, ::VkRenderPass* _outRenderPass, uint32_t* _outHashKey = NULL)
++		VkResult getRenderPass(uint8_t _num, const Attachment* _attachments, uint16_t _clearFlags, ::VkRenderPass* _outRenderPass, uint32_t* _outHashKey = NULL, VkFormat _fdmFormat = VK_FORMAT_UNDEFINED, uint32_t _fdmLayers = 0)
+ 		{
+ 			VkFormat formats[BGFX_CONFIG_MAX_FRAME_BUFFER_ATTACHMENTS];
+ 			VkImageAspectFlags aspects[BGFX_CONFIG_MAX_FRAME_BUFFER_ATTACHMENTS];
+@@ -3892,7 +3960,7 @@
+ 				samples = texture.m_sampler.Sample;
+ 			}
+ 
+-			return getRenderPass(_num, formats, aspects, NULL, samples, _clearFlags, _outRenderPass, _outHashKey);
++			return getRenderPass(_num, formats, aspects, NULL, samples, _clearFlags, _outRenderPass, _outHashKey, _fdmFormat, _fdmLayers);
+ 		}
+ 
+ 		VkResult getRenderPass(const SwapChainVK& swapChain, uint16_t _clearFlags, ::VkRenderPass* _outRenderPass, uint32_t* _outHashKey = NULL)
+@@ -4293,9 +4361,16 @@
+ 			multisampleState.alphaToCoverageEnable = !!(BGFX_STATE_BLEND_ALPHA_TO_COVERAGE & _state);
+ 			multisampleState.alphaToOneEnable      = VK_FALSE;
+ 
++			// A layered frame buffer with a layered density map needs the pipeline to declare it (VK_VALVE_fragment_density_map_layered)
++			VkPipelineFragmentDensityMapLayeredCreateInfoVALVE fdmLayered;
++			fdmLayered.sType = VK_STRUCTURE_TYPE_PIPELINE_FRAGMENT_DENSITY_MAP_LAYERED_CREATE_INFO_VALVE;
++			fdmLayered.pNext = NULL;
++			fdmLayered.maxFragmentDensityMapLayers = frameBuffer.m_fdmLayers;
++			const bool layeredFdm = frameBuffer.m_hasFdm && frameBuffer.m_fdmLayers > 1 && m_fragmentDensityMapLayeredSupported;
++
+ 			VkGraphicsPipelineCreateInfo graphicsPipeline;
+ 			graphicsPipeline.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+-			graphicsPipeline.pNext = NULL;
++			graphicsPipeline.pNext = layeredFdm ? &fdmLayered : NULL;
+ 			graphicsPipeline.flags = 0;
+ 			graphicsPipeline.stageCount = NULL == program.m_fsh ? 1 : 2;
+ 			graphicsPipeline.pStages    = shaderStages;
+@@ -4401,6 +4476,35 @@
+ 			return pool;
+ 		}
+ 
++		// Ends the current render pass; with fragment density map offsets of the frame buffer when some were set for this frame
++		void endRenderPass()
++		{
++			if (NULL != m_currentFdmOffsets)
++			{
++				VkOffset2D offsets[BGFX_CONFIG_MAX_FDM_OFFSET_LAYERS];
++				for (uint8_t ii = 0; ii < m_currentFdmOffsets->num; ++ii)
++				{
++					const int32_t gx = int32_t(m_fragmentDensityOffsetGranularity.width);
++					const int32_t gy = int32_t(m_fragmentDensityOffsetGranularity.height);
++					offsets[ii].x = (m_currentFdmOffsets->offsets[ii * 2 + 0] / gx) * gx;
++					offsets[ii].y = (m_currentFdmOffsets->offsets[ii * 2 + 1] / gy) * gy;
++				}
++				VkRenderPassFragmentDensityMapOffsetEndInfoEXT offsetInfo;
++				offsetInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_FRAGMENT_DENSITY_MAP_OFFSET_END_INFO_EXT;
++				offsetInfo.pNext = NULL;
++				offsetInfo.fragmentDensityOffsetCount = m_currentFdmOffsets->num;
++				offsetInfo.pFragmentDensityOffsets = offsets;
++				VkSubpassEndInfo endInfo;
++				endInfo.sType = VK_STRUCTURE_TYPE_SUBPASS_END_INFO;
++				endInfo.pNext = &offsetInfo;
++				vkCmdEndRenderPass2KHR(m_commandBuffer, &endInfo);
++				m_currentFdmOffsets = NULL;
++				return;
++			}
++
++			vkCmdEndRenderPass(m_commandBuffer);
++		}
++
+ 		VkDescriptorSet allocDescriptorSet(const VkDescriptorSetLayout& _layout)
+ 		{
+ 			const uint32_t frame = m_cmd.m_currentFrameInFlight;
+@@ -5215,6 +5319,10 @@
+ 		uint32_t m_captureSize;
+ 
+ 		bool m_variableRateShadingSupported;
++		bool m_fragmentDensityMapLayeredSupported;
++		bool m_fragmentDensityMapOffsetSupported;
++		VkExtent2D m_fragmentDensityOffsetGranularity;
++		const FdmOffsets* m_currentFdmOffsets;
+ 
+ 		TextVideoMem m_textVideoMem;
+ 
+@@ -6848,6 +6956,10 @@
+ 		ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+ 		ici.pNext = NULL;
+ 		ici.flags = 0
++			| (0 != (m_flags & BGFX_TEXTURE_RT_MASK) && s_renderVK->m_fragmentDensityMapOffsetSupported
++				? VK_IMAGE_CREATE_FRAGMENT_DENSITY_MAP_OFFSET_BIT_EXT
++				: 0
++				)
+ 			| (VK_IMAGE_VIEW_TYPE_CUBE == m_type
+ 				? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT
+ 				: 0
+@@ -6873,7 +6985,13 @@
+ 				: 0
+ 				)
+ 			| (m_flags & (BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_INTERNAL_VIDEO_DECODE_DST) ? VK_IMAGE_USAGE_STORAGE_BIT : 0)
++			| (m_flags & BGFX_TEXTURE_FRAGMENT_DENSITY_MAP ? VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT : 0)
+ 			;
++		if (0 != (m_flags & BGFX_TEXTURE_FRAGMENT_DENSITY_MAP) && s_renderVK->m_fragmentDensityMapOffsetSupported)
++		{
++			// A density map the application fills itself: the driver only honors offsets on maps created for them
++			ici.flags |= VK_IMAGE_CREATE_FRAGMENT_DENSITY_MAP_OFFSET_BIT_EXT;
++		}
+ 		ici.format        = m_format;
+ 		ici.samples       = m_sampler.Sample;
+ 		ici.mipLevels     = m_numMips;
+@@ -6941,6 +7059,8 @@
+ 
+ 		m_sampledLayout = m_flags & (BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_INTERNAL_VIDEO_DECODE_DST)
+ 			? VK_IMAGE_LAYOUT_GENERAL
++			: m_flags & BGFX_TEXTURE_FRAGMENT_DENSITY_MAP
++			? VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT
+ 			: VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+ 			;
+ 
+@@ -7295,6 +7415,11 @@
+ 			{
+ 				setState(_commandBuffer, m_sampledLayout);
+ 			}
++			else if (0 != (m_flags & BGFX_TEXTURE_FRAGMENT_DENSITY_MAP) )
++			{
++				// Owned and written by whoever provided the image (an OpenXR runtime): always in the layout the render pass expects, never transitioned here
++				m_currentImageLayout = VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
++			}
+ 
+ 			bx::free(g_allocator, bufferCopyInfo);
+ 
+@@ -9087,12 +9212,18 @@
+ 	{
+ 		BGFX_PROFILER_SCOPE("FrameBufferVK::create", kColorFrame);
+ 
+-		m_numTh = _num;
+-
+ 		uint8_t num = 0;
++		m_hasFdm = false;
+ 
+ 		for (uint8_t ii = 0; ii < _num; ++ii)
+ 		{
++			if (0 != (_attachment[ii].resolve & BGFX_RESOLVE_FRAGMENT_DENSITY_MAP) )
++			{
++				m_hasFdm = true;
++				m_fdmAttachment = _attachment[ii];
++				continue;
++			}
++
+ 			const TextureVK& texture = s_renderVK->m_textures[_attachment[ii].handle.idx];
+ 
+ 			if (0 == (texture.m_aspectFlags & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT) ) )
+@@ -9103,6 +9234,11 @@
+ 
+ 		for (uint8_t ii = 0; ii < _num; ++ii)
+ 		{
++			if (0 != (_attachment[ii].resolve & BGFX_RESOLVE_FRAGMENT_DENSITY_MAP) )
++			{
++				continue;
++			}
++
+ 			const TextureVK& texture = s_renderVK->m_textures[_attachment[ii].handle.idx];
+ 
+ 			if (0 != (texture.m_aspectFlags & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT) ) )
+@@ -9111,6 +9247,8 @@
+ 			}
+ 		}
+ 
++		m_numTh = num;
++
+ 		postReset();
+ 	}
+ 
+@@ -9160,7 +9298,7 @@
+ 
+ 		if (m_numTh > 0)
+ 		{
+-			VK_CHECK(s_renderVK->getRenderPass(m_numTh, m_attachment, _clearFlags, &renderPass) );
++			VK_CHECK(s_renderVK->getRenderPass(m_numTh, m_attachment, _clearFlags, &renderPass, NULL, m_fdmFormat, m_fdmLayers) );
+ 		}
+ 		else
+ 		{
+@@ -9182,6 +9320,12 @@
+ 			{
+ 				s_renderVK->release(m_textureImageViews[ii]);
+ 			}
++
++			if (VK_NULL_HANDLE != m_fdmImageView)
++			{
++				s_renderVK->release(m_fdmImageView);
++				m_fdmImageView = VK_NULL_HANDLE;
++			}
+ 		}
+ 	}
+ 
+@@ -9194,8 +9338,20 @@
+ 			const VkDevice device = s_renderVK->m_device;
+ 			const VkAllocationCallbacks* allocatorCb = s_renderVK->m_allocatorCb;
+ 
+-			VK_CHECK(s_renderVK->getRenderPass(m_numTh, m_attachment, 0, &m_renderPass, &m_renderPassHashKey) );
++			if (m_hasFdm)
++			{
++				const TextureVK& fdm = s_renderVK->m_textures[m_fdmAttachment.handle.idx];
++				m_fdmFormat = fdm.m_format;
++				m_fdmLayers = m_fdmAttachment.numLayers;
++			}
++			else
++			{
++				m_fdmFormat = VK_FORMAT_UNDEFINED;
++				m_fdmLayers = 0;
++			}
+ 
++			VK_CHECK(s_renderVK->getRenderPass(m_numTh, m_attachment, 0, &m_renderPass, &m_renderPassHashKey, m_fdmFormat, m_fdmLayers) );
++
+ 			m_depth = BGFX_INVALID_HANDLE;
+ 			m_num = 0;
+ 
+@@ -9225,6 +9381,24 @@
+ 				}
+ 			}
+ 
++			if (m_hasFdm)
++			{
++				BX_ASSERT(m_numTh < BGFX_CONFIG_MAX_FRAME_BUFFER_ATTACHMENTS, "No room left for the fragment density map attachment.");
++				const Attachment& at = m_fdmAttachment;
++				const TextureVK& texture = s_renderVK->m_textures[at.handle.idx];
++				VK_CHECK(texture.createView(
++					  at.layer
++					, at.numLayers
++					, at.mip
++					, 1
++					, at.numLayers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D
++					, VK_IMAGE_ASPECT_COLOR_BIT
++					, true
++					, &m_fdmImageView
++					) );
++				m_textureImageViews[m_numTh] = m_fdmImageView;
++			}
++
+ 			const TextureVK& firstTexture = s_renderVK->m_textures[m_attachment[0].handle.idx];
+ 			m_width  = bx::max(firstTexture.m_width  >> m_attachment[0].mip, 1);
+ 			m_height = bx::max(firstTexture.m_height >> m_attachment[0].mip, 1);
+@@ -9235,7 +9409,7 @@
+ 			fci.pNext = NULL;
+ 			fci.flags = 0;
+ 			fci.renderPass      = m_renderPass;
+-			fci.attachmentCount = m_numTh;
++			fci.attachmentCount = m_numTh + (m_hasFdm ? 1 : 0);
+ 			fci.pAttachments    = &m_textureImageViews[0];
+ 			fci.width  = m_width;
+ 			fci.height = m_height;
+@@ -10265,7 +10439,7 @@
+ 					{
+ 						if ( beginRenderPass )
+ 						{
+-							vkCmdEndRenderPass(m_commandBuffer);
++							endRenderPass();
+ 							beginRenderPass = false;
+ 						}
+ 
+@@ -10289,7 +10463,7 @@
+ 					||  profiler.m_enabled
+ 					   ) )
+ 					{
+-						vkCmdEndRenderPass(m_commandBuffer);
++						endRenderPass();
+ 						beginRenderPass = false;
+ 					}
+ 
+@@ -10300,7 +10474,7 @@
+ 
+ 					if (beginRenderPass && bs.hasItem(view) )
+ 					{
+-						vkCmdEndRenderPass(m_commandBuffer);
++						endRenderPass();
+ 						beginRenderPass = false;
+ 					}
+ 
+@@ -10456,6 +10630,19 @@
+ 							rpbi.clearValueCount = mrt;
+ 							rpbi.pClearValues = clearValues;
+ 
++							m_currentFdmOffsets = NULL;
++							if (fb.m_hasFdm && m_fragmentDensityMapOffsetSupported)
++							{
++								for (uint8_t ii = 0; ii < _render->m_numFdmOffsets; ++ii)
++								{
++									if (_render->m_fdmOffsets[ii].fbIdx == m_fbh.idx)
++									{
++										m_currentFdmOffsets = &_render->m_fdmOffsets[ii];
++										break;
++									}
++								}
++							}
++
+ 							vkCmdBeginRenderPass(m_commandBuffer, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
+ 							beginRenderPass = true;
+ 						}
+@@ -10501,7 +10688,7 @@
+ 
+ 						if (beginRenderPass)
+ 						{
+-							vkCmdEndRenderPass(m_commandBuffer);
++							endRenderPass();
+ 							beginRenderPass = false;
+ 						}
+ 					}
+@@ -11106,7 +11293,7 @@
+ 
+ 			if (beginRenderPass)
+ 			{
+-				vkCmdEndRenderPass(m_commandBuffer);
++				endRenderPass();
+ 				beginRenderPass = false;
+ 			}
+ 
+diff -ru a/bgfx/src/renderer_vk.h b/bgfx/src/renderer_vk.h
+--- a/bgfx/src/renderer_vk.h
++++ b/bgfx/src/renderer_vk.h
+@@ -182,6 +182,7 @@
+ 			VK_IMPORT_DEVICE_FUNC(false, vkCmdPipelineBarrier);                       \
+ 			VK_IMPORT_DEVICE_FUNC(false, vkCmdBeginRenderPass);                       \
+ 			VK_IMPORT_DEVICE_FUNC(false, vkCmdEndRenderPass);                         \
++			VK_IMPORT_DEVICE_FUNC(true,  vkCmdEndRenderPass2KHR);                     \
+ 			VK_IMPORT_DEVICE_FUNC(false, vkCmdSetViewport);                           \
+ 			VK_IMPORT_DEVICE_FUNC(false, vkCmdDraw);                                  \
+ 			VK_IMPORT_DEVICE_FUNC(false, vkCmdDrawIndexed);                           \
+@@ -864,6 +865,10 @@
+ 			, m_needPresent(false)
+ 			, m_framebuffer(VK_NULL_HANDLE)
+ 			, m_currentFramebuffer(VK_NULL_HANDLE)
++			, m_hasFdm(false)
++			, m_fdmImageView(VK_NULL_HANDLE)
++			, m_fdmFormat(VK_FORMAT_UNDEFINED)
++			, m_fdmLayers(0)
+ 		{
+ 		}
+ 
+@@ -908,6 +913,13 @@
+ 		MsaaSamplerVK m_sampler;
+ 
+ 		VkFramebuffer m_currentFramebuffer;
++
++		// Fragment density map (VK_EXT_fragment_density_map): the attachment tagged BGFX_RESOLVE_FRAGMENT_DENSITY_MAP, kept out of the color/depth lists
++		bool        m_hasFdm;
++		Attachment  m_fdmAttachment;
++		VkImageView m_fdmImageView;
++		VkFormat    m_fdmFormat;
++		uint32_t    m_fdmLayers;
+ 	};
+ 
+ 	struct CommandQueueVK

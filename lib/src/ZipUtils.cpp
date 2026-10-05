@@ -143,3 +143,121 @@ bool ZipUtils::Unzip(const std::filesystem::path& sourcePath, const std::filesys
    zip_close(archive);
    return true;
 }
+
+#ifdef VPX_ARCHIVE_SUPPORT
+#include <archive.h>
+#include <archive_entry.h>
+
+// RAR (including RAR5) and 7z archives, read with libarchive
+static bool ExtractWithLibarchive(const std::filesystem::path& sourcePath, const std::filesystem::path& destPath, const ZipUtils::ProgressCallback& callback)
+{
+   archive* const reader = archive_read_new();
+   archive_read_support_format_rar(reader);
+   archive_read_support_format_rar5(reader);
+   archive_read_support_format_7zip(reader);
+#ifdef _WIN32
+   const int opened = archive_read_open_filename_w(reader, sourcePath.wstring().c_str(), 64 * 1024);
+#else
+   const int opened = archive_read_open_filename(reader, sourcePath.string().c_str(), 64 * 1024);
+#endif
+   if (opened != ARCHIVE_OK) {
+      PLOGE.printf("Unable to open archive: source=%s, error=%s", sourcePath.string().c_str(), archive_error_string(reader));
+      archive_read_free(reader);
+      return false;
+   }
+
+   std::error_code ec;
+   const int totalKB = static_cast<int>(std::filesystem::file_size(sourcePath, ec) / 1024);
+   bool success = true;
+   archive_entry* entry;
+   int result;
+   while ((result = archive_read_next_header(reader, &entry)) == ARCHIVE_OK || result == ARCHIVE_WARN) {
+      const char* const utf8Name = archive_entry_pathname_utf8(entry);
+#ifdef _WIN32
+      const wchar_t* const wideName = archive_entry_pathname_w(entry); // Windows paths are UTF-16
+      const std::filesystem::path name = wideName ? std::filesystem::path(wideName) : std::filesystem::path();
+#else
+      const std::filesystem::path name = utf8Name ? std::filesystem::path(reinterpret_cast<const char8_t*>(utf8Name)) : std::filesystem::path();
+#endif
+      const string displayName = utf8Name ? utf8Name : name.string();
+
+      // Never write outside of the destination folder
+      const std::filesystem::path relativePath = name.lexically_normal();
+      if (relativePath.empty() || relativePath.is_absolute() || relativePath.has_root_name() || *relativePath.begin() == ".." || IsExcludedPath(relativePath.generic_string())) {
+         if (!relativePath.empty() && !IsExcludedPath(relativePath.generic_string()))
+            PLOGW.printf("Skipping archive entry outside of the destination: %s", displayName.c_str());
+         archive_read_data_skip(reader);
+         continue;
+      }
+
+      const std::filesystem::path destFilePath = destPath / relativePath;
+      if (archive_entry_filetype(entry) == AE_IFDIR) {
+         std::filesystem::create_directories(destFilePath, ec);
+      }
+      else if (archive_entry_filetype(entry) == AE_IFREG) {
+         std::filesystem::create_directories(destFilePath.parent_path(), ec);
+         std::ofstream ofs(destFilePath, std::ios::binary | std::ios::trunc);
+         if (!ofs) {
+            PLOGE.printf("Unable to create file: %s", destFilePath.string().c_str());
+            archive_read_data_skip(reader);
+            continue;
+         }
+         const void* block;
+         size_t size;
+         la_int64_t offset;
+         int dataResult;
+         while ((dataResult = archive_read_data_block(reader, &block, &size, &offset)) == ARCHIVE_OK)
+         {
+            ofs.seekp(offset); // Sparse entries give their offset
+            ofs.write(static_cast<const char*>(block), static_cast<std::streamsize>(size));
+         }
+         if (dataResult != ARCHIVE_EOF) {
+            PLOGE.printf("Unable to extract file: %s, error=%s", displayName.c_str(), archive_error_string(reader));
+            success = false;
+         }
+      }
+      else {
+         archive_read_data_skip(reader); // Links and special files are not extracted
+      }
+
+      if (callback)
+         callback(static_cast<int>(archive_filter_bytes(reader, -1) / 1024), totalKB, displayName.c_str());
+   }
+   if (result != ARCHIVE_EOF) {
+      PLOGE.printf("Unable to read archive: source=%s, error=%s", sourcePath.string().c_str(), archive_error_string(reader));
+      success = false;
+   }
+   archive_read_free(reader);
+   return success;
+}
+#endif
+
+const std::vector<string>& ZipUtils::GetExtractableExtensions()
+{
+#ifdef VPX_ARCHIVE_SUPPORT
+   static const std::vector<string> extensions { "zip"s, "vpxz"s, "rar"s, "7z"s };
+#else
+   static const std::vector<string> extensions { "zip"s, "vpxz"s };
+#endif
+   return extensions;
+}
+
+bool ZipUtils::IsExtractable(const std::filesystem::path& path)
+{
+   const string ext = path.has_extension() ? lowerCase(path.extension().string().substr(1)) : string();
+   const std::vector<string>& extensions = GetExtractableExtensions();
+   return std::find(extensions.begin(), extensions.end(), ext) != extensions.end();
+}
+
+bool ZipUtils::Extract(const std::filesystem::path& sourcePath, const std::filesystem::path& destPath, ProgressCallback callback)
+{
+   const string ext = sourcePath.has_extension() ? lowerCase(sourcePath.extension().string()) : string();
+#ifdef VPX_ARCHIVE_SUPPORT
+   if (ext == ".rar" || ext == ".7z")
+      return ExtractWithLibarchive(sourcePath, destPath, callback);
+#endif
+   if (ext == ".zip" || ext == ".vpxz")
+      return Unzip(sourcePath, destPath, callback);
+   PLOGE.printf("Unsupported archive: %s", sourcePath.string().c_str());
+   return false;
+}

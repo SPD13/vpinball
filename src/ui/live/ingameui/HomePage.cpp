@@ -22,6 +22,19 @@ void HomePage::BuildPage()
    constexpr bool hasKeyboard = !(g_isAndroid || g_isIOS);
    constexpr bool isTouch = g_isAndroid || g_isIOS;
 
+#if defined(__STANDALONE__) && !defined(__LIBVPINBALL__)
+   // Same as the quit action of the table picker menu: leave the launcher instead of getting back to the lobby
+   AddItem(std::make_unique<InGameUIItem>("Quit Visual Pinball"s, ""s,
+      [this]()
+      {
+         g_app->m_launcherMode = false;
+         m_player->SetCloseState(Player::CS_CLOSE_CAPTURE_SCREENSHOT);
+      }));
+
+   // Mobile builds select tables in their native launcher
+   AddItem(std::make_unique<InGameUIItem>("Tables"s, "Play another table"s, "tables/picker"s));
+#endif
+
    ////////////////////////////////////////////////////////////////////////////////////////////////
    AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Header, "Table options"s));
 
@@ -37,6 +50,31 @@ void HomePage::BuildPage()
       AddItem(std::make_unique<InGameUIItem>("Point Of View"s, ""s, "settings/pov"s));
 
    AddItem(std::make_unique<InGameUIItem>("Generic Options"s, ""s, "table/general"s));
+
+#if defined(__STANDALONE__) && !defined(__LIBVPINBALL__)
+   if (m_player->CanReplaceTableImage())
+   {
+      if (m_player->m_vrDevice)
+         AddItem(std::make_unique<InGameUIItem>(VPApp::GetTableImageFocusLabel(), "What the image shows: the backglass, the playfield seen from above, or the whole cabinet"s,
+            [this]()
+            {
+               VPApp::NextTableImageFocus();
+               RequestRebuild();
+            }));
+      AddItem(std::make_unique<InGameUIItem>("Replace table image"s,
+         m_player->m_vrDevice ? "Capture a new image of this table for the table picker, framed as chosen above"s : "Use the current view as the image of this table in the table picker"s,
+         [this]() { m_player->ReplaceTableImage(); }));
+   }
+
+   // The room of this table as the room of the lobby, from the table picker
+   if (g_app->m_launcherMode && !m_player->m_isLobby && !VPApp::GetRoomParts(m_player->m_ptable).empty())
+      AddItem(std::make_unique<InGameUIItem>("Use this VR room in the lobby"s, "The table picker will be shown in the room of this table, as it is now"s,
+         [this]()
+         {
+            const int nParts = g_app->UseTableRoomInLobby(m_player->m_ptable);
+            m_player->m_liveUI->PushNotification(nParts > 0 ? "The lobby will use the room of this table"s : "This table has no visible VR room"s, 4000);
+         }));
+#endif
 
    if (m_player->m_ptable->TournamentModePossible())
       AddItem(std::make_unique<InGameUIItem>("Generate Tournament File"s, ""s,

@@ -1,0 +1,116 @@
+{
+  "_notes": [
+    "Adjustment numbering is arbitrary.  Free Play ROM sets credits=max_credits on START."
+  ],
+  "_fileformat": 0.8,
+  "_metadata": {
+    "version": 2,
+    "copyright": [
+      "Copyright (C) 2026 by Tom Collins <tom@scorbit.io>"
+    ],
+    "license": "Open Data Commons Open Database License (ODbL) v1.0",
+    "platform": "atari-gen1",
+    "roms": [
+      "aavenger",
+      "aavengef"
+    ],
+    "free_only": [
+      "aavengef"
+    ]
+  },
+  "game_state": {
+    "scores": [
+      {
+        "label": "Player 1",
+        "start": "0x002C",
+        "encoding": "bcd",
+        "length": 3
+      },
+      {
+        "label": "Player 2",
+        "start": "0x0028",
+        "encoding": "bcd",
+        "length": 3
+      },
+      {
+        "label": "Player 3",
+        "start": "0x0024",
+        "encoding": "bcd",
+        "length": 3
+      },
+      {
+        "label": "Player 4",
+        "start": "0x0020",
+        "encoding": "bcd",
+        "length": 3
+      }
+    ],
+    "credits": {
+      "label": "Credits",
+      "_notes": "also in display memory at 0x1D (bcd)",
+      "start": "0x00D5",
+      "encoding": "int"
+    },
+    "max_credits": {
+      "label": "Max Credits",
+      "start": "0x00BC",
+      "encoding": "int"
+    },
+    "current_ball": {
+      "label": "Ball",
+      "_notes": "also in display memory at 0x1C",
+      "start": "0x00D4",
+      "encoding": "bcd"
+    },
+    "ball_count": {
+      "label": "Balls",
+      "start": "0x00BB",
+      "encoding": "bcd"
+    },
+    "current_player": {
+      "label": "Player",
+      "start": "0x00D3",
+      "encoding": "bcd"
+    },
+    "player_count": {
+      "label": "Players",
+      "start": "0x00D2",
+      "encoding": "bcd"
+    },
+    "game_over": {
+      "_notes": "true when player_count==0",
+      "label": "Game Over",
+      "start": "0x00D2",
+      "encoding": "bool",
+      "invert": true
+    }
+  },
+  "adjustments": {
+    "Adjustments": {
+      "01": {
+        "label": "Low Replay Level",
+        "start": "0x0089",
+        "encoding": "bcd",
+        "endian": "big",
+        "length": 2,
+        "scale": 100
+      },
+      "02": {
+        "label": "Medium Replay Level",
+        "start": "0x0085",
+        "encoding": "bcd",
+        "endian": "big",
+        "length": 2,
+        "scale": 100
+      },
+      "03": {
+        "label": "High Replay Level",
+        "start": "0x0081",
+        "encoding": "bcd",
+        "endian": "big",
+        "length": 2,
+        "scale": 100
+      }
+    }
+  }
+}
