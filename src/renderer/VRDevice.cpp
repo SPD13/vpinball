@@ -1011,7 +1011,7 @@ bool VRDevice::UpdateShadingRateMap(bool gazeValid)
    const float fullRadius = debugSpot ? 0.06f : gazeValid ? kGazeFullRadius[level] : kFoveationFullRadius[level];
    const float halfRadius = debugSpot ? 0.10f : gazeValid ? kGazeHalfRadius[level] : kFoveationHalfRadius[level];
    const int firstEye = debugSpot == 3 ? 1 : 0, lastEye = debugSpot == 2 ? 0 : 1;
-   const float scale = m_dynamicRenderScale;
+   const float scale = GetDynamicRenderScale(); // The scale the scene renders at
    const float halfW = 0.5f * static_cast<float>(scene->GetWidth()) * scale / static_cast<float>(texel);
    const float halfH = 0.5f * static_cast<float>(scene->GetHeight()) * scale / static_cast<float>(texel);
    float cx[2], cy[2];

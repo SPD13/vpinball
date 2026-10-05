@@ -668,8 +668,11 @@ void RenderDevice::BGFXOpenXRRenderLoop(const bgfx::Init& init)
 
 void RenderDevice::RequestVRScreenshot(RenderTarget* vrRenderTarget, const std::filesystem::path& filename)
 {
-   const uint16_t width = static_cast<uint16_t>(vrRenderTarget->GetWidth());
-   const uint16_t height = static_cast<uint16_t>(vrRenderTarget->GetHeight());
+   // Dynamic resolution: the frame drew the top left part of the swapchain image only, the rest is left black (the capture views ask for
+   // full size frames, see VRDevice::GetDynamicRenderScale, this keeps the image framed if a smaller one was captured anyway)
+   const float executedScale = GetExecutedRenderScale();
+   const uint16_t width = static_cast<uint16_t>(vrRenderTarget->GetScaledWidth(executedScale));
+   const uint16_t height = static_cast<uint16_t>(vrRenderTarget->GetScaledHeight(executedScale));
    if (bgfx::isValid(m_vrScreenshotTex) && (m_vrScreenshotWidth != width || m_vrScreenshotHeight != height))
    {
       bgfx::destroy(m_vrScreenshotTex);
