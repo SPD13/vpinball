@@ -1,11 +1,41 @@
-# Visual Pinball for the Steam Frame (unofficial fork)
+# Visual Pinball X: Steam Frame Edition (independent, unofficial fork)
 
-This fork is an attempt to create a standalone version of Visual Pinball for the Valve Steam Frame (SteamOS on ARM64, OpenXR, Vulkan), with a table launcher that works from inside the headset, and to add some quality of life features to the VR version: a table library and picker, a lobby, table images, uploading tables and ROMs from a browser, a menu usable with the VR controllers, and more.
+An independent fork of [Visual Pinball X](https://github.com/vpinball/vpinball) that runs as a standalone app on the Valve Steam Frame: natively on the headset (SteamOS on ARM64, OpenXR, Vulkan), with no PC and no cable. It adds a table launcher that works from inside the headset, a table library and picker, a lobby, uploading tables and ROMs from a browser, scores and leaderboards, eye-tracked foveated rendering, and a menu made for the VR controllers. It keeps following the upstream project and merges its work.
+
+**Status: Working and tested as a standalone app on the Steam Frame.**
 
 > [!CAUTION]
-> **This fork is not endorsed by the Visual Pinball community, as it extensively uses AI generated code.** It is not an official release: please do not report its problems to the Visual Pinball team. The official repository is [vpinball/vpinball](https://github.com/vpinball/vpinball).
+> **This fork is not endorsed by, affiliated with, or supported by the Visual Pinball team or community.** It is developed with extensive AI-assisted coding, which is why it is kept apart from the official project. Please do **not** ask support questions about it in the Visual Pinball repositories, Discord servers or community forums: report problems and ask questions in [this fork's issues](https://github.com/SPD13/vpinball-steam-frame/issues). The official project is [vpinball/vpinball](https://github.com/vpinball/vpinball).
 
-See [The `steam-frame` branch](docs/Steam%20Frame%20Branch.md) for what this fork changes, and how far each part has been tested.
+[![Visual Pinball X, Steam Frame Edition: the trailer](docs/img/steam-frame-trailer.jpg)](https://youtu.be/g_C8ryf-UP0)
+
+**▶ [Watch the trailer](https://youtu.be/g_C8ryf-UP0)** (2:35): tables in the headset, the table picker, the web companion, scores and leaderboards, the Frame controllers, performance and eye-tracked foveated rendering.
+
+## What the player gets
+
+In the standalone builds (the Steam Frame app, and the standalone desktop builds):
+
+- **Table picker** in the in-game menu ("Tables"), which is also the start screen in launcher mode: choose and switch tables without leaving the player.
+- **Lists of tables** as tabs: All, Recent, Newly added, Most played, Favorites, plus a MENU tab for the library and application options. The tabs are large buttons, easy to hit with a mouse or a VR pointer.
+- **Thumbnails**: a grid of table images, loaded in the background with a spinner on each tile meanwhile; a list view is also available. A table without an image gets a screenshot when it is closed, and "Replace table image" takes a new one.
+- **Favorites**: a star on each thumbnail, or "Add to favorites" in the table's page; the Favorites tab lists them.
+- **Pagination**: 12 tables per page, with a pager above and below the list, so large libraries stay fast.
+- **Search** as you type (a virtual keyboard in VR), a letter filter and A–Z / Z–A sort in the All tab, and play statistics (added, last played, times played) for the hovered table.
+- **Table actions**: play, restart, rename, reset the table settings, delete, and use the table's VR room in the lobby.
+- **Lobby** in launcher mode, from which tables are started and to which they return.
+- **Web upload**: add tables and ROMs from a browser on the local network, with a pairing code that can be switched off, missing ROMs listed, and a link to the ROM folder. It can be on for the session only or always on (started with the application), and stays on while switching between the lobby and the tables.
+- **Tables page in the browser**, the home page of the web server: the library as a grid of thumbnails with the picker's tabs and search, a star to add or remove a favorite, and a "..." menu on each table to set its **display name** (the name the picker shows, the files are not renamed) or **delete** it with all its files. With an empty library it links to the file manager, which stays one click away.
+- **Missing ROM message** naming the files to add and where.
+- **VR**: the menu on a panel standing in the room, in the table's direction, at an adjustable distance, used with the controllers' pointer; notifications above the menu.
+- **No "controller detected" prompt for the VR controllers**: Steam Input also presents the Frame controllers as an Xbox gamepad; in VR, VPX no longer asks to set up a layout for it, since the controllers already work through OpenXR.
+- **Eye-tracked foveated rendering, exclusive to this fork and to the Steam Frame build**: full shading only around the point the eyes look at, following the headset's eye tracker, through a fragment shading rate image that the Frame's driver applies in its fast direct render path: 2–4 ms per frame on heavy tables at native 2160×2160 per eye, on by default (Medium); a "Foveated rendering" level (Off / Low / Medium / High), an "Eye-tracked" switch and a status line in the VR settings page. Not in upstream Visual Pinball, and inert on Windows and macOS, whose builds lack the Vulkan driver support and the bgfx patches ([full technical reference](docs/Foveated%20Rendering%20on%20the%20Steam%20Frame.md)).
+- **Steadier chrome, smoother edges**: specular anti-aliasing in the material shader stops the shiny parts from sparkling when the image is resampled every frame, on every platform; the headset builds also default to Standard FXAA, the only anti-aliasing within the Frame's budget at native resolution ([details](docs/Image%20Quality%20on%20the%20Steam%20Frame.md)).
+- **Scores and leaderboards**: the score of every game played on a library table is recorded automatically, for the player chosen in the lobby ("Player: <name>"), with a result screen (rank, personal best, table record) when the lobby comes back, a Scores tab with the leaderboard of each table, the 10 best scores in each table's page, and a Scores page in the browser to filter, reassign, delete or clear scores (with confirmation) and manage the players ([details](docs/Table%20Scores%20and%20Leaderboards.md)).
+- **Dynamic resolution in the headset**: the rendering resolution follows the GPU time of the frames, between a minimum and the table's resolution, so heavy tables and a hot headset keep their frame rate instead of judder on head movements, and light tables keep the full sharpness; a switch, a target and a minimum in the VR settings page, with a status line.
+
+## More details
+
+What the fork changes, file by file, which builds contain what, and how far each part has been tested: [Steam Frame Edition, the technical documentation](docs/Steam%20Frame%20Branch.md).
 
 The rest of this file is the upstream README.
 
