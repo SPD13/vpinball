@@ -2,6 +2,10 @@
 
 This branch of the fork `SPD13/vpinball` prepares Visual Pinball's standalone player for the Valve Steam Frame (SteamOS on ARM64, SteamVR's OpenXR runtime, Vulkan), and adds a table launcher that works from inside the headset. It starts from upstream commit `fd5e18d` (10.8.1 beta).
 
+[![Visual Pinball, Steam Frame Edition: the trailer](img/steam-frame-trailer.jpg)](https://youtu.be/g_C8ryf-UP0)
+
+**▶ [Watch the trailer](https://youtu.be/g_C8ryf-UP0)** (2:35): tables in the headset, the table picker, the web companion, scores and leaderboards, the Frame controllers, performance and eye-tracked foveated rendering.
+
 This document lists everything the branch changes, where, and how far each part has been checked.
 
 ## What the player gets
@@ -253,7 +257,7 @@ Files: `src/core/ScoreTracker.h/.cpp`, `lib/src/ScoreStore.h/.cpp`, `src/ui/live
 - **Storage** (`ScoreStore`, thread safe, revision counter for polling): `profiles.json` (players, active player) and `scores.json` (one entry per player and game: table uuid, path, name, ROM, profile, slot, players, score, date, duration, source) in the preferences folder, written to a temporary file then renamed. One leaderboard per table file; equal scores ordered by date. Deleting a player keeps their scores, unassigned.
 - **Lobby**: "Player: <name>" at the top of the picker opens the profiles page (choose, or add with the keyboard; it opens by itself the first time without any player); a **Scores** tab between Favorites and MENU (tab names shortened to fit on one line in VR) lists the tables with scores and opens their leaderboard (all scores or best per player, up to 50 rows, Play); a table's page shows its 10 best scores; back from a table, a **result page** shows each game's score, rank and place among the players, "New personal best!" or "New record of the table!", and the leaderboard around it, with "Save under a new player..." when nobody was selected. The VR keyboard of the search is now a reusable function, also shown by `TextEntryPage` for names.
 - **Web**: a **Scores** page (header link on every page, "Show scores" in each table's menu) with table and player filters, All scores / Best per player views, give a score to another player, delete one, **clear the scores of a table or all of them** (confirmation dialog, typing `DELETE` for all), and the players panel (add, rename, delete, set active); it polls every 3 s. Routes `/scores`, `/score-delete`, `/score-assign`, `/scores-clear` (`uuid` or `all=1`, never an empty uuid), `/profile-add`, `/profile-rename`, `/profile-delete`, `/profile-active`, behind pairing, 404 in the mobile builds; `/info` reports `scores`.
-- **Library coverage** (macOS, the Frame's 46 tables with its ROMs and NVRAMs, played unattended): 44 record their games (29 `pinmame`, 14 `script`, 1 `b2s`); James Bond 007 and Street Fighter 2 could not be played to the end by the autoplay. The harness, the probing techniques (probe memory maps, NVRAM files, game state bytes, game on solenoid) and what was learned are in section 12 and appendix A of the scores document.
+- **Library coverage** (macOS, the Frame's 46 tables with its ROMs and NVRAMs, played unattended): 44 record their games unattended (29 `pinmame`, 14 `script`, 1 `b2s`); James Bond 007 and Street Fighter 2, which the autoplay could not play to the end, were confirmed by hand on the Frame: all 46 tables record. The harness, the probing techniques (probe memory maps, NVRAM files, game state bytes, game on solenoid) and what was learned are in section 12 and appendix A of the scores document.
 - **To check on the Steam Frame**: B2S tables without backglass file, the name entry with the VR keyboard, the result page in the headset, and the score of Ulysse 31 against its display (scale of 10 inferred).
 
 ## Effects on existing builds

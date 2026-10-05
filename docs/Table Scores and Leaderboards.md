@@ -244,15 +244,15 @@ Names are kept on one line (tabs and line breaks become spaces) and trimmed. Del
 ## 9. Status and how it was checked
 
 - **macOS**: built and run. The capture was driven with a test table (an empty table with a script sidecar that simulates games through each source in turn: script variables, B2S, UltraDMD scoreboard, saved high scores) and a real ROM table for `pinmame`: two games in a session give two records, a game left in progress gives none, a two-player game gives player 1 to the active profile and player 2 unassigned. The lobby pages were checked from captures of the running application. The web page and its routes were checked with `curl` and in Chrome (headless Chrome for the clear actions, also at phone width).
-- **Library coverage** (October 2026, macOS, the 46 tables of the Frame's library with the Frame's ROMs and NVRAMs, section 12): every table was played unattended. The first pass recorded 33 tables; the misses were fixed with two tracker changes (the player count and game on solenoid signals, section 3.2), one script rule, three game on rules and four new memory maps. In the final pass **44 of the 46 tables record their games**, by source:
+- **Library coverage** (October 2026, macOS, the 46 tables of the Frame's library with the Frame's ROMs and NVRAMs, section 12): every table was played unattended. The first pass recorded 33 tables; the misses were fixed with two tracker changes (the player count and game on solenoid signals, section 3.2), one script rule, three game on rules and four new memory maps. In the final pass **44 of the 46 tables record their games** unattended, and the 2 others were confirmed by hand on the Steam Frame: **all 46 tables record**. By source:
 
   | Source | Tables |
   |---|---|
-  | `pinmame` | 29, of which 4 with a map added locally and 3 with a game on rule |
+  | `pinmame` | 31, of which 4 with a map added locally and 3 with a game on rule |
   | `script` | 14 (one with a rule) |
   | `b2s` | 1 (Apollo) |
 
-  The two others, James Bond 007 and Street Fighter 2, could not be played to the end by the autoplay (the ball is not launched, or gets stuck); their scores and game start are read, their end of game is not verified. Every recorded score was checked against the final value of its source and, where the table shows it, against the screen (Apollo's reels, "GAME OVER" and "MATCH" at the moment of the record). Two-player games were checked on a ROM table (Attack from Mars: 125,301,850 and 286,554,310) and a script table (Blade Runner 2049: 826,820 and 879,100): player 1 goes to the active profile, player 2 to nobody. Appendix A lists every table.
+  The autoplay could not play James Bond 007 and Street Fighter 2 to the end (the ball is not launched, or gets stuck). Both were then played by hand on the Steam Frame (October 4, 2026): James Bond 007 recorded 44,670 and Street Fighter 2 31,308,850, from `pinmame`, the end of game from the game over flag of the machine. Every recorded score was checked against the final value of its source and, where the table shows it, against the screen (Apollo's reels, "GAME OVER" and "MATCH" at the moment of the record). Two-player games were checked on a ROM table (Attack from Mars: 125,301,850 and 286,554,310) and a script table (Blade Runner 2049: 826,820 and 879,100): player 1 goes to the active profile, player 2 to nobody. Appendix A lists every table.
 
   The test code is applied to the source only for the runs and is not part of the commits (`Doc/test-hooks/` of the workspace, section 12).
 - **Steam Frame**: not yet run there. To check: B2S tables without a `.directb2s` file, the VR keyboard in the name entry, the result page in the headset.
@@ -265,7 +265,6 @@ Names are kept on one line (tabs and line breaks become spaces) and trimmed. Del
 - The `high_scores` section of the memory maps is not used (only `game_state`).
 - A game ended by the game on solenoid is recorded 20 s after its end (`GAME_ON_OFF_DELAY`); leaving the table within those 20 s discards it, as a game in progress.
 - The scale of 10 of Juegos Populares Faeton (Ulysse 31) is inferred, not read on its display (section 12.6).
-- James Bond 007 and Street Fighter 2 could not be played to the end unattended: their scores and game start are read, their end of game is not verified.
 - Two players could not always be started on the Stern SAM tables by the autoplay; their player 2 address is verified on Iron Man only (players 3 and 4 follow the stride on every local map).
 - The pages are served over plain HTTP, like the rest of the web server; the scores routes are behind the pairing code when it is on.
 - The Visual Studio project files were not updated; the CMake build lists the new files (`ScoreStore` and `ScoreTracker` in `VPX_STANDALONE_SOURCES`, `ScoresPage` in `VPX_SOURCES`).
@@ -437,7 +436,7 @@ About the tables and the machines:
 - **Machines boot with garbage or with the last game.** At start, maps show the previous game's scores, sometimes "in game" with a player count, for a fraction of a second (Robocop, Playboy, Attack from Mars). The rule "a game must have been seen at zero" (section 3.4) keeps these out.
 - **Attract modes blink the scores.** After a game, Bally Evel Knievel shows its last score on all four displays, blinking with zeros. A tracker without end of game signal would read that as games starting and ending: a trusted signal avoids it.
 - **Scoreboards do not always tell the players**: the UltraDMD scoreboard of Masters of the Universe always says 2 players. The script's `PlayersPlayingGame` is right.
-- **Some tables cannot be played unattended**: James Bond 007 (Gottlieb 1980, timed play) and Street Fighter 2 (ball stuck after the first points) never finished a game with the autoplay. Their scores and game start are read correctly; their end of game was not checked. Others get a ball stuck now and then (The Simpsons once in four games): one failed run of a table that passed before is not a regression, run it again.
+- **Some tables cannot be played unattended**: James Bond 007 (Gottlieb 1980, timed play) and Street Fighter 2 (ball stuck after the first points) never finished a game with the autoplay. Their scores and game start are read correctly, and both record when played by hand (checked on the Frame). Others get a ball stuck now and then (The Simpsons once in four games): one failed run of a table that passed before is not a regression, run it again.
 - **Single-player machines** ignore the second Start (Apollo, Williams 1967). The Stern SAM tables sometimes ignored a second Start 2.5 s after the first, and took it 0.7 s after: a 2-player autoplay is not guaranteed.
 - **Spanish 8-bit machines** (Peyper/Sonic Star Wars, Juegos Populares Faeton/Ulysse 31) have no maps and no platform files upstream. Both keep their whole state in 2 KB of battery-backed RAM: scores as 3 bytes of BCD per player on a 3-byte stride, a player count that goes back to 0 at the end, and 7-digit displays that show the 6 digits of memory followed by a fixed 0 (`scale: 10`). For Peyper the fixed 0 is in the driver (segment 36); for Juegos Populares it is inferred (6 digits in memory, no room for a 7th) and should be checked against the display on the Frame, where the backglass shows it.
 - **The memory map probe needs the machine to be the only thing changing**: in attract mode a machine copies a score to every display (Faeton shows one score on the four players), blinks scores, or shows high scores. Only readings taken after the Start press say which address is whose score.
@@ -457,7 +456,7 @@ About the test setup (these cost time; avoid them):
 
 ## Appendix A. Coverage of the Steam Frame library (October 2026)
 
-Final pass on macOS, one unattended game per table (section 12). "Score" is the score recorded in that game, checked against the last value of the source. Tables without an entry in the last column needed nothing.
+Final pass on macOS, one unattended game per table (section 12), except the two tables played by hand on the Frame. "Score" is the score recorded in that game, checked against the last value of the source. Tables without an entry in the last column needed nothing.
 
 | Table | ROM | Source | End of game | Score | Fix |
 |---|---|---|---|---:|---|
@@ -476,7 +475,7 @@ Final pass on macOS, one unattended game per table (section 12). "Score" is the 
 | Godzilla (Sega 1998) | godzilla | pinmame | the game over flag of the machine | 4,356,820 |  |
 | Indiana Jones - The Pinball Adventure (Williams 1993) | ij_l7 | pinmame | the game over flag of the machine | 3,561,000 |  |
 | Iron Man Minimal (Stern 2010) | im_185ve | pinmame | the game on solenoid of the machine | 1,513,190 | New map (probe) + game on solenoid rule (SAM) |
-| James Bond 007 (Gottlieb 1980) | jamesb | - | - | - | Not played to the end by the autoplay (ball not launched): end of game not verified |
+| James Bond 007 (Gottlieb 1980) | jamesb | pinmame | the game over flag of the machine | 44,670 | Not played to the end by the autoplay (ball not launched); score from a game played by hand on the Frame |
 | JAWS 50Th Anniversary (Original 2025) | - | script | a script variable | 1,762,100 |  |
 | JohnWick (BABAYAGA Pinball edition, 2023) (VR ROOM Minimal) Sphere | - | script | a script variable | 30,030 |  |
 | Masters of the Universe-custom (VR ROOM edition) | - | script | a script variable | 220,000 | Script rule (nvScore, VpGameInPlay) |
@@ -494,7 +493,7 @@ Final pass on macOS, one unattended game per table (section 12). "Score" is the 
 | Star Wars Trilogy | swtril43 | pinmame | the game over flag of the machine | 1,410,290 |  |
 | Stargate Minimal (Gottlieb 1995) | stargat5 | pinmame | the game over flag of the machine | 10,269,180 |  |
 | Starship Troopers (Sega 1997) | startrp2 | pinmame | the game over flag of the machine | 4,171,910 |  |
-| Street Fighter 2 | sfight2 | - | - | - | Not played to the end by the autoplay (ball stuck): end of game not verified |
+| Street Fighter 2 | sfight2 | pinmame | the game over flag of the machine | 31,308,850 | Not played to the end by the autoplay (ball stuck); score from a game played by hand on the Frame |
 | Super Mario Bros v 1.2 | smb | pinmame | the game over flag of the machine | 1,571,360 |  |
 | Super Mario Bros. Mushroom World (Gottlieb 1992) | smbmush | pinmame | the game over flag of the machine | 4,113,330 |  |
 | Terminator 3 Rise of the Machines | term3 | pinmame | the game over flag of the machine | 4,873,670 |  |
