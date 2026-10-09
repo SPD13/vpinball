@@ -258,7 +258,8 @@ public:
    void SetDynamicResolutionTarget(float target) { m_dynamicResolutionTarget = clamp(target, 0.5f, 1.f); }
    float GetDynamicResolutionMinScale() const { return m_dynamicResolutionMinScale; }
    void SetDynamicResolutionMinScale(float minScale) { m_dynamicResolutionMinScale = clamp(minScale, 0.5f, 1.f); }
-   float GetDynamicRenderScale() const { return m_dynamicRenderScale; } // Scale the next frame renders at (1 when disabled)
+   // Scale the next frame renders at (1 when disabled, and while a table image is captured: the capture reads the whole swapchain image, at full sharpness)
+   float GetDynamicRenderScale() const { return m_tableCaptureView != TableCaptureView::None ? 1.f : m_dynamicRenderScale.load(); }
    // One line for the settings page: "not supported", "off", or the current size, scale, GPU time and budget
    string GetDynamicResolutionStatus() const;
    bool IsOpenXRReady() const { return m_xrInstance != XR_NULL_HANDLE; }

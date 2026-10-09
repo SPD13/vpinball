@@ -47,7 +47,10 @@ struct ScoreRank {
 
 // Player profiles and scores, kept in profiles.json and scores.json. Thread safe, as the web server uses it from its own thread.
 //
-// profiles.json: {"activeProfileId":"...","profiles":[{id,name,createdAt}]}
+// Each player of the games (1 to MAX_PLAYERS) may be given a profile, which gets the scores of that player. The same profile may be given to
+// several players, and players without profile are unassigned (their scores belong to nobody). The active profile is the one of player 1.
+//
+// profiles.json: {"activeProfileId":"...","players":["profile id of player 1, or empty",...],"profiles":[{id,name,createdAt}]}
 // scores.json: {"scores":[{id,tableUuid,tablePath,tableName,rom,profileId,playerSlot,playerCount,score,playedAt,durationSec,source}]}
 class ScoreStore final
 {
@@ -61,17 +64,26 @@ public:
       LogCallback log;
    };
 
+   static constexpr int MAX_PLAYERS = 6;
+
    explicit ScoreStore(Config config);
 
    // Profiles, sorted by name (case insensitive)
    std::vector<Profile> GetProfiles() const;
    std::optional<Profile> GetProfile(const std::string& id) const;
+   // Profile of player 1
    std::optional<Profile> GetActiveProfile() const;
    bool SetActiveProfile(const std::string& id);
-   // Fails on blank names and names already used (case insensitive). The first profile becomes the active one.
+   // Profile given to a player (1 to MAX_PLAYERS), none if unassigned
+   std::optional<Profile> GetPlayerProfile(int player) const;
+   // Profile ids of the players, empty for the unassigned ones (index 0 is player 1)
+   std::vector<std::string> GetPlayerProfileIds() const;
+   // Empty profileId: the player is unassigned
+   bool SetPlayerProfile(int player, const std::string& profileId);
+   // Fails on blank names and names already used (case insensitive). The first profile is given to player 1.
    std::optional<Profile> AddProfile(const std::string& name);
    bool RenameProfile(const std::string& id, const std::string& name);
-   // The scores of the profile are kept, and belong to nobody afterward
+   // The scores of the profile are kept, and belong to nobody afterward. The players it was given to become unassigned.
    bool DeleteProfile(const std::string& id);
 
    // Scores of a table (all tables if empty), best first, ties sorted by date (oldest first, as it was reached first)
@@ -106,7 +118,7 @@ private:
    const Config m_config;
    mutable std::mutex m_mutex; // Protects everything below
    std::vector<Profile> m_profiles;
-   std::string m_activeProfileId;
+   std::vector<std::string> m_playerProfileIds = std::vector<std::string>(MAX_PLAYERS); // Index 0 is player 1, empty if unassigned
    std::vector<Score> m_scores;
    std::atomic<uint64_t> m_revision { 1 };
 };
