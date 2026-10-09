@@ -35,6 +35,29 @@ In the standalone builds (the Steam Frame app, and the standalone desktop builds
 - **Scores and leaderboards**: the score of every game played on a library table is recorded automatically, for the player chosen in the lobby ("Player: <name>"), with a result screen (rank, personal best, table record) when the lobby comes back, a Scores tab with the leaderboard of each table, the 10 best scores in each table's page, and a Scores page in the browser to filter, reassign, delete or clear scores (with confirmation) and manage the players ([details](docs/Table%20Scores%20and%20Leaderboards.md)).
 - **Dynamic resolution in the headset**: the rendering resolution follows the GPU time of the frames, between a minimum and the table's resolution, so heavy tables and a hot headset keep their frame rate instead of judder on head movements, and light tables keep the full sharpness; a switch, a target and a minimum in the VR settings page, with a status line.
 
+## Controllers
+
+The Steam Frame controllers work out of the box. Each button has a default role, shown below; the roles can be changed in the menu, under **Input Settings**.
+
+![The Steam Frame controllers and the role of each button: triggers for the flippers, bumpers to nudge, grips for the magna-saves, left thumbstick to nudge, right thumbstick for the plunger, view button to open the menu, menu button to quit the table, A to start a game, B to insert a coin](docs/img/steam-frame-controllers.svg)
+
+| Control | Controller | During a game | In the menu |
+| --- | --- | --- | --- |
+| Trigger | Left | Left flipper; pulled further, also the staged (upper) flipper of the tables that have one | Click the item the controller points at |
+| Trigger | Right | Right flipper; pulled further, also the staged flipper | Click the item the controller points at |
+| Bumper | Left / right | Nudge the table to the left / to the right | |
+| Grip | Left / right | Left / right magna-save | |
+| Thumbstick | Left | Tilt it to nudge the table (the further, the harder) | Up / down: move the selection |
+| Thumbstick click | Left | Align the view using the controllers (on / off) | |
+| Thumbstick | Right | Plunger: pull the stick down (towards you) and let go | Left / right: change a value |
+| Thumbstick click | Right | Launch ball (tables with a launch button) | Settings pages: reset to the defaults |
+| D-pad | Left | | Move the selection; left / right changes a value |
+| View button | Left | Open the menu | |
+| Menu button | Right | Quit the table, back to the lobby | |
+| A | Right | Start a game | Settings pages: save the changes |
+| B | Right | Insert a coin | Settings pages: undo the changes |
+| X, Y | Right | Not used: free to map to another action | |
+
 ## More details
 
 What the fork changes, file by file, which builds contain what, and how far each part has been tested: [Steam Frame Edition, the technical documentation](docs/Steam%20Frame%20Branch.md).
