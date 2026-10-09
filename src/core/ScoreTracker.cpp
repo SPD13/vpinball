@@ -441,8 +441,9 @@ void ScoreTracker::RecordGame(const vector<int64_t>& scores, int playerCount, So
    const int players = std::clamp(std::max(playerCount, lastScoring), 1, static_cast<int>(scores.size()));
 
    VPinballLib::ScoreStore& store = g_app->GetScoreStore();
-   const std::optional<VPinballLib::Profile> profile = store.GetActiveProfile();
+   const vector<string> playerProfileIds = store.GetPlayerProfileIds();
    vector<VPinballLib::Score> records;
+   string assigned; // For the log
    for (int slot = 1; slot <= players; slot++)
    {
       if (scores[slot - 1] <= 0)
@@ -452,8 +453,12 @@ void ScoreTracker::RecordGame(const vector<int64_t>& scores, int playerCount, So
       record.tablePath = m_table.path;
       record.tableName = m_table.name;
       record.rom = m_rom;
-      // The player wearing the headset is player 1, the scores of the other players belong to nobody until someone gives them to a profile
-      record.profileId = (slot == 1 && profile) ? profile->id : string();
+      // Each player gets the profile given to it in the lobby (player 1 is the one wearing the headset), the scores of unassigned players belong to nobody
+      // until someone gives them to a profile
+      if (slot <= static_cast<int>(playerProfileIds.size()))
+         record.profileId = playerProfileIds[slot - 1];
+      if (const std::optional<VPinballLib::Profile> profile = record.profileId.empty() ? std::nullopt : store.GetProfile(record.profileId); profile)
+         assigned += std::format("{}player {}: {}", assigned.empty() ? "" : ", ", slot, profile->name);
       record.playerSlot = slot;
       record.playerCount = players;
       record.score = scores[slot - 1];
@@ -464,7 +469,7 @@ void ScoreTracker::RecordGame(const vector<int64_t>& scores, int playerCount, So
    for (const VPinballLib::Score& record : store.AddScores(std::move(records)))
       m_recordedIds.push_back(record.id);
    PLOGI << "[Scores] Game recorded from " << GetSourceName(source) << " (" << players << " player(s), " << durationSec << "s): " << FormatScores(scores)
-         << (profile ? " (player 1: "s + profile->name + ')' : " (no active profile)"s);
+         << (assigned.empty() ? " (no player has a profile)"s : " ("s + assigned + ')');
 }
 
 ///////////////////////////////////////////////////////////////////////////////

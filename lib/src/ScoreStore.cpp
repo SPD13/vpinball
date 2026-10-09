@@ -59,7 +59,6 @@ void ScoreStore::Load()
    if (std::ifstream file(m_config.profilesPath); file.is_open()) {
       try {
          const nlohmann::json json = nlohmann::json::parse(file);
-         m_activeProfileId = json.value("activeProfileId", ""s);
          for (const auto& entry : json.at("profiles")) {
             Profile profile;
             profile.id = entry.value("id", ""s);
@@ -68,12 +67,21 @@ void ScoreStore::Load()
             if (!profile.id.empty())
                m_profiles.push_back(profile);
          }
+         const auto exists = [this](const string& id) { return std::ranges::any_of(m_profiles, [&id](const Profile& profile) { return profile.id == id; }); };
+         if (const auto players = json.find("players"); players != json.end() && players->is_array()) {
+            for (size_t i = 0; i < players->size() && i < m_playerProfileIds.size(); i++)
+               if (const auto& id = (*players)[i]; id.is_string() && exists(id.get<string>()))
+                  m_playerProfileIds[i] = id.get<string>();
+         }
+         else {
+            // Files written before the players could be given a profile: the active profile is player 1, and there always was one
+            const string activeProfileId = json.value("activeProfileId", ""s);
+            m_playerProfileIds[0] = exists(activeProfileId) ? activeProfileId : m_profiles.empty() ? string() : m_profiles.front().id;
+         }
       } catch (const std::exception& e) {
          Log(LogLevel::Error, "Failed to parse " + m_config.profilesPath.string() + ": " + e.what());
       }
    }
-   if (std::ranges::none_of(m_profiles, [this](const Profile& profile) { return profile.id == m_activeProfileId; }))
-      m_activeProfileId = m_profiles.empty() ? string() : m_profiles.front().id;
 
    if (std::ifstream file(m_config.scoresPath); file.is_open()) {
       try {
@@ -130,7 +138,8 @@ void ScoreStore::SaveProfiles() const
    for (const Profile& profile : m_profiles)
       profiles.push_back({ { "id", profile.id }, { "name", profile.name }, { "createdAt", profile.createdAt } });
    string error;
-   if (!SaveJson(m_config.profilesPath, { { "activeProfileId", m_activeProfileId }, { "profiles", profiles } }, error))
+   // activeProfileId is kept for older versions, which only read it
+   if (!SaveJson(m_config.profilesPath, { { "activeProfileId", m_playerProfileIds[0] }, { "players", m_playerProfileIds }, { "profiles", profiles } }, error))
       Log(LogLevel::Error, error);
 }
 
@@ -184,18 +193,39 @@ std::optional<Profile> ScoreStore::GetProfile(const string& id) const
 
 std::optional<Profile> ScoreStore::GetActiveProfile() const
 {
-   std::lock_guard lock(m_mutex);
-   const auto it = std::ranges::find_if(m_profiles, [this](const Profile& profile) { return profile.id == m_activeProfileId; });
-   return it == m_profiles.end() ? std::nullopt : std::optional<Profile>(*it);
+   return GetPlayerProfile(1);
 }
 
 bool ScoreStore::SetActiveProfile(const string& id)
 {
+   return !id.empty() && SetPlayerProfile(1, id);
+}
+
+std::optional<Profile> ScoreStore::GetPlayerProfile(int player) const
+{
+   if (player < 1 || player > MAX_PLAYERS)
+      return std::nullopt;
    std::lock_guard lock(m_mutex);
-   if (std::ranges::none_of(m_profiles, [&id](const Profile& profile) { return profile.id == id; }))
+   const string& id = m_playerProfileIds[player - 1];
+   const auto it = std::ranges::find_if(m_profiles, [&id](const Profile& profile) { return profile.id == id; });
+   return id.empty() || it == m_profiles.end() ? std::nullopt : std::optional<Profile>(*it);
+}
+
+std::vector<string> ScoreStore::GetPlayerProfileIds() const
+{
+   std::lock_guard lock(m_mutex);
+   return m_playerProfileIds;
+}
+
+bool ScoreStore::SetPlayerProfile(int player, const string& profileId)
+{
+   if (player < 1 || player > MAX_PLAYERS)
       return false;
-   if (m_activeProfileId != id) {
-      m_activeProfileId = id;
+   std::lock_guard lock(m_mutex);
+   if (!profileId.empty() && std::ranges::none_of(m_profiles, [&profileId](const Profile& profile) { return profile.id == profileId; }))
+      return false;
+   if (m_playerProfileIds[player - 1] != profileId) {
+      m_playerProfileIds[player - 1] = profileId;
       SaveProfiles();
       m_revision++;
    }
@@ -211,9 +241,9 @@ std::optional<Profile> ScoreStore::AddProfile(const string& name)
    if (std::ranges::any_of(m_profiles, [&trimmed](const Profile& profile) { return ToLower(profile.name) == ToLower(trimmed); }))
       return std::nullopt;
    Profile profile { GenerateId(), trimmed, Now() };
+   if (m_profiles.empty() && m_playerProfileIds[0].empty())
+      m_playerProfileIds[0] = profile.id;
    m_profiles.push_back(profile);
-   if (m_activeProfileId.empty())
-      m_activeProfileId = profile.id;
    SaveProfiles();
    m_revision++;
    Log(LogLevel::Info, "Profile added: " + trimmed);
@@ -245,8 +275,9 @@ bool ScoreStore::DeleteProfile(const string& id)
       return false;
    Log(LogLevel::Info, "Profile deleted: " + it->name);
    m_profiles.erase(it);
-   if (m_activeProfileId == id)
-      m_activeProfileId = m_profiles.empty() ? string() : m_profiles.front().id;
+   for (string& playerProfileId : m_playerProfileIds)
+      if (playerProfileId == id)
+         playerProfileId.clear();
    bool scoresChanged = false;
    for (Score& score : m_scores)
       if (score.profileId == id) {

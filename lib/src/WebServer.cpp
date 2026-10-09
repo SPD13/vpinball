@@ -895,6 +895,7 @@ void WebServer::Scores(struct mg_connection *c, struct mg_http_message* hm)
    const string response = json {
       { "revision", revision },
       { "activeProfileId", active ? active->id : string() },
+      { "players", store.GetPlayerProfileIds() }, // Profile id of each player of the games, empty if unassigned
       { "profiles", profiles },
       { "tables", tables },
       { "scores", list } }.dump();
@@ -1046,7 +1047,7 @@ void WebServer::ProfileDelete(struct mg_connection *c, struct mg_http_message* h
 #endif
 }
 
-// POST with 'id': the profile to which the next scores are given
+// POST with 'id': the profile of player 1, to which the next scores of the one wearing the headset are given
 void WebServer::ProfileActive(struct mg_connection *c, struct mg_http_message* hm)
 {
 #ifdef __LIBVPINBALL__

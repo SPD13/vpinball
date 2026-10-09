@@ -50,12 +50,6 @@ static string GetTableName(const string& uuid, const string& fallback)
    return table ? table->name : fallback;
 }
 
-static string GetActivePlayerName()
-{
-   const std::optional<Profile> profile = g_app->GetScoreStore().GetActiveProfile();
-   return profile ? profile->name : string();
-}
-
 // One line of a leaderboard: rank, score (right aligned), player and date in columns
 static void RenderScoreRow(int rank, const Score& score, const string& playerName, bool highlight)
 {
@@ -90,17 +84,59 @@ static void OpenTableScores(Player* player, const string& uuid)
 
 void AddPlayerItem(InGameUIPage& page)
 {
-   const string name = GetActivePlayerName();
-   page.AddItem(std::make_unique<InGameUIItem>(name.empty() ? "Player: nobody (choose who is playing)"s : "Player: " + name,
-      "The scores of the games are recorded for this player. Select to change player, or to add one."s, "profiles"s));
+   ScoreStore& store = g_app->GetScoreStore();
+   vector<std::pair<int, string>> players; // The players which have a profile, and its name
+   for (int slot = 1; slot <= ScoreStore::MAX_PLAYERS; slot++)
+      if (const std::optional<Profile> profile = store.GetPlayerProfile(slot); profile)
+         players.emplace_back(slot, profile->name);
+   // Short, as the label is not wrapped: the whole list is in the tooltip
+   string label, list;
+   if (players.empty())
+      label = "Player: nobody (choose who is playing)"s;
+   else if (players.size() == 1 && players.front().first == 1)
+      label = "Player: " + players.front().second;
+   else
+   {
+      label = "Players:"s;
+      for (const auto& [slot, name] : players)
+      {
+         label += std::format("{} {} {}", label.back() == ':' ? "" : ",", slot, name);
+         list += std::format("{}Player {}: {}", list.empty() ? "" : "\n", slot, name);
+      }
+      list += '\n';
+   }
+   page.AddItem(std::make_unique<InGameUIItem>(label, list + "The scores of the games are recorded for the profile of each player. Select to change who is playing, or to add a profile.", "profiles"s));
 }
 
 
 ///////////////////////////////////////////////////////////////////////////////
 // Profiles
 
+// Entry of the name of a new profile, which is given to a player of the games
+static void OpenNewProfile(Player* player, int slot)
+{
+   player->m_liveUI->m_inGameUI.AddPage("profiles/new"s,
+      [slot]()
+      {
+         return std::make_unique<TextEntryPage>("New profile"s, ""s,
+            [slot](const string& name)
+            {
+               const std::optional<Profile> profile = g_app->GetScoreStore().AddProfile(name);
+               if (profile)
+                  g_app->GetScoreStore().SetPlayerProfile(slot, profile->id);
+               g_pplayer->m_liveUI->PushNotification(
+                  !profile ? "A profile is already named " + name : slot == 1 ? "Playing as " + profile->name : std::format("{} is player {}", profile->name, slot), 3000);
+            },
+            false, 32);
+      });
+   player->m_liveUI->m_inGameUI.Navigate("profiles/new"s);
+}
+
 ProfilesPage::ProfilesPage()
-   : InGameUIPage("Who is playing?"s, "The scores of the games are recorded for the selected player.\nPlayers are renamed and deleted from the Scores page of a browser (Wi-Fi upload)."s, SaveMode::None)
+   : InGameUIPage("Who is playing?"s,
+        "The scores of each player of the games are recorded for the profile given to it. Player 1 is the one wearing the headset, and a profile may be given to several players.\n"
+        "Profiles are renamed and deleted from the Scores page of a browser (Wi-Fi upload)."s,
+        SaveMode::None)
 {
 }
 
@@ -117,42 +153,80 @@ void ProfilesPage::BuildPage()
    ScoreStore& store = g_app->GetScoreStore();
    m_revision = store.GetRevision();
    const vector<Profile> profiles = store.GetProfiles();
-   const std::optional<Profile> active = store.GetActiveProfile();
+
+   const auto addNewProfile = [this]() { AddItem(std::make_unique<InGameUIItem>("New profile..."s, "Add a profile, given to player 1"s, [this]() { OpenNewProfile(m_player, 1); })); };
+   if (profiles.empty())
+   {
+      AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Info, "No profile yet: add yours to get your scores in the leaderboards."s));
+      addNewProfile();
+   }
+
+   AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Header, "Players"s));
+   for (int slot = 1; slot <= ScoreStore::MAX_PLAYERS; slot++)
+   {
+      const std::optional<Profile> profile = store.GetPlayerProfile(slot);
+      const string path = std::format("profiles/player{}", slot);
+      m_player->m_liveUI->m_inGameUI.AddPage(path, [slot]() { return std::make_unique<PlayerProfilePage>(slot); });
+      AddItem(std::make_unique<InGameUIItem>(std::format("Player {}: {}", slot, profile ? profile->name : "Unassigned"s),
+         (profile ? std::format("The scores of player {} are recorded for {}.", slot, profile->name) : std::format("The scores of player {} belong to nobody.", slot))
+            + " Select to give this player a profile, or to make it unassigned.",
+         path));
+   }
+
+   if (!profiles.empty())
+      addNewProfile();
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+// Profile of a player
+
+PlayerProfilePage::PlayerProfilePage(int slot)
+   : InGameUIPage(std::format("Player {}", slot),
+        (slot == 1 ? "The one wearing the headset. "s : ""s) + "The scores of this player are recorded for the selected profile. Select it again to make the player unassigned."s,
+        SaveMode::None)
+   , m_slot(slot)
+{
+}
+
+void PlayerProfilePage::Render(float elapsedS)
+{
+   // Profiles may also be changed from a browser
+   if (m_revision != g_app->GetScoreStore().GetRevision())
+      RequestRebuild();
+   InGameUIPage::Render(elapsedS);
+}
+
+void PlayerProfilePage::BuildPage()
+{
+   ScoreStore& store = g_app->GetScoreStore();
+   m_revision = store.GetRevision();
+   const vector<Profile> profiles = store.GetProfiles();
+   const std::optional<Profile> current = store.GetPlayerProfile(m_slot);
    const vector<Score> scores = store.GetScores();
 
+   // Short, as info labels are not wrapped
    if (profiles.empty())
-      AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Info, "No player yet: add yourself to get your scores in the leaderboards."s));
+      AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Info, "No profile yet"s));
+   else
+      AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Info, current ? "Select " ICON_FK_CHECK " again to unassign"s : std::format("Player {} is unassigned", m_slot)));
    for (const Profile& profile : profiles)
    {
-      const bool isActive = active && active->id == profile.id;
+      const bool isCurrent = current && current->id == profile.id;
       const auto count = std::ranges::count_if(scores, [&profile](const Score& score) { return score.profileId == profile.id; });
-      AddItem(std::make_unique<InGameUIItem>((isActive ? ICON_FK_CHECK " "s : "     "s) + profile.name, std::format("{} score{}", count, count == 1 ? "" : "s"),
-         [this, id = profile.id, name = profile.name]()
+      string tooltip = std::format("{} score{}", count, count == 1 ? "" : "s");
+      if (isCurrent)
+         tooltip += std::format("\nSelect to make player {} unassigned", m_slot);
+      AddItem(std::make_unique<InGameUIItem>((isCurrent ? ICON_FK_CHECK " "s : "     "s) + profile.name, tooltip,
+         [this, id = profile.id, name = profile.name, isCurrent]()
          {
-            g_app->GetScoreStore().SetActiveProfile(id);
-            m_player->m_liveUI->PushNotification("Playing as " + name, 2000);
+            g_app->GetScoreStore().SetPlayerProfile(m_slot, isCurrent ? string() : id);
+            m_player->m_liveUI->PushNotification(isCurrent ? std::format("Player {} is unassigned", m_slot) : m_slot == 1 ? "Playing as " + name : std::format("{} is player {}", name, m_slot), 2000);
             m_player->m_liveUI->m_inGameUI.NavigateBack();
          }));
    }
 
-   AddItem(std::make_unique<InGameUIItem>("New player..."s, "Add a player, who becomes the one playing"s,
-      [this]()
-      {
-         m_player->m_liveUI->m_inGameUI.AddPage("profiles/new"s,
-            []()
-            {
-               return std::make_unique<TextEntryPage>("New player"s, ""s,
-                  [](const string& name)
-                  {
-                     const std::optional<Profile> profile = g_app->GetScoreStore().AddProfile(name);
-                     if (profile)
-                        g_app->GetScoreStore().SetActiveProfile(profile->id);
-                     g_pplayer->m_liveUI->PushNotification(profile ? "Playing as " + profile->name : "A player is already named " + name, 3000);
-                  },
-                  false, 32);
-            });
-         m_player->m_liveUI->m_inGameUI.Navigate("profiles/new"s);
-      }));
+   AddItem(std::make_unique<InGameUIItem>("New profile..."s, std::format("Add a profile, given to player {}", m_slot), [this]() { OpenNewProfile(m_player, m_slot); }));
 }
 
 
@@ -292,27 +366,43 @@ void ScoreResultPage::BuildPage()
          AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Info, rank->rank == 1 ? ICON_FK_TROPHY " New record of the table!"s : ICON_FK_STAR " New personal best!"s));
    }
    for (const Score& score : otherScores)
-      AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Info, std::format("Player {}: {} (unassigned: give it to a player from the Scores page of a browser)", score.playerSlot, ScoreStore::FormatScore(score.score))));
+   {
+      if (score.profileId.empty())
+      {
+         AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Info,
+            std::format("Player {}: {} (unassigned: give it to a profile from the Scores page of a browser)", score.playerSlot, ScoreStore::FormatScore(score.score))));
+         continue;
+      }
+      const std::optional<VPinballLib::ScoreRank> rank = store.GetRank(score.id);
+      string text = std::format("Player {}, {}: {}", score.playerSlot, GetPlayerName(score, profiles), ScoreStore::FormatScore(score.score));
+      if (rank)
+      {
+         text += std::format(", rank {} of {}", rank->rank, rank->total);
+         if (rank->personalBest)
+            text += rank->rank == 1 ? ", new record of the table!"s : ", new personal best!"s;
+      }
+      AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Info, text));
+   }
 
-   // Without player, the scores belong to nobody: they can be given to a new one
+   // Without profile, the scores of player 1 belong to nobody: they can be given to a new one
    if (!ownScores.empty() && ownScores.front().profileId.empty())
    {
       vector<string> ids;
       for (const Score& score : ownScores)
          ids.push_back(score.id);
-      AddItem(std::make_unique<InGameUIItem>("Save under a new player..."s, "No player was selected: create one to keep these scores under your name"s,
+      AddItem(std::make_unique<InGameUIItem>("Save under a new profile..."s, "Player 1 had no profile: create one to keep these scores under your name"s,
          [this, ids]()
          {
             m_player->m_liveUI->m_inGameUI.AddPage("profiles/new"s,
                [ids]()
                {
-                  return std::make_unique<TextEntryPage>("New player"s, ""s,
+                  return std::make_unique<TextEntryPage>("New profile"s, ""s,
                      [ids](const string& name)
                      {
                         const std::optional<Profile> profile = g_app->GetScoreStore().AddProfile(name);
                         if (!profile)
                         {
-                           g_pplayer->m_liveUI->PushNotification("A player is already named " + name, 3000);
+                           g_pplayer->m_liveUI->PushNotification("A profile is already named " + name, 3000);
                            return;
                         }
                         g_app->GetScoreStore().SetActiveProfile(profile->id);

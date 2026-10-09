@@ -6,13 +6,13 @@ Nothing has to be entered by hand: the score is read from the table while it run
 
 ## 1. What the player gets
 
-- **Players (profiles).** "Player: <name>" at the top of the table picker opens the list of players: pick who is playing, or add a new one with the keyboard (virtual keyboard in VR). The first time the lobby starts with no player, it opens this list. Players can also be added, renamed, deleted and made active from the browser.
+- **Players (profiles).** "Player: <name>" at the top of the table picker ("Players: 1 Seb, 2 Ann" when other players have a profile) opens "Who is playing?": players 1 to 6 of the games, each given a profile or unassigned. Selecting a player lists the profiles: selecting one gives it to the player, selecting the checked one again makes the player unassigned, and "New profile..." adds one with the keyboard (virtual keyboard in VR) and gives it to the player. The same profile may be given to several players. The first time the lobby starts with no profile, it opens this page. Profiles can also be added, renamed, deleted and given to player 1 from the browser.
 - **Automatic score capture.** At the end of each game on a library table, the scores are saved. Several games in one session give several scores. A game still running when the table is left is not recorded.
-- **Result screen.** Back in the lobby after a table, a page shows the score of each game, its rank on the table ("rank 3 of 17 (2 of 5 players)"), "New personal best!" or "New record of the table!", and the leaderboard around it, the session's scores highlighted. Without an active player, "Save under a new player..." creates one and gives it the scores just played.
+- **Result screen.** Back in the lobby after a table, a page shows the score of each game, its rank on the table ("rank 3 of 17 (2 of 5 players)"), "New personal best!" or "New record of the table!", and the leaderboard around it, the session's scores highlighted. Without a profile for player 1, "Save under a new profile..." creates one and gives it the scores just played.
 - **Scores tab** in the table picker: every table with scores, the last played first, with its best score and holder, and the active player's best and rank. Selecting one opens its leaderboard (all scores, or the best of each player), from which the table can be started.
 - **Table page** in the picker: the 10 best scores of the table under its actions ("No score yet: be the first!"), with a link to the whole leaderboard.
 - **Scores page in the browser** (`scores.html`): every score with filters by table and by player, "All scores" / "Best per player" views, give a score to another player, delete a score, clear the scores of a table or all of them, and manage the players. It updates by itself while games are played. The tables page gets "Show scores" in each table's "..." menu.
-- **Multiplayer.** In a game of several players, player 1 is the one wearing the headset: their score goes to the active player. The scores of the other players are kept as "Unassigned" and can be given to a player from the browser.
+- **Multiplayer.** In a game of several players, the score of each player goes to the profile given to it in the lobby (player 1 is the one wearing the headset). The scores of unassigned players are kept as "Unassigned" and can be given to a profile from the browser.
 
 ## 2. Decisions
 
@@ -20,7 +20,7 @@ These were chosen with the user before the implementation and shape the rest:
 
 | Question | Decision |
 |---|---|
-| Who gets the score of a multiplayer game | Player 1 → the active profile; players 2 and up → "Unassigned", reassignable in the web page |
+| Who gets the score of a multiplayer game | Each player (1 to 6) → the profile given to it in the lobby (player 1 → the active profile), or "Unassigned" when it has none, reassignable in the web page |
 | A game left in progress | Discarded: only games whose end was seen are recorded |
 | No source finds a score | Nothing is recorded, the miss is logged, and the table gets an entry in `score-rules.json`. There is no manual score entry |
 | What a leaderboard groups | One leaderboard per table file of the library (its uuid), not per ROM: two tables running the same ROM have separate leaderboards |
@@ -90,7 +90,7 @@ Scores already shown when the table starts do not start a game: they are often t
 
 **Games must start from zero.** A machine whose NVRAM was saved in the middle of a game boots with that game's scores in memory; a script may restore its last scores. So a game is only recorded if its scores were seen at zero within 3 s before its start (`GAME_START_ZERO_WINDOW`) or during it; otherwise: "Game ended without its scores being reset at its start (...): not recorded, as they are from an earlier game".
 
-**Recording** (`RecordGame`): a game whose scores are all zero is skipped. The number of players is what the source says, or up to the last player who scored. One score is stored per player with a non-zero score: player 1 gets the active profile (if any), the others none. The duration of the game and the ROM name are kept. The scores are written at once, so a crash later in the session does not lose them.
+**Recording** (`RecordGame`): a game whose scores are all zero is skipped. The number of players is what the source says, or up to the last player who scored. One score is stored per player with a non-zero score, given to the profile of that player (`ScoreStore::GetPlayerProfileIds`), or to nobody if the player is unassigned or above 6. The duration of the game and the ROM name are kept. The scores are written at once, so a crash later in the session does not lose them.
 
 ### 3.5 What the log says
 
@@ -100,7 +100,7 @@ Every line starts with `[Scores]`. At the end of each session one line sums it u
 - `Session of '...': no score source found (rom: none). Add a rule in score-rules.json to record its scores.` (warning)
 - `Session of '...': scores seen from script but no finished game (the last one was left in progress). No end of game signal was found for this table: it may need a rule in score-rules.json` (warning)
 
-Along the way: the ROM, the memory map found ("Memory map of the ROM: 4 player score(s), game over flag, player count"), the script variables found, the rule used, the end of game signal once trusted, each recorded game ("Game recorded from b2s (2 player(s), 312s): P1 120,000, P2 85,000 (player 1: Seb)").
+Along the way: the ROM, the memory map found ("Memory map of the ROM: 4 player score(s), game over flag, player count"), the script variables found, the rule used, the end of game signal once trusted, each recorded game ("Game recorded from b2s (2 player(s), 312s): P1 120,000, P2 85,000 (player 1: Seb, player 2: Ann)").
 
 ## 4. Rules for the tables the heuristics miss: `score-rules.json`
 
@@ -170,7 +170,7 @@ Both in the preferences folder, next to `tables.json`. They are written to a `.t
 `profiles.json`:
 
 ```json
-{"activeProfileId": "1f0c...", "profiles": [{"id": "1f0c...", "name": "Seb", "createdAt": 1791100000}]}
+{"activeProfileId": "1f0c...", "players": ["1f0c...", "", "1f0c...", "", "", ""], "profiles": [{"id": "1f0c...", "name": "Seb", "createdAt": 1791100000}]}
 ```
 
 `scores.json`:
@@ -199,13 +199,14 @@ Both in the preferences folder, next to `tables.json`. They are written to a `.t
 
 Files: `src/ui/live/ingameui/ScoresPage.h/.cpp`, `TablePickerPage.h/.cpp`, `InGameUI.cpp`, `src/core/AppCommands.cpp`.
 
-- **Player item.** `AddPlayerItem` puts "Player: <name>" (or "Player: nobody (choose who is playing)") at the top of the picker, on every tab. It opens `profiles`.
-- **Profiles page** (`ProfilesPage`, `profiles`): the players with a check mark on the active one and their number of scores; selecting one makes it active ("Playing as Seb"). "New player..." opens a `TextEntryPage` (32 characters) and makes the new player active. Players are renamed and deleted from the browser. The page rebuilds itself when the store changes, so a change made in a browser shows at once.
+- **Player item.** `AddPlayerItem` puts "Player: <name>" (or "Player: nobody (choose who is playing)", or "Players: 1 Seb, 3 Ann" when other players have a profile, the full list in its details) at the top of the picker, on every tab. It opens `profiles`.
+- **Profiles page** (`ProfilesPage`, `profiles`, "Who is playing?"): "Player 1: Seb" to "Player 6: Unassigned", each opening `profiles/player<n>`, and "New profile..." (a `TextEntryPage` of 32 characters; the new profile is given to player 1). Without any profile, "New profile..." comes first.
+- **Player page** (`PlayerProfilePage`, `profiles/player<n>`): the profiles with a check mark on the one of the player and their number of scores. Selecting a profile gives it to the player ("Playing as Seb" for player 1, "Ann is player 2" for the others), selecting the checked one makes the player unassigned ("Player 2 is unassigned"); both go back to the profiles page. "New profile..." adds one and gives it to this player. Profiles are renamed and deleted from the browser. Both pages rebuild themselves when the store changes, so a change made in a browser shows at once.
 - **First launch.** When the lobby opens for the first time in a run and there is no profile, it navigates to the profiles page.
 - **Scores tab** (`BuildLeaderboardList`): a new tab of the picker between Favorites and MENU (the tabs got shorter names, "New" for Newly added, to stay on one line in VR). One row per table with scores, last played first: "Table: best score (holder)", and as details the number of scores, the last date, and the active player's best and place. A row opens `scores/<uuid>`.
 - **Leaderboard of a table** (`TableScoresPage`): "Play" (unless it is the table running), a switch between all the scores and the best of each player (kept for the run), the active player's best and place, then up to 50 rows: rank, score, player, date, the active player's rows highlighted. The details of a row give the date and "player 2 of 3" for multiplayer games.
 - **Table page.** Under the actions of a table in the picker, the 10 best scores, and "All N scores..." when there are more (`AddTopScores`). "Reset table settings" and "Delete" are still hidden for the running table; the scores are shown in both cases.
-- **Result page** (`ScoreResultPage`, `scores/result`): when `PlayTableCommand::Play` comes back to the lobby with `VPApp::m_lastSessionResult` set, it opens the picker then this page. It lists the table, each game of player 1 ("Game 2: 1,234,560, rank 3 of 17 (2 of 5 players)", or "Your score:" for a single game), the record or personal best line for the best game, the other players' scores as unassigned, "Continue" (first, so that buttons land on it), "Full leaderboard", and the leaderboard from 3 rows above to 3 rows below the best game, with the session's scores highlighted. Without active player it offers "Save under a new player...", which creates the profile, makes it active and gives it the player 1 scores of the session. When several tables are played in a row without the lobby (switching from the in-game menu), only the last one's result is shown.
+- **Result page** (`ScoreResultPage`, `scores/result`): when `PlayTableCommand::Play` comes back to the lobby with `VPApp::m_lastSessionResult` set, it opens the picker then this page. It lists the table, each game of player 1 ("Game 2: 1,234,560, rank 3 of 17 (2 of 5 players)", or "Your score:" for a single game), the record or personal best line for the best game, the other players' scores (with their profile, rank and personal best when they have one, otherwise as unassigned), "Continue" (first, so that buttons land on it), "Full leaderboard", and the leaderboard from 3 rows above to 3 rows below the best game, with the session's scores highlighted. Without a profile for player 1 it offers "Save under a new profile...", which creates the profile, gives it to player 1 and gives it the player 1 scores of the session. When several tables are played in a row without the lobby (switching from the in-game menu), only the last one's result is shown.
 - **Keyboard.** The VR keyboard of the picker's search (`RenderVirtualKeyboard`) became a reusable function, with words capitalized for names; `TextEntryPage` shows it under its button-driven entry, so names can be typed with the controllers' pointer, and takes a maximum length.
 
 ## 8. In the browser
@@ -220,7 +221,7 @@ A third page, next to Tables and Files in the header of each page.
 - **List**: rank on its table, score, player (and "Player 2 of 3"), table, date. The rows of the active player are tinted, unassigned ones in italics, and the tooltip tells the source ("Read from the memory of the machine (PinMAME)"). With all tables shown, the leaderboards follow each other by table name.
 - **Actions on a score**: give it to another player or to nobody (a dialog with a list), and delete it (a confirmation dialog with its details).
 - **Clear the scores.** "Clear table scores", shown when one table is selected and has scores, and "Clear all scores", shown when there are any, at the right of the count. Both open a confirmation dialog telling how many scores, of how many tables, will go, that all the players' scores go whatever the filters, that the players are kept, and that it cannot be undone. For one table, the focus starts on Cancel, so that Enter does not clear by mistake. For all the scores, the Clear button stays disabled until `DELETE` is typed (any case), and the field is emptied each time the dialog opens. The outcome is shown in the status line ("3 scores deleted from Addams Family").
-- **Players panel**: each player with their number of scores, "Active" or a "Set active" button, rename, and delete (the dialog says their scores are kept, unassigned). "Add player" opens a name dialog, which stays open to fix a name already taken.
+- **Players panel**: each profile with its number of scores, a "Player 1, 3" badge for the players it is given to in the lobby, a "Set as player 1" button (unless it is player 1), rename, and delete (the dialog says their scores are kept, unassigned, and the players it was given to become unassigned). "Add player" opens a name dialog, which stays open to fix a name already taken.
 - **Live**: the page polls `/scores` every 3 s while visible and renders again only when the answer changed, so a game ended in the headset or a change made in the lobby shows without reloading.
 - The dialogs close only with their buttons, as on the tables page. A page served by a server without the scores (mobile build, older version) says so instead of the list.
 
@@ -230,13 +231,13 @@ Behind pairing like the other API routes; they answer 404 in the mobile library 
 
 | Route | Method | Parameters | Answer |
 |---|---|---|---|
-| `/scores` | GET | | `{revision, activeProfileId, profiles:[{id, name, createdAt, scoreCount}], tables:[{uuid, name, inLibrary}], scores:[{id, tableUuid, profileId, playerSlot, playerCount, score, playedAt, durationSec, source, rank}]}`, scores best first, `rank` on their table; `tables` lists the library and the removed tables that still have scores |
+| `/scores` | GET | | `{revision, activeProfileId, players:[profile id of players 1 to 6, empty if unassigned], profiles:[{id, name, createdAt, scoreCount}], tables:[{uuid, name, inLibrary}], scores:[{id, tableUuid, profileId, playerSlot, playerCount, score, playedAt, durationSec, source, rank}]}`, scores best first, `rank` on their table; `tables` lists the library and the removed tables that still have scores |
 | `/score-delete` | POST | `id` | 200; 404 unknown score |
 | `/score-assign` | POST | `id`, `profile` (empty: nobody) | 200; 404 unknown score or profile |
 | `/scores-clear` | POST | `uuid` (a table) **or** `all=1` | `{"deleted": n}`; 400 with neither, both, or an empty `uuid` without `all=1`, so that a page which lost its table can never clear everything |
 | `/profile-add` | POST | `name` | `{id, name}`; 400 blank or longer than 32, 409 name taken |
 | `/profile-rename` | POST | `id`, `name` | 200; 400, 404, 409 as above |
-| `/profile-delete` | POST | `id` | 200 (its scores become unassigned); 404 |
+| `/profile-delete` | POST | `id` | 200 (its scores and the players it was given to become unassigned); 404 |
 | `/profile-active` | POST | `id` | 200; 404 |
 
 Names are kept on one line (tabs and line breaks become spaces) and trimmed. Deletions and clears are logged. Like the other POST routes, they need a `Content-Length` (browsers send one; with `curl`, use `-d ''`).

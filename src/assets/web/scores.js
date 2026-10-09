@@ -31,6 +31,7 @@ const State = {
   tables: [],
   scores: [],
   activeProfileId: '',
+  players: [], // Profile id of each player of the games (index 0 is player 1), empty if unassigned
   lastResponse: null, // To render again only when something changed
   tableUuid: '', // Empty for all tables
   profileFilter: '', // Empty for all players, UNASSIGNED, or a profile id
@@ -74,6 +75,7 @@ async function fetchScores() {
     State.tables = data.tables || [];
     State.scores = data.scores || [];
     State.activeProfileId = data.activeProfileId || '';
+    State.players = data.players || [State.activeProfileId];
     render();
   } catch (error) {
     console.error('Error fetching scores:', error);
@@ -278,6 +280,7 @@ function renderProfiles() {
   list.replaceChildren(...State.profiles.map(profile => {
     const item = document.createElement('li');
     item.className = 'profile-item' + (profile.id === State.activeProfileId ? ' active' : '');
+    const slots = State.players.flatMap((id, index) => id === profile.id ? [index + 1] : []); // Players of the games given this profile in the lobby
 
     const text = document.createElement('div');
     text.className = 'profile-text';
@@ -291,17 +294,17 @@ function renderProfiles() {
 
     const state = document.createElement('div');
     state.className = 'profile-state';
-    if (profile.id === State.activeProfileId) {
+    if (slots.length > 0) {
       const badge = document.createElement('span');
       badge.className = 'profile-badge';
-      badge.textContent = 'Active';
+      badge.textContent = `Player ${slots.join(', ')}`;
       state.appendChild(badge);
     }
-    else {
+    if (profile.id !== State.activeProfileId) {
       const activate = document.createElement('button');
       activate.type = 'button';
       activate.className = 'btn btn-secondary profile-activate';
-      activate.textContent = 'Set active';
+      activate.textContent = 'Set as player 1';
       activate.onclick = () => setActiveProfile(profile.id);
       state.appendChild(activate);
     }
@@ -447,9 +450,9 @@ async function assignScore() {
 async function setActiveProfile(id) {
   try {
     await post(`profile-active?id=${encodeURIComponent(id)}`);
-    showStatus(`${findProfile(id)?.name} is now the active player`, 'success');
+    showStatus(`${findProfile(id)?.name} is now player 1`, 'success');
   } catch (error) {
-    showStatus('Failed to change the active player', 'error');
+    showStatus('Failed to change player 1', 'error');
     await fetchScores();
   }
 }

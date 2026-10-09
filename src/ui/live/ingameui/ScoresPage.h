@@ -13,7 +13,8 @@ namespace VPX::InGameUI
 
 // Leaderboards of the tables of the library (see ScoreTracker and VPinballLib::ScoreStore)
 
-// Who is playing: the active profile gets the scores of the games. Profiles are added here, and managed from the scores page of the web server.
+// Who is playing: the players of the games (1 to ScoreStore::MAX_PLAYERS), each opening a PlayerProfilePage to give it a profile, which gets its scores.
+// Profiles are added here, and managed from the scores page of the web server.
 class ProfilesPage final : public InGameUIPage
 {
 public:
@@ -24,6 +25,21 @@ public:
 private:
    void BuildPage() override;
 
+   uint64_t m_revision = 0;
+};
+
+// The profile of one player of the games: selecting a profile gives it to the player, selecting the one it has makes the player unassigned
+class PlayerProfilePage final : public InGameUIPage
+{
+public:
+   explicit PlayerProfilePage(int slot);
+
+   void Render(float elapsedS) override;
+
+private:
+   void BuildPage() override;
+
+   const int m_slot; // 1 to ScoreStore::MAX_PLAYERS
    uint64_t m_revision = 0;
 };
 
@@ -60,7 +76,7 @@ private:
    static VPApp::SessionResult s_result;
 };
 
-// The 'Player: <name>' item which opens the profiles page
+// The 'Player: <name>' item which opens the profiles page (with the names of the other players which have a profile)
 void AddPlayerItem(InGameUIPage& page);
 
 // The 'Scores' tab of the table picker: the tables with scores, opening their leaderboard
