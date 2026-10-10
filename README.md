@@ -1,4 +1,4 @@
-# Visual Pinball X: Steam Frame Edition (independent, unofficial fork)
+# Visual Pinball X: Steam Frame Edition
 
 An independent fork of [Visual Pinball X](https://github.com/vpinball/vpinball) that runs as a standalone app on the Valve Steam Frame: natively on the headset (SteamOS on ARM64, OpenXR, Vulkan), with no PC and no cable. It adds a table launcher that works from inside the headset, a table library and picker, a lobby, uploading tables and ROMs from a browser, scores and leaderboards, eye-tracked foveated rendering, and a menu made for the VR controllers. It keeps following the upstream project and merges its work.
 
@@ -154,6 +154,11 @@ The Steam Frame controllers work out of the box. Each button has a default role,
 ## More details
 
 What the fork changes, file by file, which builds contain what, and how far each part has been tested: [Steam Frame Edition, the technical documentation](docs/Steam%20Frame%20Branch.md).
+
+## Credits
+
+- **Visual Pinball X**, by the Visual Pinball team and its contributors: [vpinball/vpinball](https://github.com/vpinball/vpinball), the upstream project this fork is built on and keeps merging.
+- Created with [Claude Code](https://claude.com/claude-code).
 
 The rest of this file is the upstream README.
 
