@@ -39,7 +39,7 @@ In the standalone builds (the Steam Frame app, and the standalone desktop builds
 
 The Steam Frame controllers work out of the box. Each button has a default role, shown below; the roles can be changed in the menu, under **Input Settings**.
 
-![The Steam Frame controllers and the role of each button: triggers for the flippers, bumpers to nudge, grips for the magna-saves, left thumbstick to nudge, right thumbstick for the plunger, view button to open the menu, menu button to quit the table, A to start a game, B to insert a coin](docs/img/steam-frame-controllers.svg)
+![The Steam Frame controllers with the role of each control: on the left controller, the view button opens the menu, the d-pad navigates the menu, the thumbstick nudges, the grip is the left magna-save; on the right controller, the menu button quits the table, B inserts a coin, A starts a game, X and Y are free, the thumbstick is the plunger, the grip is the right magna-save; the Steam buttons stay with SteamOS; underneath, the triggers are the flippers and the bumpers nudge](docs/img/steam-frame-controllers.svg)
 
 | Control | Controller | During a game | In the menu |
 | --- | --- | --- | --- |
@@ -57,6 +57,7 @@ The Steam Frame controllers work out of the box. Each button has a default role,
 | A | Right | Start a game | Settings pages: save the changes |
 | B | Right | Insert a coin | Settings pages: undo the changes |
 | X, Y | Right | Not used: free to map to another action | |
+| Steam button | Left / right | Kept by SteamOS, not used by the game | |
 
 ## More details
 
