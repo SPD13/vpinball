@@ -35,6 +35,96 @@ In the standalone builds (the Steam Frame app, and the standalone desktop builds
 - **No "controller detected" prompt for the VR controllers**: Steam Input also presents the Frame controllers as an Xbox gamepad; in VR, VPX no longer asks to set up a layout for it, since the controllers already work through OpenXR.
 - **Steadier chrome, smoother edges**: specular anti-aliasing in the material shader stops the shiny parts from sparkling when the image is resampled every frame, on every platform; the headset builds also default to Standard FXAA, the only anti-aliasing within the Frame's budget at native resolution ([details](docs/Image%20Quality%20on%20the%20Steam%20Frame.md)).
 
+## How to install
+
+The game is not on the Steam store. It is installed on the Frame from another computer on the same network, over ssh: an installer copies the game to the headset and adds it to the Steam library, with its artwork.
+
+### What you need
+
+- A Steam Frame and a computer on the **same network**.
+- On the computer, a terminal with `bash` and `ssh`:
+  - **macOS, Linux:** nothing to install.
+  - **Windows 10 or 11:** WSL (recommended: in PowerShell, run `wsl --install`, restart, then use the Ubuntu terminal), or Git Bash from Git for Windows. With Git Bash the password is asked at each step, and every update sends the whole game again.
+- Your own tables (`.vpx`) and, for the tables that need them, their ROMs: none are included.
+
+### 1. Turn on Developer Mode on the Frame
+
+1. On the Frame, open **Settings > System** and turn on **Enable Developer Mode**.
+2. In the **Developer** section that appears, choose **Set User Password** and pick a password. The installer asks for it.
+
+Keep the headset on (or awake) while installing: it leaves the network when it goes to sleep.
+
+### 2. Download
+
+Download the latest `vpx-steam-frame-<version>.tar.gz` from the [releases page](https://github.com/SPD13/vpinball-steam-frame/releases) of this repository.
+
+### 3. Install
+
+In a terminal, unpack the download and run the installer from its folder:
+
+```sh
+tar -xzf vpx-steam-frame-<version>.tar.gz
+cd vpx-steam-frame-<version>
+./install.sh
+```
+
+On Windows with WSL, the Downloads folder is `/mnt/c/Users/<you>/Downloads`.
+
+- The installer finds the Frame as `frame.local`. If it cannot connect, give the Frame's IP address instead (shown in the Frame's network settings): `./install.sh 192.168.1.42`.
+- The first time, ssh asks whether to trust the Frame (answer `yes`), then for the password of step 1.
+- The first install sends about 400 MB; updates only send what changed.
+
+### 4. Play
+
+On the Frame, open **Library > Non-Steam > Devkit Game: VisualPinball**. The library artwork appears after Steam restarts (restarting the headset does it). The first launch may wait while Steam downloads "Steam Linux Runtime 4.0 ARM64".
+
+> [!NOTE]
+> **The Steam dashboard opens when the game starts.** The game is already running behind it: select **Resume Game** with the controller's pointer to close the dashboard and reach the lobby. This happens every time the game is started: SteamVR shows its dashboard over the games added outside the Steam store ("Non-Steam" games) when they start. There is no workaround for the moment.
+
+### 5. Add tables
+
+- **From a browser (easiest):** in the game, open the table picker. Under **Add tables from a browser**, turn **Wi-Fi upload** on, then open the address it shows from a phone or computer on the same network. Upload `.vpx` files, or a `.zip` of a table's folder to bring its backglass and other files along. Missing ROMs are listed there, with a link to the ROM folder.
+- **Over ssh:** copy the tables to `~/Documents/VPinballX/Tables` on the Frame and the ROMs to `~/Documents/VPinballX/Tables/pinmame/roms`, for example:
+  `scp "My Table.vpx" steamos@frame.local:Documents/VPinballX/Tables/`
+
+### Updating
+
+Download the new version and run its `./install.sh` again. Tables, settings, scores and play statistics are kept.
+
+### Uninstalling
+
+From the folder of the download:
+
+```sh
+./uninstall.sh              # removes the game, its library entry and artwork
+./uninstall.sh --settings   # also removes the settings, logs, scores and play statistics
+```
+
+The tables and ROMs in `~/Documents/VPinballX/Tables` are never deleted.
+
+### Installer options
+
+```sh
+./install.sh [--gameid NAME] [--no-art] [user@]host
+```
+
+- `--gameid` changes the name in the library ("Devkit Game: NAME"; letters, digits, `_` and `.` only). Pass the same name to `uninstall.sh`.
+- `--no-art` skips the library artwork.
+- An ssh key avoids typing the password at each install: run `ssh-copy-id steamos@frame.local` once (macOS, Linux, WSL).
+
+### Troubleshooting
+
+| Problem | What to do |
+| --- | --- |
+| `cannot connect to steamos@frame.local` | Wake the headset (put it on). Check that Developer Mode is on and that a password is set. Use the IP address instead of `frame.local`. |
+| `REMOTE HOST IDENTIFICATION HAS CHANGED` | The Frame was reset. Run `ssh-keygen -R frame.local` (or with the IP address), then install again. |
+| `Steam did not register the game` | Steam is not running on the Frame: put the headset on so that it is in its normal mode, then install again. |
+| The game is missing from the library | Look under **Library > Non-Steam**. Restart Steam on the Frame if it is still missing. |
+| The Steam dashboard stays open when the game starts | Expected: select **Resume Game** (see step 4). |
+| The game closes at once | Read its log on the Frame: `ssh steamos@frame.local cat .local/share/VPinballX/10.8/vpinball.log` |
+
+Developer Mode stays on after the install: it is how the game is installed and updated. Whether the game keeps working with Developer Mode turned off again has not been checked.
+
 ## Controllers
 
 The Steam Frame controllers work out of the box. Each button has a default role, shown below; the roles can be changed in the menu, under **Input Settings**.
