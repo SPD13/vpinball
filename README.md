@@ -76,7 +76,7 @@ On Windows with WSL, the Downloads folder is `/mnt/c/Users/<you>/Downloads`.
 
 ### 4. Play
 
-On the Frame, open **Library > Non-Steam > Devkit Game: VisualPinball**. The library artwork appears after Steam restarts (restarting the headset does it). The first launch may wait while Steam downloads "Steam Linux Runtime 4.0 ARM64".
+On the Frame, open **Library > Non-Steam > Visual Pinball X - Steam Frame Edition**. The library artwork appears after Steam restarts (restarting the headset does it). The first launch may wait while Steam downloads "Steam Linux Runtime 4.0 ARM64".
 
 > [!NOTE]
 > **The Steam dashboard opens when the game starts.** The game is already running behind it: select **Resume Game** with the controller's pointer to close the dashboard and reach the lobby. This happens every time the game is started: SteamVR shows its dashboard over the games added outside the Steam store ("Non-Steam" games) when they start. There is no workaround for the moment.
@@ -105,10 +105,11 @@ The tables and ROMs in `~/Documents/VPinballX/Tables` are never deleted.
 ### Installer options
 
 ```sh
-./install.sh [--gameid NAME] [--no-art] [user@]host
+./install.sh [--name NAME] [--gameid ID] [--no-art] [user@]host
 ```
 
-- `--gameid` changes the name in the library ("Devkit Game: NAME"; letters, digits, `_` and `.` only). Pass the same name to `uninstall.sh`.
+- `--name` changes the name of the game in the library. `--name ''` keeps the name Steam gives it, "Devkit Game: VisualPinball".
+- `--gameid` installs another copy beside the first one (letters, digits, `_` and `.` only). Pass the same id to `uninstall.sh`.
 - `--no-art` skips the library artwork.
 - An ssh key avoids typing the password at each install: run `ssh-copy-id steamos@frame.local` once (macOS, Linux, WSL).
 
