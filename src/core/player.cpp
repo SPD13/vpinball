@@ -2091,6 +2091,7 @@ static vector<std::pair<int, vec3>> GetBackglassBounds(PinTable* table)
 // (its backglass by default, its playfield seen from above, or its whole cabinet)
 void Player::CaptureTableImage(const std::filesystem::path& imagePath, const std::function<void(bool)>& onCaptured)
 {
+   SetTableImageLighting(true);
    #ifdef ENABLE_XR
    if (m_vrDevice)
    {
@@ -2106,9 +2107,35 @@ void Player::CaptureTableImage(const std::filesystem::path& imagePath, const std
          if (m_vrDevice)
             m_vrDevice->SetTableCaptureView(VRDevice::TableCaptureView::None);
          #endif
+         m_tableImageLightingDone = true; // The lighting is set back by the game loop
          onCaptured(success);
       },
       3); // The views are moved from the next frame on
+}
+
+// Dark rooms, a night light level or the time of day (automatic light level) would give a dark image: the capture frames are rendered with the
+// light level at 100 %, as the 'Day/Night' option of the table would, without saving it
+void Player::SetTableImageLighting(bool capture)
+{
+   if (capture == m_tableImageLighting)
+      return;
+   m_tableImageLighting = capture;
+   Renderer::SceneLighting& lighting = m_renderer->m_sceneLighting;
+   if (capture)
+   {
+      m_tableImageLightMode = static_cast<int>(lighting.GetMode());
+      m_tableImageLightLevel = lighting.GetUserLightLevel();
+      lighting.SetUserLightLevel(1.f);
+      lighting.SetMode(Renderer::SceneLighting::Mode::User);
+   }
+   else
+   {
+      lighting.SetUserLightLevel(m_tableImageLightLevel);
+      lighting.SetMode(static_cast<Renderer::SceneLighting::Mode>(m_tableImageLightMode));
+   }
+   // The static parts are prerendered with the lighting: they are rendered with the others while the capture lighting is used
+   m_renderer->DisableStaticPrePass(capture);
+   m_renderer->MarkShaderDirty();
 }
 
 bool Player::CanReplaceTableImage() const
@@ -2135,6 +2162,8 @@ void Player::ReplaceTableImage()
 
 void Player::UpdateTableImageReplacement()
 {
+   if (m_tableImageLightingDone.exchange(false))
+      SetTableImageLighting(false);
    if (!m_tableImageReplacePath.empty() && IsInGameUIClosed())
    {
       const std::filesystem::path imagePath = std::exchange(m_tableImageReplacePath, std::filesystem::path());

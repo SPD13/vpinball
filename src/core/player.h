@@ -148,6 +148,12 @@ private:
    std::chrono::steady_clock::time_point m_closingLoadingTime;
    std::filesystem::path m_tableImageReplacePath; // Set while waiting for the in-game menu to close
    std::atomic<int> m_tableImageReplaced = 0; // Result of ReplaceTableImage, set by the render thread: 1 replaced, 2 failed
+   // The image is captured in full daylight, whatever the light level of the table and its room: their lighting is set back once it is captured
+   void SetTableImageLighting(bool capture);
+   bool m_tableImageLighting = false;
+   int m_tableImageLightMode = 0; // Renderer::SceneLighting::Mode and user light level before the capture
+   float m_tableImageLightLevel = 1.f;
+   std::atomic<bool> m_tableImageLightingDone = false; // Set by the render thread when the capture is saved
 public:
 #endif
    void MultithreadedGameLoop();
